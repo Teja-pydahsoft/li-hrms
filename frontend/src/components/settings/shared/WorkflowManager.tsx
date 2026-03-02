@@ -17,6 +17,8 @@ export interface WorkflowData {
         role: string;
         anyHRCanApprove: boolean;
     };
+    /** When true, approvers with a role later in the chain can act on requests still at an earlier step */
+    allowHigherAuthorityToApproveLowerLevels?: boolean;
 }
 
 interface WorkflowManagerProps {
@@ -43,6 +45,7 @@ const WorkflowManager = ({
             isEnabled: true, // Always force true now
             steps: steps,
             finalAuthority: workflow?.finalAuthority || { role: 'admin', anyHRCanApprove: false },
+            allowHigherAuthorityToApproveLowerLevels: workflow?.allowHigherAuthorityToApproveLowerLevels ?? false,
             ...newWorkflow
         } as WorkflowData;
 
@@ -169,6 +172,21 @@ const WorkflowManager = ({
                         className="flex items-center justify-center gap-2 text-xs font-bold text-gray-400 hover:text-purple-600 py-6 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-3xl transition-all hover:bg-purple-50/10"
                     >
                         <Plus className="h-4 w-4" /> {addStepLabel}
+                    </button>
+                </div>
+
+                {/* Allow higher authority to approve lower levels */}
+                <div className="flex items-center justify-between p-5 rounded-2xl bg-gray-50/50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800">
+                    <div>
+                        <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Allow higher authority to approve lower levels</h4>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">When ON, approvers later in the chain (e.g. HR) can approve or reject even when the request is still at an earlier step (e.g. waiting for HOD).</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => update('allowHigherAuthorityToApproveLowerLevels', !(workflow?.allowHigherAuthorityToApproveLowerLevels ?? false))}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${(workflow?.allowHigherAuthorityToApproveLowerLevels ?? false) ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-700'}`}
+                    >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(workflow?.allowHigherAuthorityToApproveLowerLevels ?? false) ? 'translate-x-6' : 'translate-x-1'}`} />
                     </button>
                 </div>
 

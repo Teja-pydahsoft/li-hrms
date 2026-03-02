@@ -252,7 +252,8 @@ export default function AttendancePage() {
     allowInTimeEditing: boolean;
     allowOutTimeEditing: boolean;
     allowAttendanceUpload: boolean;
-  }>({ allowInTimeEditing: true, allowOutTimeEditing: true, allowAttendanceUpload: true });
+    allowShiftChange: boolean;
+  }>({ allowInTimeEditing: true, allowOutTimeEditing: true, allowAttendanceUpload: true, allowShiftChange: true });
 
   // In Time dialog state
   const [showInTimeDialog, setShowInTimeDialog] = useState(false);
@@ -278,6 +279,7 @@ export default function AttendancePage() {
             allowInTimeEditing: ff.allowInTimeEditing !== false,
             allowOutTimeEditing: ff.allowOutTimeEditing !== false,
             allowAttendanceUpload: ff.allowAttendanceUpload !== false,
+            allowShiftChange: ff.allowShiftChange !== false,
           });
         }
       } catch {
@@ -2267,11 +2269,55 @@ export default function AttendancePage() {
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                            {/* Shift Selection - read-only */}
+                            {/* Shift Selection - read-only or change when allowShiftChange */}
                             <div className="flex flex-col gap-1.5">
                               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Configured Shift</label>
-                              <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-3 flex-wrap">
                                 <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate" title={shiftName}>{shiftName}</div>
+                                {attendanceFeatureFlags.allowShiftChange && selectedEmployee && selectedDate && !isEditingThisShift && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setSelectedShiftRecordId(shift._id);
+                                      setEditingShift(true);
+                                      if (availableShifts.length === 0 && selectedEmployee) {
+                                        await loadAvailableShifts(selectedEmployee.emp_no, selectedDate || attendanceDetail.date);
+                                      }
+                                    }}
+                                    className="text-xs font-semibold text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+                                  >
+                                    Change shift
+                                  </button>
+                                )}
+                                {isEditingThisShift && (
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <select
+                                      value={selectedShiftId}
+                                      onChange={(e) => setSelectedShiftId(e.target.value)}
+                                      className="h-8 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm min-w-[140px] focus:ring-2 focus:ring-violet-500/50"
+                                    >
+                                      <option value="">Select shift</option>
+                                      {availableShifts.map((s: any) => (
+                                        <option key={s._id} value={s._id}>{s.name}</option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      type="button"
+                                      onClick={handleAssignShift}
+                                      disabled={savingShift || !selectedShiftId}
+                                      className="h-8 px-3 rounded-lg bg-violet-600 text-white text-xs font-medium hover:bg-violet-700 disabled:opacity-50"
+                                    >
+                                      {savingShift ? 'Saving…' : 'Assign'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setEditingShift(false); setSelectedShiftId(''); setSelectedShiftRecordId(null); }}
+                                      className="h-8 px-3 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </div>
 

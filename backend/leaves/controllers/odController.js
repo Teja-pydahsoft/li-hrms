@@ -312,6 +312,14 @@ exports.applyOD = async (req, res) => {
       geoLocation, // ADDED
     } = req.body;
 
+    // Photo evidence is mandatory for OD
+    if (!photoEvidence || !photoEvidence.url) {
+      return res.status(400).json({
+        success: false,
+        error: 'Photo evidence is required for OD applications.',
+      });
+    }
+
     // Get settings
     const workflowSettings = await getWorkflowSettings();
     const settings = workflowSettings.settings || {};
@@ -1229,6 +1237,25 @@ exports.processODAction = async (req, res) => {
     } else if (isRoleMatch) {
       // 2. If roles match, enforce Jurisdictional Check
       canProcess = checkJurisdiction(fullUser, od);
+    }
+
+    // 3. Setting: Allow higher authority to approve lower levels
+    if (!canProcess && od.workflow && od.workflow.approvalChain && od.workflow.approvalChain.length > 0) {
+      const workflowSettings = await getWorkflowSettings();
+      const allowHigher = workflowSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+      if (allowHigher) {
+        const chain = od.workflow.approvalChain.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        const roleOrder = chain.map(s => (s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+        const requiredIdx = roleOrder.indexOf(requiredRole.toLowerCase());
+        let userIdx = roleOrder.indexOf(userRole.toLowerCase());
+        if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+        if (requiredIdx >= 0 && userIdx >= 0 && userIdx >= requiredIdx) {
+          canProcess = true;
+          if (['manager', 'hr'].includes(userRole)) {
+            canProcess = checkJurisdiction(fullUser, od);
+          }
+        }
+      }
     }
 
     if (!canProcess) {

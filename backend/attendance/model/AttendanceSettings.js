@@ -135,6 +135,7 @@ const attendanceSettingsSchema = new mongoose.Schema(
       allowInTimeEditing: { type: Boolean, default: true },
       allowOutTimeEditing: { type: Boolean, default: true },
       allowAttendanceUpload: { type: Boolean, default: true },
+      allowShiftChange: { type: Boolean, default: true },
     },
   },
   {

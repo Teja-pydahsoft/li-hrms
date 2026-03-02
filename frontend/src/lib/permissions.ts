@@ -31,7 +31,8 @@ const ROLE_LEVELS: Record<UserRole, number> = {
 /**
  * Check if user has at least the specified role level
  */
-export function hasRoleLevel(user: User, minRole: UserRole): boolean {
+export function hasRoleLevel(user: User | null | undefined, minRole: UserRole): boolean {
+    if (!user) return false;
     const userLevel = ROLE_LEVELS[user.role] || 0;
     const minLevel = ROLE_LEVELS[minRole] || 0;
     return userLevel >= minLevel;
@@ -40,7 +41,8 @@ export function hasRoleLevel(user: User, minRole: UserRole): boolean {
 /**
  * Check if user has any of the specified roles
  */
-export function hasAnyRole(user: User, roles: UserRole[]): boolean {
+export function hasAnyRole(user: User | null | undefined, roles: UserRole[]): boolean {
+    if (!user) return false;
     return roles.includes(user.role);
 }
 
@@ -78,6 +80,7 @@ export const PAGE_PERMISSIONS: Record<string, UserRole[]> = {
     '/profile': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/confused-shifts': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/holidays': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
+    '/resignations': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/superadmin/holidays': ['sub_admin', 'hr', 'manager'],
 };
 
@@ -291,6 +294,26 @@ export function canResolveConfusedShifts(user: User): boolean {
 // USER MANAGEMENT PERMISSIONS
 // ==========================================
 
+// ==========================================
+// RESIGNATION PERMISSIONS
+// ==========================================
+
+export function canViewResignation(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'RESIGNATION');
+}
+
+export function canApplyResignation(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'RESIGNATION');
+}
+
+export function canApproveResignation(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager']) && canManageFeature(user, 'RESIGNATION');
+}
+
+// ==========================================
+// USER MANAGEMENT PERMISSIONS
+// ==========================================
+
 export function canViewUsers(user: User): boolean {
     return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager']) && canViewFeature(user, 'USERS');
 }
@@ -390,6 +413,7 @@ export function hasFeatureAccess(user: User, featureCode: string): boolean {
 /**
  * Check if user has explicit READ permission for a feature
  * Accepts 'feature', 'feature:read', or 'feature:write'
+ * When featureControl is empty (not yet resolved from Settings), defaults to true for backward compatibility.
  */
 export function canViewFeature(user: User, featureCode: string): boolean {
     if (!user) return false;
@@ -403,10 +427,12 @@ export function canViewFeature(user: User, featureCode: string): boolean {
 /**
  * Check if user has explicit WRITE permission for a feature
  * Accepts 'feature' or 'feature:write'
+ * When featureControl is empty (e.g. before layout has resolved from Settings), returns false so write
+ * actions are not shown until read/write are properly loaded — fixes immediate post-login showing write.
  */
 export function canManageFeature(user: User, featureCode: string): boolean {
     if (!user) return false;
-    if (!user.featureControl || user.featureControl.length === 0) return true; // Default allow if empty (legacy/role-based)
+    if (!user.featureControl || user.featureControl.length === 0) return false; // No write until resolved
 
     return user.featureControl.includes(featureCode) ||
         user.featureControl.includes(`${featureCode}:write`);

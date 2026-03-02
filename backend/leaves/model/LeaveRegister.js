@@ -53,7 +53,7 @@ const leaveRegisterSchema = new mongoose.Schema({
     // Leave Transaction Details
     leaveType: {
         type: String,
-        enum: ['EL', 'CL', 'SL', 'ML', 'OD', 'CCL', 'LWP'], // Earned, Casual, Sick, Maternity, On Duty, Compensatory, Leave Without Pay
+        enum: ['EL', 'CL', 'SL', 'ML', 'OD', 'CCL', 'LWP', 'LOP'], // Earned, Casual, Sick, Maternity, On Duty, Compensatory, Leave Without Pay, Loss of Pay
         required: true,
         index: true
     },

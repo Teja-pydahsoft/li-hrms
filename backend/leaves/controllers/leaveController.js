@@ -1282,6 +1282,35 @@ exports.processLeaveAction = async (req, res) => {
       canProcess = true;
     }
 
+    // 4. Setting: Allow higher authority to approve lower levels (e.g. HR can act when current step is HOD)
+    if (!canProcess && leave.workflow && leave.workflow.approvalChain && leave.workflow.approvalChain.length > 0) {
+      const workflowSettings = await getWorkflowSettings();
+      const allowHigher = workflowSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+      if (allowHigher) {
+        // Build role order from approval chain (by stepOrder or array order)
+        const chain = leave.workflow.approvalChain.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        const roleOrder = chain.map(s => (s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+        const requiredIdx = roleOrder.indexOf(requiredRole.toLowerCase());
+        let userIdx = roleOrder.indexOf(userRole.toLowerCase());
+        if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) {
+          const finalRole = (leave.workflow.finalAuthority || 'hr').toLowerCase();
+          userIdx = roleOrder.indexOf(finalRole) !== -1 ? roleOrder.length : roleOrder.indexOf('hr') !== -1 ? roleOrder.length : -1;
+        }
+        if (requiredIdx >= 0 && userIdx >= 0 && userIdx >= requiredIdx) {
+          canProcess = true;
+          // For scoped roles (manager, hr), still enforce jurisdiction
+          if (['manager', 'hr'].includes(userRole)) {
+            const fullUser = req.scopedUser || await User.findById(req.user.userId || req.user._id);
+            canProcess = checkJurisdiction(fullUser, leave);
+          } else if (requiredRole === 'hod' && userRole === 'hod') {
+            // Already handled above with division mapping
+          } else if (requiredRole === 'hod' && userRole !== 'hod') {
+            // Higher role acting on HOD step: no extra scope check beyond jurisdiction for manager/hr
+          }
+        }
+      }
+    }
+
     if (!canProcess) {
       return res.status(403).json({
         success: false,
@@ -1459,7 +1488,7 @@ exports.processLeaveAction = async (req, res) => {
     // When leave is finally approved, record a DEBIT in the leave register
     if (action === 'approve' && leave.status === 'approved') {
       try {
-        await leaveRegisterService.addLeaveDebit(leave);
+        await leaveRegisterService.addLeaveDebit(leave, req.user._id);
       } catch (err) {
         console.error('Leave register debit failed (leave already approved):', err);
       }

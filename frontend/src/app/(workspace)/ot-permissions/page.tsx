@@ -676,12 +676,17 @@ export default function OTAndPermissionsPage() {
       try {
         showToast('Uploading evidence...', 'info');
         const uploadRes = await api.uploadEvidence(evidenceFile);
-        if (uploadRes.success && uploadRes.data) {
+        // API returns { success, url, key, filename } at top level (no .data wrapper)
+        if (uploadRes.success && uploadRes.url) {
           payload.photoEvidence = {
-            url: uploadRes.data.url,
-            key: uploadRes.data.key,
+            url: uploadRes.url,
+            key: uploadRes.key,
             exifLocation: (evidenceFile as any).exifLocation
           };
+        } else {
+          showToast('Failed to upload evidence photo', 'error');
+          setDataLoading(false);
+          return;
         }
       } catch (uploadErr) {
         console.error("Upload failed", uploadErr);
@@ -770,12 +775,17 @@ export default function OTAndPermissionsPage() {
       try {
         showToast('Uploading evidence...', 'info');
         const uploadRes = await api.uploadEvidence(evidenceFile);
-        if (uploadRes.success && uploadRes.data) {
+        // API returns { success, url, key, filename } at top level (no .data wrapper)
+        if (uploadRes.success && uploadRes.url) {
           payload.photoEvidence = {
-            url: uploadRes.data.url,
-            key: uploadRes.data.key,
+            url: uploadRes.url,
+            key: uploadRes.key,
             exifLocation: (evidenceFile as any).exifLocation
           };
+        } else {
+          showToast('Failed to upload evidence photo', 'error');
+          setDataLoading(false);
+          return;
         }
       } catch (uploadErr) {
         console.error("Upload failed", uploadErr);

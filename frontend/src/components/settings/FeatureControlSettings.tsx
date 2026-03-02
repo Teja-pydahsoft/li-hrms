@@ -45,10 +45,10 @@ const FeatureControlSettings = () => {
                 api.getSetting('feature_control_manager'),
             ]);
 
-            if (resEmp.success && resEmp.data?.value?.activeModules) setFeatureControlEmployee(resEmp.data.value.activeModules);
-            if (resHOD.success && resHOD.data?.value?.activeModules) setFeatureControlHOD(resHOD.data.value.activeModules);
-            if (resHR.success && resHR.data?.value?.activeModules) setFeatureControlHR(resHR.data.value.activeModules);
-            if (resManager.success && resManager.data?.value?.activeModules) setFeatureControlManager(resManager.data.value.activeModules);
+            if (resEmp.success && Array.isArray(resEmp.data?.value?.activeModules)) setFeatureControlEmployee(resEmp.data.value.activeModules);
+            if (resHOD.success && Array.isArray(resHOD.data?.value?.activeModules)) setFeatureControlHOD(resHOD.data.value.activeModules);
+            if (resHR.success && Array.isArray(resHR.data?.value?.activeModules)) setFeatureControlHR(resHR.data.value.activeModules);
+            if (resManager.success && Array.isArray(resManager.data?.value?.activeModules)) setFeatureControlManager(resManager.data.value.activeModules);
         } catch (err) {
             console.error('Failed to load feature control settings', err);
             toast.error('Failed to load settings');
@@ -78,7 +78,15 @@ const FeatureControlSettings = () => {
         }
     };
 
-    const toggleModule = (role: FeatureControlRole, moduleId: string) => {
+    // Permission state for a module: disabled | read | write (for single-tile cycle and styling)
+    const getModuleState = (state: string[], moduleId: string): 'disabled' | 'read' | 'write' => {
+        if (state.includes(moduleId) || state.includes(`${moduleId}:write`)) return 'write';
+        if (state.includes(`${moduleId}:read`)) return 'read';
+        return 'disabled';
+    };
+
+    // Single tap cycles: disabled → read (blue) → write (green) → disabled
+    const cycleModule = (role: FeatureControlRole, moduleId: string) => {
         const setters: Record<FeatureControlRole, [string[], React.Dispatch<React.SetStateAction<string[]>>]> = {
             employee: [featureControlEmployee, setFeatureControlEmployee],
             hod: [featureControlHOD, setFeatureControlHOD],
@@ -86,10 +94,14 @@ const FeatureControlSettings = () => {
             manager: [featureControlManager, setFeatureControlManager],
         };
         const [current, setter] = setters[role];
-        if (current.includes(moduleId)) {
-            setter(current.filter(id => id !== moduleId));
+        const state = getModuleState(current, moduleId);
+        const without = current.filter(id => id !== moduleId && id !== `${moduleId}:read` && id !== `${moduleId}:write`);
+        if (state === 'disabled') {
+            setter([...without, `${moduleId}:read`]);
+        } else if (state === 'read') {
+            setter([...without, `${moduleId}:write`]);
         } else {
-            setter([...current, moduleId]);
+            setter(without);
         }
     };
 
@@ -105,26 +117,35 @@ const FeatureControlSettings = () => {
             </div>
 
             <div className="p-6 flex-1 bg-gray-50/30 dark:bg-black/10">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Enabled Modules</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Tap tile: Disabled → Read (blue) → Write (green) → Disabled</p>
                 <div className="grid grid-cols-2 gap-2">
-                    {availableModules.map((mod) => (
-                        <button
-                            key={mod.id}
-                            onClick={() => toggleModule(role, mod.id)}
-                            title={mod.hint || mod.label}
-                            className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-[11px] font-bold transition-all ${state.includes(mod.id)
-                                ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400 shadow-sm shadow-indigo-500/10'
-                                : 'border-gray-100 bg-white text-gray-400 hover:border-gray-200 dark:border-gray-700 dark:bg-[#0F172A] dark:hover:border-gray-600'
+                    {availableModules.map((mod) => {
+                        const tileState = getModuleState(state, mod.id);
+                        return (
+                            <button
+                                key={mod.id}
+                                type="button"
+                                onClick={() => cycleModule(role, mod.id)}
+                                title={`${mod.label}: ${tileState === 'disabled' ? 'Disabled' : tileState === 'read' ? 'Read' : 'Write'} — tap to cycle`}
+                                className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-[11px] font-bold transition-all ${
+                                    tileState === 'write'
+                                        ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-400 shadow-sm shadow-emerald-500/10'
+                                        : tileState === 'read'
+                                        ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/25 dark:text-blue-400 shadow-sm shadow-blue-500/10'
+                                        : 'border-gray-200 bg-white text-gray-400 hover:border-gray-300 dark:border-gray-700 dark:bg-[#0F172A] dark:hover:border-gray-600'
                                 }`}
-                        >
-                            <span>{mod.label}</span>
-                            {state.includes(mod.id) ? (
-                                <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(79,70,229,0.5)]" />
-                            ) : (
-                                <div className="h-1.5 w-1.5 rounded-full bg-gray-200 dark:bg-gray-800" />
-                            )}
-                        </button>
-                    ))}
+                            >
+                                <span>{mod.label}</span>
+                                {tileState === 'write' ? (
+                                    <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]" title="Write" />
+                                ) : tileState === 'read' ? (
+                                    <div className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.5)]" title="Read" />
+                                ) : (
+                                    <div className="h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600" title="Disabled" />
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
             </div>
         </section>

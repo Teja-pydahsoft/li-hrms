@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import exifr from 'exifr';
+
+const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
 interface LocationData {
     latitude: number;
@@ -494,6 +497,19 @@ export default function LocationPhotoCapture({
                             </span>
                         </div>
                     </div>
+                    {/* Map: show location they are in (Leaflet + OpenStreetMap) */}
+                    {(deviceLocation || exifLocation) && (
+                        <div className="p-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+                            <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2">Location</span>
+                            <LocationMap
+                                latitude={(deviceLocation || exifLocation)!.latitude}
+                                longitude={(deviceLocation || exifLocation)!.longitude}
+                                address={address}
+                                height="180px"
+                                className="w-full"
+                            />
+                        </div>
+                    )}
                 </div>
             )}
             {/* Camera Modal */}

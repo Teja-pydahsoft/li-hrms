@@ -154,6 +154,10 @@ exports.updateSettings = async (req, res) => {
         if (!settings.featureFlags) settings.featureFlags = {};
         settings.featureFlags.allowAttendanceUpload = featureFlags.allowAttendanceUpload;
       }
+      if (featureFlags.allowShiftChange !== undefined) {
+        if (!settings.featureFlags) settings.featureFlags = {};
+        settings.featureFlags.allowShiftChange = featureFlags.allowShiftChange;
+      }
     }
 
     await settings.save();

@@ -96,7 +96,7 @@ interface Shift {
   payableShifts: number;
 }
 
-type TableType = 'present' | 'absent' | 'leaves' | 'od' | 'ot' | 'extraHours' | 'shifts';
+type TableType = 'all' | 'present' | 'absent' | 'leaves' | 'od' | 'ot' | 'extraHours' | 'shifts';
 
 export default function PayRegisterPage() {
   const router = useRouter();
@@ -106,7 +106,7 @@ export default function PayRegisterPage() {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [syncing, setSyncing] = useState(false);
   const [shifts, setShifts] = useState<Shift[]>([]);
-  const [activeTable, setActiveTable] = useState<TableType>('present');
+  const [activeTable, setActiveTable] = useState<TableType>('all');
   const [departments, setDepartments] = useState<any[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDivision, setSelectedDivision] = useState<string>('');
@@ -636,16 +636,13 @@ export default function PayRegisterPage() {
       const lateCount = totals.lateCount || 0;
       const holidayAndWeekoffs = (totals.totalWeeklyOffs || 0) + (totals.totalHolidays || 0);
 
-      // User Definition:
-      // Paid Days = Present + Paid Leaves + Holidays + Weekoffs
-      const totalPaidDays = present + paidLeave + holidays + weeklyOffs;
-
       const monthDays = pr.totalDaysInMonth || daysArray.length || daysInMonth;
 
       // User Definition:
       // Counted Days = Present + Absent + Holidays + Weekoffs + Total Leaves
       const countedDays = present + absent + holidays + weeklyOffs + leave;
       const matchesMonth = Math.abs(countedDays - monthDays) < 0.001;
+      const payableShifts = totals.totalPayableShifts ?? 0;
       return {
         pr,
         present,
@@ -656,7 +653,7 @@ export default function PayRegisterPage() {
         extra,
         weeklyOffs,
         holidays,
-        totalPaidDays,
+        payableShifts,
         lop,
         paidLeave,
         lateCount,
@@ -686,6 +683,17 @@ export default function PayRegisterPage() {
     }
   };
 
+  /** Primary status for a daily record (full day or first half when split) for coloring in "All" view */
+  const getPrimaryStatus = (record: DailyRecord): string => {
+    if (record.status && ['present', 'absent', 'leave', 'od', 'holiday', 'week_off'].includes(record.status))
+      return record.status;
+    const s1 = record.firstHalf?.status;
+    const s2 = record.secondHalf?.status;
+    if (s1 && ['present', 'absent', 'leave', 'od', 'holiday', 'week_off'].includes(s1)) return s1;
+    if (s2 && ['present', 'absent', 'leave', 'od', 'holiday', 'week_off'].includes(s2)) return s2;
+    return 'absent';
+  };
+
   const getStatusDisplay = (record: DailyRecord | null): string => {
     if (!record) return '-';
     if (record.isSplit) {
@@ -708,6 +716,10 @@ export default function PayRegisterPage() {
 
     if (record.isManuallyEdited) {
       return 'bg-amber-100 dark:bg-amber-900/30 ring-inset ring-1 ring-amber-300 dark:ring-amber-700';
+    }
+
+    if (tableType === 'all') {
+      return getStatusColor(getPrimaryStatus(record));
     }
 
     if (tableType === 'present') {
@@ -747,6 +759,8 @@ export default function PayRegisterPage() {
     if (!record) return false;
 
     switch (tableType) {
+      case 'all':
+        return true;
       case 'present':
         return record.status === 'present' || record.firstHalf.status === 'present' || record.secondHalf.status === 'present';
       case 'absent':
@@ -1300,16 +1314,6 @@ export default function PayRegisterPage() {
               {syncing ? 'Syncing...' : 'Sync All'}
             </button>
 
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="h-9 px-4 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Upload Summary
-            </button>
-
             {(() => {
               const exportExcelButton = (
                 <button
@@ -1439,243 +1443,6 @@ export default function PayRegisterPage() {
           </div>
         )}
 
-        {/* Bulk Summary Upload Modal */}
-        {showUploadModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-xl w-full p-6 border border-slate-200 dark:border-slate-700">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Bulk Summary Upload</h3>
-                <button
-                  onClick={() => {
-                    setShowUploadModal(false);
-                    setUploadResults(null);
-                  }}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              {!uploadResults ? (
-                <>
-                  <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                    <p className="text-sm text-blue-700 dark:text-blue-300 flex items-start gap-2">
-                      <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      Upload an Excel file with monthly totals. The system will match employees by code and distribute counts across working days.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-10 hover:border-blue-500 transition-colors bg-slate-50 dark:bg-slate-900/50 mb-6">
-                    <input
-                      type="file"
-                      id="summaryExcel"
-                      className="hidden"
-                      accept=".xlsx, .xls"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-
-                        setUploadingSummary(true);
-                        try {
-                          const reader = new FileReader();
-                          reader.onload = async (evt) => {
-                            try {
-                              const bstr = evt.target?.result;
-                              const wb = XLSX.read(bstr, { type: 'binary' });
-                              const wsname = wb.SheetNames[0];
-                              const ws = wb.Sheets[wsname];
-                              const data = XLSX.utils.sheet_to_json(ws);
-
-                              const uploadMonthStr = monthStr;
-                              const response = await apiRequest<{ success: number; failed: number; total: number; errors: string[] }>(
-                                `/pay-register/upload-summary/${uploadMonthStr}`,
-                                {
-                                  method: 'POST',
-                                  body: JSON.stringify({ data })
-                                }
-                              );
-
-                              if (response.success && response.data) {
-                                setUploadResults(response.data);
-                                Swal.fire({
-                                  icon: 'success',
-                                  title: 'Uploaded',
-                                  text: "Upload processed successfully!",
-                                  timer: 2000,
-                                  showConfirmButton: false,
-                                  toast: true,
-                                  position: 'top-end'
-                                });
-                                loadPayRegisters(); // Refresh table
-                              } else {
-                                Swal.fire({
-                                  icon: 'error',
-                                  title: 'Upload Failed',
-                                  text: response.error || "Failed to process upload",
-                                });
-                              }
-                            } catch (err: any) {
-                              Swal.fire({
-                                icon: 'error',
-                                title: 'Error',
-                                text: err.message || "Error parsing file",
-                              });
-                            } finally {
-                              setUploadingSummary(false);
-                            }
-                          };
-                          reader.readAsBinaryString(file);
-                        } catch (err) {
-                          setUploadingSummary(false);
-                        }
-                      }}
-                    />
-                    <label htmlFor="summaryExcel" className="cursor-pointer flex flex-col items-center gap-3">
-                      <div className="h-12 w-12 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
-                        {uploadingSummary ? (
-                          <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                        ) : (
-                          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                          </svg>
-                        )}
-                      </div>
-                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                        {uploadingSummary ? "Processing file..." : "Click to select Excel file"}
-                      </span>
-                    </label>
-                  </div>
-
-                  <div className="flex justify-between items-center">
-                    <button
-                      onClick={async () => {
-                        setDownloadingTemplate(true);
-                        try {
-                          // Fetch ALL employees for this month/division/dept by passing limit: -1
-                          const targetDeptId = selectedDepartment && selectedDepartment.trim() !== '' ? selectedDepartment : undefined;
-                          const targetDivId = selectedDivision && selectedDivision.trim() !== '' ? selectedDivision : undefined;
-
-                          const response = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, undefined, 1, -1);
-
-                          if (response.success) {
-                            const allEmployees = response.data || [];
-                            const headers = ["Employee Code", "Employee Name", "Department", "Division", "Total Present", "Total Absent", "Paid Leaves", "LOP Count", "Total OD", "Total Extra Days", "Total OT Hours", "Holidays", "Lates"];
-                            const sampleData = allEmployees.map((pr: any) => ({
-                              "Employee Code": typeof pr.employeeId === 'object' ? pr.employeeId.emp_no : pr.emp_no,
-                              "Employee Name": typeof pr.employeeId === 'object' ? pr.employeeId.employee_name : '',
-                              "Department": (typeof pr.employeeId === 'object' && pr.employeeId.department_id) ? (pr.employeeId.department_id as any).name : '',
-                              "Division": (typeof pr.employeeId === 'object' && pr.employeeId.division_id) ? (pr.employeeId.division_id as any).name : '',
-                              "Total Present": 0,
-                              "Total Absent": 0,
-                              "Paid Leaves": 0,
-                              "LOP Count": 0,
-                              "Total OD": 0,
-                              "Total Extra Days": 0,
-                              "Total OT Hours": 0,
-                              "Holidays": 0,
-                              "Lates": 0
-                            }));
-
-                            const ws = XLSX.utils.json_to_sheet(sampleData);
-                            const wb = XLSX.utils.book_new();
-                            XLSX.utils.book_append_sheet(wb, ws, "Attendance Summary");
-                            XLSX.writeFile(wb, `Payroll_Summary_Template_${monthStr}.xlsx`);
-                            Swal.fire({
-                              icon: 'success',
-                              title: 'Template Ready',
-                              text: `Template downloaded with ${allEmployees.length} employees`,
-                              timer: 2000,
-                              showConfirmButton: false,
-                              toast: true,
-                              position: 'top-end'
-                            });
-                          } else {
-                            Swal.fire({
-                              icon: 'error',
-                              title: 'Fetch Failed',
-                              text: response.message || "Failed to fetch employees for template",
-                            });
-                          }
-                        } catch (err: any) {
-                          console.error('Error downloading template:', err);
-                          Swal.fire({
-                            icon: 'error',
-                            title: 'Generation Failed',
-                            text: err.message || 'Error generating template',
-                          });
-                        } finally {
-                          setDownloadingTemplate(false);
-                        }
-                      }}
-                      disabled={downloadingTemplate}
-                      className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                    >
-                      <svg className={`w-4 h-4 ${downloadingTemplate ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        {downloadingTemplate ? (
-                          <>
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </>
-                        ) : (
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        )}
-                      </svg>
-                      {downloadingTemplate ? "Generating..." : "Download Template"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="animate-fade-in">
-                  <div className="grid grid-cols-3 gap-4 mb-6">
-                    <div className="bg-slate-50 dark:bg-slate-900 p-4 rounded-lg text-center border border-slate-200 dark:border-slate-700">
-                      <div className="text-2xl font-bold text-slate-800 dark:text-white">{uploadResults.total}</div>
-                      <div className="text-xs text-slate-500 uppercase">Total Rows</div>
-                    </div>
-                    <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg text-center border border-green-100 dark:border-green-800">
-                      <div className="text-2xl font-bold text-green-600">{uploadResults.success}</div>
-                      <div className="text-xs text-green-500 uppercase tracking-wider">Success</div>
-                    </div>
-                    <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg text-center border border-red-100 dark:border-red-800">
-                      <div className="text-2xl font-bold text-red-600">{uploadResults.failed}</div>
-                      <div className="text-xs text-red-500 uppercase tracking-wider">Failed</div>
-                    </div>
-                  </div>
-
-                  {uploadResults.errors.length > 0 && (
-                    <div className="mb-6">
-                      <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Error Details:</h4>
-                      <div className="max-h-40 overflow-y-auto bg-slate-50 dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <ul className="space-y-1">
-                          {uploadResults.errors.map((err, i) => (
-                            <li key={i} className="text-xs text-red-500">• {err}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => {
-                      setShowUploadModal(false);
-                      setUploadResults(null);
-                    }}
-                    className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-all shadow-lg"
-                  >
-                    Done
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Permission Request Modal */}
         {showPermissionModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
@@ -1750,7 +1517,8 @@ export default function PayRegisterPage() {
                     'Total Extra Days',
                     'Lates',
                     'Holidays & Weekoffs',
-                    'Paid Days',
+                    'Present Days',
+                    'Payable Shifts',
                     'Month Days',
                     'Counted Days',
                   ].map((label) => (
@@ -1770,7 +1538,7 @@ export default function PayRegisterPage() {
                       <div className="h-4 w-32 rounded bg-slate-200 dark:bg-slate-700" />
                       <div className="mt-1 h-3 w-24 rounded bg-slate-200 dark:bg-slate-700" />
                     </td>
-                    {Array.from({ length: 13 }).map((_, j) => (
+                    {Array.from({ length: 14 }).map((_, j) => (
                       <td key={j} className="px-2 py-2 text-center">
                         <div className="h-4 w-8 mx-auto rounded bg-slate-200 dark:bg-slate-700" />
                       </td>
@@ -1805,7 +1573,8 @@ export default function PayRegisterPage() {
                     'Total Extra Days',
                     'Lates',
                     'Holidays & Weekoffs',
-                    'Paid Days',
+                    'Present Days',
+                    'Payable Shifts',
                     'Month Days',
                     'Counted Days',
                   ].map((label) => (
@@ -1858,7 +1627,8 @@ export default function PayRegisterPage() {
                       <td className="text-center px-2 py-2">{row.extra.toFixed(1)}</td>
                       <td className="text-center px-2 py-2 font-bold text-amber-600 dark:text-amber-400">{row.lateCount}</td>
                       <td className="text-center px-2 py-2">{row.holidayAndWeekoffs.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-bold text-blue-600 dark:text-blue-400">{row.totalPaidDays.toFixed(1)}</td>
+                      <td className="text-center px-2 py-2 font-medium text-green-600 dark:text-green-400" title="Includes OD days">{row.present.toFixed(1)}</td>
+                      <td className="text-center px-2 py-2 font-bold text-slate-700 dark:text-slate-300">{row.payableShifts.toFixed(1)}</td>
                       <td className="text-center px-2 py-2">{row.monthDays}</td>
                       <td
                         className={`text-center px-2 py-2 font-semibold ${row.matchesMonth
@@ -1907,6 +1677,7 @@ export default function PayRegisterPage() {
         <div className="border-b border-slate-200 dark:border-slate-700">
           <nav className="flex -mb-px">
             {[
+              { id: 'all' as TableType, label: 'All', color: 'slate' },
               { id: 'present' as TableType, label: 'Present', color: 'green' },
               { id: 'absent' as TableType, label: 'Absent', color: 'red' },
               { id: 'leaves' as TableType, label: 'Leaves', color: 'yellow' },
@@ -1917,6 +1688,7 @@ export default function PayRegisterPage() {
             ].map((tab) => {
               // Count employees with data in this table type
               const count = payRegisters.filter(pr => {
+                if (tab.id === 'all') return true;
                 if (!pr.dailyRecords || pr.dailyRecords.length === 0) return false;
                 switch (tab.id) {
                   case 'present':
@@ -2002,11 +1774,21 @@ export default function PayRegisterPage() {
                     {daysArray.map((day) => (
                       <th
                         key={day}
-                        className={'w-[calc((100%-180px-' + (activeTable === 'leaves' ? '320px' : '80px') + '/' + daysArray.length + ')] border-r border-slate-200 px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}
+                        className={'w-[calc((100%-180px-' + (activeTable === 'leaves' ? '320px' : activeTable === 'all' ? '160px' : '80px') + '/' + daysArray.length + ')] border-r border-slate-200 px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}
                       >
                         {parseInt(day.split('-')[2])}
                       </th>
                     ))}
+                    {activeTable === 'all' && (
+                      <>
+                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20" title="OD days are included in present days">
+                          Present Days
+                        </th>
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50">
+                          Payable Shifts
+                        </th>
+                      </>
+                    )}
                     {activeTable === 'present' && (
                       <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20">
                         Total Present Days
@@ -2058,8 +1840,8 @@ export default function PayRegisterPage() {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                   {getFilteredPayRegisters().length === 0 ? (
                     <tr>
-                      <td colSpan={daysArray.length + (activeTable === 'leaves' ? 4 : 1)} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No records found for {activeTable === 'shifts' ? 'shifts' : activeTable} table
+                      <td colSpan={daysArray.length + (activeTable === 'leaves' ? 4 : activeTable === 'all' ? 2 : 1)} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        No records found{activeTable !== 'all' ? ` for ${activeTable === 'shifts' ? 'shifts' : activeTable} table` : ''}
                       </td>
                     </tr>
                   ) : (
@@ -2221,10 +2003,17 @@ export default function PayRegisterPage() {
                                             {record.firstHalf.status.charAt(0).toUpperCase()}/{record.secondHalf.status.charAt(0).toUpperCase()}
                                           </div>
                                         )}
-                                        {record.otHours > 0 && (activeTable === 'ot' || activeTable === 'extraHours') && (
+                                        {activeTable === 'all' && (record.isLate || record.isEarlyOut) && (
+                                          <div className="text-[7px] font-medium text-amber-600 dark:text-amber-400 mt-0.5" title={[record.isLate && 'Late', record.isEarlyOut && 'Early out'].filter(Boolean).join(', ')}>
+                                            {record.isLate && 'L'}
+                                            {record.isLate && record.isEarlyOut && ' '}
+                                            {record.isEarlyOut && 'E'}
+                                          </div>
+                                        )}
+                                        {record.otHours > 0 && (activeTable === 'ot' || activeTable === 'extraHours' || activeTable === 'all') && (
                                           <div className="text-[8px] font-semibold text-blue-600 dark:text-blue-300">{record.otHours}h</div>
                                         )}
-                                        {record.shiftName && (
+                                        {record.shiftName && activeTable === 'all' && (
                                           <div className="text-[8px] opacity-75 truncate" title={record.shiftName}>{record.shiftName.substring(0, 3)}</div>
                                         )}
                                       </>
@@ -2240,6 +2029,16 @@ export default function PayRegisterPage() {
                             );
                           })}
                           {/* Dynamic columns based on active tab */}
+                          {activeTable === 'all' && (
+                            <>
+                              <td className="border-r border-slate-200 bg-green-50 dark:bg-green-900/20 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:text-green-300" title="Includes OD days">
+                                {(pr.totals?.totalPresentDays ?? 0).toFixed(1)}
+                              </td>
+                              <td className="border-r-0 border-slate-200 bg-slate-50 dark:bg-slate-800 px-2 py-2 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 dark:bg-slate-700/50">
+                                {(pr.totals?.totalPayableShifts ?? 0).toFixed(1)}
+                              </td>
+                            </>
+                          )}
                           {activeTable === 'present' && (
                             <td className="border-r-0 border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300">
                               {(pr.totals.totalPresentDays + pr.totals.totalODDays).toFixed(1)}
@@ -2614,15 +2413,16 @@ export default function PayRegisterPage() {
                   {!isHalfDayMode && (
                     <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
                       <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">
-                        {activeTable === 'present' ? 'Present Status' :
-                          activeTable === 'absent' ? 'Absent Status' :
-                            activeTable === 'leaves' ? 'Leave Details' :
-                              activeTable === 'od' ? 'OD Details' :
-                                activeTable === 'ot' || activeTable === 'extraHours' ? 'OT Hours' :
-                                  'Full Day'}
+                        {activeTable === 'all' ? 'Day Status' :
+                          activeTable === 'present' ? 'Present Status' :
+                            activeTable === 'absent' ? 'Absent Status' :
+                              activeTable === 'leaves' ? 'Leave Details' :
+                                activeTable === 'od' ? 'OD Details' :
+                                  activeTable === 'ot' || activeTable === 'extraHours' ? 'OT Hours' :
+                                    'Full Day'}
                       </h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {(activeTable === 'present' || activeTable === 'absent' || activeTable === 'leaves' || activeTable === 'od') && (
+                        {(activeTable === 'all' || activeTable === 'present' || activeTable === 'absent' || activeTable === 'leaves' || activeTable === 'od') && (
                           <div>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                               Status

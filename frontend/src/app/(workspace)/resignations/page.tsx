@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/auth';
+import { canViewResignation, canApplyResignation, canApproveResignation } from '@/lib/permissions';
 import { toast, ToastContainer } from 'react-toastify';
 import Swal from 'sweetalert2';
 import 'react-toastify/dist/ReactToastify.css';
@@ -135,15 +136,7 @@ const getEmployeeInitials = (req: ResignationRequest) => {
   return (name[0] || 'E').toUpperCase();
 };
 
-const canCreateResignation = (user: any) => {
-  if (!user?.role) return false;
-  const role = String(user.role).toLowerCase();
-  return ['manager', 'hod', 'hr', 'sub_admin', 'super_admin'].includes(role);
-};
-
 const isEmployeeRole = (user: any) => String(user?.role || '').toLowerCase() === 'employee';
-
-const canSubmitResignation = (user: any) => canCreateResignation(user) || isEmployeeRole(user);
 
 export default function ResignationsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'pending'>('all');
@@ -393,6 +386,18 @@ export default function ResignationsPage() {
     [allRequests, pendingRequests]
   );
 
+  if (currentUser && !canViewResignation(currentUser as any)) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-4">
+        <div className="text-center max-w-md rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-8 shadow-lg">
+          <LogOut className="w-12 h-12 mx-auto text-slate-400 dark:text-slate-500 mb-4" />
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Access restricted</h2>
+          <p className="text-sm text-slate-600 dark:text-slate-400">You do not have permission to view the Resignations page. Contact your administrator if you need access.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-10 pt-1">
       <div className="sticky px-2 top-4 z-40 md:px-4 mb-2 md:mb-8">
@@ -410,7 +415,7 @@ export default function ResignationsPage() {
               </p>
             </div>
           </div>
-          {canSubmitResignation(currentUser) && (
+          {canApplyResignation(currentUser as any) && (
             <button
               type="button"
               onClick={() => openApplyModal(isEmployeeRole(currentUser))}
@@ -676,7 +681,7 @@ export default function ResignationsPage() {
                       >
                         <Eye className="w-3.5 h-3.5" /> View
                       </button>
-                      {canPerformAction(req) && (
+                      {canPerformAction(req) && canApproveResignation(currentUser as any) && (
                         <>
                           <button
                             type="button"
@@ -815,7 +820,7 @@ export default function ResignationsPage() {
               </div>
             )}
 
-            {selectedRequest.status === 'pending' && canPerformAction(selectedRequest) && (
+            {selectedRequest.status === 'pending' && canPerformAction(selectedRequest) && canApproveResignation(currentUser as any) && (
               <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-3">
                 <textarea
                   value={actionComment}

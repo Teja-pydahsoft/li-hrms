@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const LeaveRegister = require('../model/LeaveRegister');
 const Employee = require('../../employees/model/Employee');
 const Leave = require('../model/Leave');
@@ -111,8 +112,10 @@ class LeaveRegisterService {
 
     /**
      * Add leave debit (when leave is availed)
+     * @param {Object} leaveRecord - The approved leave document
+     * @param {mongoose.Types.ObjectId} [approvedByUserId] - User ID of the approver (required for register; do not pass workflow.currentStepRole string)
      */
-    async addLeaveDebit(leaveRecord) {
+    async addLeaveDebit(leaveRecord, approvedByUserId = null) {
         try {
             const employee = await Employee.findById(leaveRecord.employeeId)
                 .populate('department_id', 'name')
@@ -125,6 +128,11 @@ class LeaveRegisterService {
             const designation = (employee.designation_id && employee.designation_id.name) || employee.designation?.name || 'N/A';
             const department = (employee.department_id && employee.department_id.name) || employee.department?.name || 'N/A';
 
+            const leaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
+            const statusUpper = String(leaveRecord.status || 'approved').toUpperCase();
+            const status = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'].includes(statusUpper) ? statusUpper : 'APPROVED';
+            const approvedBy = approvedByUserId && mongoose.Types.ObjectId.isValid(approvedByUserId) ? approvedByUserId : undefined;
+
             const transactionData = {
                 employeeId: leaveRecord.employeeId,
                 empNo: employee.emp_no,
@@ -136,16 +144,16 @@ class LeaveRegisterService {
                 dateOfJoining: employee.doj,
                 employmentStatus: employee.is_active ? 'active' : 'inactive',
 
-                leaveType: leaveRecord.leaveType,
+                leaveType,
                 transactionType: 'DEBIT',
                 startDate: leaveRecord.fromDate,
                 endDate: leaveRecord.toDate,
                 days: leaveRecord.numberOfDays,
                 applicationId: leaveRecord._id,
                 applicationDate: leaveRecord.createdAt,
-                approvalDate: leaveRecord.updatedAt, // Use updatedAt as approval date
-                approvedBy: leaveRecord.workflow?.currentStepRole || 'system',
-                status: leaveRecord.status,
+                approvalDate: leaveRecord.updatedAt,
+                approvedBy,
+                status,
                 reason: leaveRecord.purpose
             };
 

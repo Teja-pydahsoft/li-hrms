@@ -874,24 +874,27 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   payrollRecord.markModified('loanAdvance');
   await payrollRecord.save();
 
+  // Create or find batch and add this payroll record (same as legacy flow — batches created right after record save)
   let batchId = null;
-  try {
-    if (employee.department_id) {
+  const deptId = employee.department_id?._id ?? employee.department_id;
+  const divId = employee.division_id?._id ?? employee.division_id;
+  if (deptId && divId) {
+    try {
       let batch = await PayrollBatch.findOne({
-        department: employee.department_id,
-        division: employee.division_id,
+        department: deptId,
+        division: divId,
         month,
       });
       if (!batch) {
-        batch = await PayrollBatchService.createBatch(employee.department_id, employee.division_id, month, userId);
+        batch = await PayrollBatchService.createBatch(deptId, divId, month, userId);
       }
       if (batch) {
         await PayrollBatchService.addPayrollToBatch(batch._id, payrollRecord._id);
         batchId = batch._id;
       }
+    } catch (e) {
+      console.error('[PayrollFromOutputColumns] Batch create/add error:', e.message);
     }
-  } catch (e) {
-    console.error('[PayrollFromOutputColumns] Batch update error:', e.message);
   }
 
   return {

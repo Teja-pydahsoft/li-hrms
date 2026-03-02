@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/auth';
+import { api } from '@/lib/api';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { WorkspaceProvider, useWorkspace } from '@/contexts/WorkspaceContext';
+import { WorkspaceProvider } from '@/contexts/WorkspaceContext';
 import { SidebarProvider } from '@/contexts/SidebarContext';
 import Spinner from '@/components/Spinner';
 import WorkspaceSidebar from '@/components/WorkspaceSidebar';
@@ -12,10 +13,6 @@ import MobileBottomNav from '@/components/MobileBottomNav';
 import MainContent from '@/components/MainContent';
 
 function WorkspaceLayoutContent({ children }: { children: React.ReactNode }) {
-  // const { isLoading } = useWorkspace(); // isLoading removed as we want to show skeletons immediately
-
-
-
   return (
     <div className="flex min-h-screen bg-bg-base dark:bg-slate-900">
       <div className="hidden sm:block">
@@ -36,22 +33,46 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
-    const token = auth.getToken();
-    const user = auth.getUser();
+    let cancelled = false;
 
-    if (!token || !user) {
-      router.replace('/login');
-      return;
-    }
+    const run = async () => {
+      const token = auth.getToken();
+      const user = auth.getUser();
 
-    // If super_admin, redirect to admin panel
-    if (user.role === 'super_admin') {
-      router.replace('/superadmin/dashboard');
-      return;
-    }
+      if (!token || !user) {
+        router.replace('/login');
+        return;
+      }
 
-    setIsAuthenticated(true);
-    setIsChecking(false);
+      if (user.role === 'super_admin') {
+        router.replace('/superadmin/dashboard');
+        return;
+      }
+
+      // Resolve feature control before showing workspace so permission checks (read/write) are
+      // correct from first paint. If user has no user-specific featureControl, fetch
+      // feature_control_${role} from Settings and set it on the stored user.
+      const hasUserFeatureControl = user.featureControl && Array.isArray(user.featureControl) && user.featureControl.length > 0;
+      if (!hasUserFeatureControl) {
+        try {
+          const res = await api.getSetting(`feature_control_${user.role}`);
+          if (!cancelled && res?.success && res?.data?.value?.activeModules && Array.isArray(res.data.value.activeModules)) {
+            const updated = { ...user, featureControl: res.data.value.activeModules };
+            auth.setUser(updated);
+          }
+        } catch {
+          // keep stored user as-is; permissions may default elsewhere
+        }
+      }
+
+      if (!cancelled) {
+        setIsAuthenticated(true);
+        setIsChecking(false);
+      }
+    };
+
+    run();
+    return () => { cancelled = true; };
   }, [router]);
 
   if (isChecking) {

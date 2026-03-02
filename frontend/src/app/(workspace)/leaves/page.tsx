@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/auth';
 import {
@@ -14,6 +15,8 @@ import 'react-toastify/dist/ReactToastify.css';
 
 import LocationPhotoCapture from '@/components/LocationPhotoCapture';
 import EmployeeSelect from '@/components/EmployeeSelect';
+
+const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 import {
   Calendar,
   Briefcase,
@@ -448,6 +451,10 @@ export default function LeavesPage() {
   const defaultPolicy = { allowBackdated: false, maxBackdatedDays: 0, allowFutureDated: true, maxAdvanceDays: 90 };
   const [leavePolicy, setLeavePolicy] = useState<typeof defaultPolicy>(defaultPolicy);
   const [odPolicy, setODPolicy] = useState<typeof defaultPolicy>({ ...defaultPolicy, allowBackdated: true, maxBackdatedDays: 30 });
+  const [leaveWorkflowAllowHigherAuthority, setLeaveWorkflowAllowHigherAuthority] = useState(false);
+  const [leaveWorkflowRoleOrder, setLeaveWorkflowRoleOrder] = useState<string[]>([]);
+  const [odWorkflowAllowHigherAuthority, setODWorkflowAllowHigherAuthority] = useState(false);
+  const [odWorkflowRoleOrder, setODWorkflowRoleOrder] = useState<string[]>([]);
 
   // Employees for "Apply For" selection
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -640,7 +647,7 @@ export default function LeavesPage() {
         return;
       }
 
-      // Check both leave and od settings for workspace permissions
+      // Check both leave and od settings for workspace permissions (and workflow options for approve/reject visibility)
       const [leaveSettingsRes, odSettingsRes] = await Promise.all([
         api.getLeaveSettings('leave'),
         api.getLeaveSettings('od'),
@@ -649,143 +656,44 @@ export default function LeavesPage() {
       console.log('[Workspace Leaves] Leave settings response:', leaveSettingsRes);
       console.log('[Workspace Leaves] OD settings response:', odSettingsRes);
 
-      const workspaceIdStr = String(workspaceId);
-
-      // Check Leave permissions from leave settings
-      let leavePermissionsFromLeave = null;
-      if (leaveSettingsRes.success && leaveSettingsRes.data?.settings?.workspacePermissions) {
-        const allPermissions = leaveSettingsRes.data.settings.workspacePermissions;
-        console.log('[Workspace Leaves] Leave settings permissions:', JSON.stringify(allPermissions, null, 2));
-        for (const key in allPermissions) {
-          if (String(key) === workspaceIdStr) {
-            leavePermissionsFromLeave = allPermissions[key];
-            console.log('[Workspace Leaves] Found leave permissions in leave settings:', JSON.stringify(leavePermissionsFromLeave, null, 2));
-            break;
-          }
-        }
+      // Apply workflow "allow higher authority" and role order so Pending tab shows Approve/Reject when setting is on
+      if (leaveSettingsRes.success && leaveSettingsRes.data?.workflow) {
+        const wf = leaveSettingsRes.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setLeaveWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = (wf.steps || []).slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        setLeaveWorkflowRoleOrder(steps.map((st: any) => String(st.approverRole || '').toLowerCase()).filter(Boolean));
+      }
+      if (odSettingsRes.success && odSettingsRes.data?.workflow) {
+        const wf = odSettingsRes.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setODWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = (wf.steps || []).slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        setODWorkflowRoleOrder(steps.map((st: any) => String(st.approverRole || '').toLowerCase()).filter(Boolean));
       }
 
-      // Check OD permissions from od settings
-      let odPermissionsFromOD = null;
-      if (odSettingsRes.success && odSettingsRes.data?.settings?.workspacePermissions) {
-        const allPermissions = odSettingsRes.data.settings.workspacePermissions;
-        console.log('[Workspace Leaves] OD settings permissions:', JSON.stringify(allPermissions, null, 2));
-        for (const key in allPermissions) {
-          if (String(key) === workspaceIdStr) {
-            odPermissionsFromOD = allPermissions[key];
-            console.log('[Workspace Leaves] Found OD permissions in OD settings:', JSON.stringify(odPermissionsFromOD, null, 2));
-            break;
-          }
-        }
-      }
-
-      // Process Leave permissions
+      // Do not use workspace permissions from settings; role-based only
       let leaveSelf = false;
       let leaveOthers = false;
-
-      if (leavePermissionsFromLeave) {
-        console.log('[Workspace Leaves] Processing leave permissions, type:', typeof leavePermissionsFromLeave, 'has leave prop:', !!leavePermissionsFromLeave.leave);
-        if (typeof leavePermissionsFromLeave === 'boolean') {
-          // Old format
-          console.log('[Workspace Leaves] Using old boolean format for leave');
-          leaveSelf = false;
-          leaveOthers = leavePermissionsFromLeave;
-        } else if (leavePermissionsFromLeave.leave) {
-          // New format with separate leave/od - structure: { leave: { canApplyForSelf, canApplyForOthers } }
-          console.log('[Workspace Leaves] Using new nested format for leave:', leavePermissionsFromLeave.leave);
-          leaveSelf = leavePermissionsFromLeave.leave.canApplyForSelf || false;
-          leaveOthers = leavePermissionsFromLeave.leave.canApplyForOthers || false;
-        } else {
-          // Legacy object format (but check if it has OD data, if so, this is for OD not leave)
-          if (!leavePermissionsFromLeave.od) {
-            console.log('[Workspace Leaves] Using legacy object format for leave');
-            leaveSelf = leavePermissionsFromLeave.canApplyForSelf || false;
-            leaveOthers = leavePermissionsFromLeave.canApplyForOthers || false;
-          } else {
-            console.log('[Workspace Leaves] Leave permissions object contains OD data, skipping');
-          }
-        }
-      } else {
-        console.log('[Workspace Leaves] No leave permissions found');
-      }
-
-
-      // Override based on Role (Strict Role-Based Access)
-      if (currentUser) {
-        if (currentUser.role === 'employee') {
-          leaveSelf = true; // Employees can always apply for themselves
-          leaveOthers = false;
-        } else if (['manager', 'hod', 'hr', 'super_admin', 'sub_admin'].includes(currentUser.role)) {
-          leaveOthers = true;
-          leaveSelf = true; // Admins/Managers/HODs should also be able to apply
-        }
-      }
-
-      console.log('[Workspace Leaves] Parsed leave permissions:', { self: leaveSelf, others: leaveOthers });
-      setCanApplyLeaveForSelf(leaveSelf);
-      setCanApplyLeaveForOthers(leaveOthers);
-
-      // Process OD permissions - check OD settings first, then fallback to leave settings
       let odSelf = false;
       let odOthers = false;
-
-      // First try OD settings
-      if (odPermissionsFromOD) {
-        console.log('[Workspace Leaves] Processing OD permissions from OD settings, type:', typeof odPermissionsFromOD, 'has od prop:', !!odPermissionsFromOD.od);
-        if (typeof odPermissionsFromOD === 'boolean') {
-          // Old format
-          console.log('[Workspace Leaves] Using old boolean format for OD');
-          odSelf = false;
-          odOthers = odPermissionsFromOD;
-        } else if (odPermissionsFromOD.od) {
-          // New format with separate leave/od - structure: { od: { canApplyForSelf, canApplyForOthers } }
-          console.log('[Workspace Leaves] Using new nested format for OD:', odPermissionsFromOD.od);
-          odSelf = odPermissionsFromOD.od.canApplyForSelf || false;
-          odOthers = odPermissionsFromOD.od.canApplyForOthers || false;
-        } else {
-          // Legacy object format
-          console.log('[Workspace Leaves] Using legacy object format for OD');
-          odSelf = odPermissionsFromOD.canApplyForSelf || false;
-          odOthers = odPermissionsFromOD.canApplyForOthers || false;
-        }
-      }
-      // If not found in OD settings, check leave settings (might have OD permissions stored there)
-      else if (leavePermissionsFromLeave && typeof leavePermissionsFromLeave === 'object' && leavePermissionsFromLeave.od) {
-        console.log('[Workspace Leaves] Found OD permissions in leave settings, using them');
-        odSelf = leavePermissionsFromLeave.od.canApplyForSelf || false;
-        odOthers = leavePermissionsFromLeave.od.canApplyForOthers || false;
-      }
-      // Final fallback: use leave permissions if no OD-specific permissions found
-      else if (leavePermissionsFromLeave && typeof leavePermissionsFromLeave !== 'boolean' && !leavePermissionsFromLeave.leave && !leavePermissionsFromLeave.od) {
-        // Use leave permissions as fallback for OD (legacy behavior)
-        console.log('[Workspace Leaves] Using leave permissions as fallback for OD');
-        odSelf = leavePermissionsFromLeave.canApplyForSelf || false;
-        odOthers = leavePermissionsFromLeave.canApplyForOthers || false;
-      } else {
-        console.log('[Workspace Leaves] No OD permissions found');
-      }
-
-
-      // Override OD based on Role
       if (currentUser) {
         if (currentUser.role === 'employee') {
-          odSelf = true; // Employees can always apply for OD
+          leaveSelf = true;
+          leaveOthers = false;
+          odSelf = true;
           odOthers = false;
         } else if (['manager', 'hod', 'hr', 'super_admin', 'sub_admin'].includes(currentUser.role)) {
-          odOthers = true;
+          leaveSelf = true;
+          leaveOthers = true;
           odSelf = true;
+          odOthers = true;
         }
       }
-
-      console.log('[Workspace Leaves] Parsed OD permissions:', { self: odSelf, others: odOthers });
+      setCanApplyLeaveForSelf(leaveSelf);
+      setCanApplyLeaveForOthers(leaveOthers);
       setCanApplyODForSelf(odSelf);
       setCanApplyODForOthers(odOthers);
-
-      // Set combined permissions (for backward compatibility)
       setCanApplyForSelf(leaveSelf || odSelf);
       setCanApplyForOthers(leaveOthers || odOthers);
-
-      console.log('[Workspace Leaves] Final permissions - Leave:', { self: leaveSelf, others: leaveOthers }, 'OD:', { self: odSelf, others: odOthers });
     } catch (err) {
       console.error('[Workspace Leaves] Failed to check workspace permission:', err);
       setCanApplyLeaveForSelf(false);
@@ -927,6 +835,13 @@ export default function LeavesPage() {
           maxAdvanceDays: s.maxAdvanceDays ?? 90,
         });
       }
+      // Leave workflow: allow higher authority to approve lower levels
+      if (leaveSettingsRes.success && leaveSettingsRes.data?.workflow) {
+        const wf = leaveSettingsRes.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setLeaveWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = (wf.steps || []).slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        setLeaveWorkflowRoleOrder(steps.map((st: any) => String(st.approverRole || '').toLowerCase()).filter(Boolean));
+      }
 
       // Extract OD types from settings (field is 'types' not 'odTypes')
       let fetchedODTypes: any[] = [];
@@ -943,6 +858,13 @@ export default function LeavesPage() {
           allowFutureDated: s.allowFutureDated ?? true,
           maxAdvanceDays: s.maxAdvanceDays ?? 90,
         });
+      }
+      // OD workflow: allow higher authority to approve lower levels
+      if (odSettingsRes.success && odSettingsRes.data?.workflow) {
+        const wf = odSettingsRes.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setODWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = (wf.steps || []).slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        setODWorkflowRoleOrder(steps.map((st: any) => String(st.approverRole || '').toLowerCase()).filter(Boolean));
       }
 
       // Use fetched types or defaults
@@ -1215,22 +1137,21 @@ export default function LeavesPage() {
         }
       }
 
-      // 3. Evidence Upload
+      // 3. Evidence Upload (mandatory for OD)
       if (applyType === 'od') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const odSettings = getModuleConfig('OD')?.settings as any;
-        if (odSettings?.requirePhotoEvidence && !evidenceFile) {
-          toast.error('Photo evidence is required');
+        if (!evidenceFile) {
+          toast.error('Photo evidence is required for OD applications');
           setLoading(false);
           return;
         }
 
         if (evidenceFile) {
           const uploadRes = await api.uploadEvidence(evidenceFile);
-          if (uploadRes.success && uploadRes.data) {
+          // API returns { success, url, key, filename } at top level (no .data wrapper)
+          if (uploadRes.success && uploadRes.url) {
             payload.photoEvidence = {
-              url: uploadRes.data.url,
-              key: uploadRes.data.key,
+              url: uploadRes.url,
+              key: uploadRes.key,
               exifLocation: (evidenceFile as any).exifLocation
             };
           } else {
@@ -1734,7 +1655,15 @@ export default function LeavesPage() {
 
   const totalPending = stats.totalPending;
 
-  const canPerformAction = (item: LeaveApplication | ODApplication) => {
+  // Build role order from the leave/OD's stored workflow (dynamic per record)
+  const getRoleOrderFromItem = (item: LeaveApplication | ODApplication): string[] => {
+    const chain = (item as any).workflow?.approvalChain;
+    if (!chain || !Array.isArray(chain) || chain.length === 0) return [];
+    const sorted = chain.slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+    return sorted.map((s: any) => String(s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+  };
+
+  const canPerformAction = (item: LeaveApplication | ODApplication, source?: 'leave' | 'od') => {
     if (!currentUser) return false;
     if (currentUser.role === 'employee') return false;
 
@@ -1742,6 +1671,13 @@ export default function LeavesPage() {
     if (['super_admin', 'sub_admin'].includes(currentUser.role)) {
       return !['approved', 'rejected', 'cancelled'].includes(item.status);
     }
+
+    const isOD = source === 'od' || ((item as any).odType !== undefined);
+    const allowHigher = isOD ? odWorkflowAllowHigherAuthority : leaveWorkflowAllowHigherAuthority;
+    // Use workflow order stored on the leave/OD (dynamic); fallback to global settings order if missing
+    const itemRoleOrder = getRoleOrderFromItem(item);
+    const globalRoleOrder = isOD ? odWorkflowRoleOrder : leaveWorkflowRoleOrder;
+    const roleOrder = itemRoleOrder.length > 0 ? itemRoleOrder : globalRoleOrder;
 
     // Strict check: nextApproverRole must match user.role (current step = user's turn)
     const nextRole = String((item as any).workflow?.nextApproverRole || (item as any).workflow?.nextApprover || '').toLowerCase().trim();
@@ -1755,6 +1691,18 @@ export default function LeavesPage() {
         const reportingManagerIds = (item as any).workflow?.reportingManagerIds as string[] | undefined;
         const userId = String((currentUser as any).id ?? (currentUser as any)._id ?? '').trim();
         if (reportingManagerIds?.length && userId && reportingManagerIds.some((id: string) => String(id).trim() === userId)) return true;
+      }
+      // Setting: allow higher authority to approve lower levels (using this leave's workflow order)
+      if (allowHigher && roleOrder.length > 0) {
+        const nextIdx = roleOrder.indexOf(nextRole);
+        let userIdx = roleOrder.indexOf(userRole);
+        if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+        if (userIdx === -1 && userRole === 'manager') {
+          const reportingIdx = roleOrder.indexOf('reporting_manager');
+          const hrIdx = roleOrder.indexOf('hr');
+          userIdx = reportingIdx >= 0 ? reportingIdx : (hrIdx >= 0 ? hrIdx : roleOrder.length);
+        }
+        if (nextIdx >= 0 && userIdx >= 0 && userIdx >= nextIdx) return true;
       }
       return false;
     }
@@ -2592,7 +2540,7 @@ export default function LeavesPage() {
 
                           {/* Actions */}
 
-                          {canPerformAction(leave) && (hasManagePermission || hasManagePermission) && (
+                          {canPerformAction(leave, 'leave') && (hasManagePermission || hasManagePermission) && (
                             <div className="flex items-center gap-2 mt-auto">
                               {hasManagePermission && (
                                 <button
@@ -2686,7 +2634,7 @@ export default function LeavesPage() {
                           </div>
 
                           {/* Actions */}
-                          {canPerformAction(od) && (hasManagePermission || hasManagePermission) && (
+                          {canPerformAction(od, 'od') && (hasManagePermission || hasManagePermission) && (
                             <div className="flex items-center gap-2 mt-auto">
                               {hasManagePermission && (
                                 <button
@@ -3109,7 +3057,7 @@ export default function LeavesPage() {
                       />
                     </div>
                     <LocationPhotoCapture
-                      required={(getModuleConfig('OD')?.settings as any)?.requirePhotoEvidence || false}
+                      required
                       label="Photo Evidence"
                       onCapture={(loc, photo) => {
                         setEvidenceFile(photo.file);
@@ -3292,6 +3240,88 @@ export default function LeavesPage() {
                     )}
                   </div>
 
+                  {/* Photo Evidence & Location (OD view) - photo, address, Google Maps link */}
+                  {detailType === 'od' && ((selectedItem as any).photoEvidence || (selectedItem as any).geoLocation) && (
+                    <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-5 border border-slate-200 dark:border-slate-700">
+                      <p className="text-xs uppercase font-bold text-slate-400 mb-3 tracking-wider">Evidence & Location</p>
+                      <div className="space-y-4">
+                        {(selectedItem as any).photoEvidence && (
+                          <div className="flex items-start gap-3">
+                            <a
+                              href={(selectedItem as any).photoEvidence.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="relative group block shrink-0"
+                            >
+                              <img
+                                src={(selectedItem as any).photoEvidence.url}
+                                alt="Evidence"
+                                className="w-20 h-20 rounded-lg object-cover border border-slate-200 dark:border-slate-600 shadow-sm transition-transform group-hover:scale-105"
+                              />
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors rounded-lg">
+                                <svg className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                              </div>
+                            </a>
+                            <div>
+                              <p className="text-sm font-medium text-slate-900 dark:text-white">Photo Evidence</p>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Captured at application time</p>
+                            </div>
+                          </div>
+                        )}
+                        {(selectedItem as any).geoLocation && (
+                          <div className="p-3 rounded-lg bg-white dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700">
+                            <div className="flex items-center gap-2 mb-2">
+                              <svg className="w-4 h-4 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Location</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                              <div>
+                                <span className="text-slate-500">Lat:</span>
+                                <span className="ml-1 font-mono text-slate-700 dark:text-slate-300">{(selectedItem as any).geoLocation.latitude?.toFixed(6)}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500">Lon:</span>
+                                <span className="ml-1 font-mono text-slate-700 dark:text-slate-300">{(selectedItem as any).geoLocation.longitude?.toFixed(6)}</span>
+                              </div>
+                              {(selectedItem as any).geoLocation.address && (
+                                <div className="col-span-2 pt-2 border-t border-slate-100 dark:border-slate-700 mt-1">
+                                  <span className="block text-slate-500 mb-0.5">Address</span>
+                                  <p className="text-slate-700 dark:text-slate-300 leading-tight text-xs">{(selectedItem as any).geoLocation.address}</p>
+                                </div>
+                              )}
+                              <div className="col-span-2 mt-1">
+                                <a
+                                  href={`https://www.google.com/maps?q=${(selectedItem as any).geoLocation.latitude},${(selectedItem as any).geoLocation.longitude}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-medium text-xs"
+                                >
+                                  View on Google Maps
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {/* Leaflet map view */}
+                        {(() => {
+                          const geo = (selectedItem as any).geoLocation;
+                          const exif = (selectedItem as any).photoEvidence?.exifLocation;
+                          const lat = geo?.latitude ?? exif?.latitude;
+                          const lng = geo?.longitude ?? exif?.longitude;
+                          const address = geo?.address ?? null;
+                          if (lat == null || lng == null) return null;
+                          return (
+                            <div className="mt-2">
+                              <span className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Map</span>
+                              <LocationMap latitude={lat} longitude={lng} address={address} height="180px" />
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Approval Steps - Timeline / Progress */}
                   {((selectedItem as any).workflow?.approvalChain?.length > 0) && (
                     <div className="bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-6 rounded-xl">
@@ -3401,7 +3431,7 @@ export default function LeavesPage() {
                 {/* Footer Actions - Sticky Bottom */}
                 {/* Footer Actions - Sticky Bottom */}
                 <div className="p-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row gap-3 justify-end items-stretch sm:items-center">
-                  {!['approved', 'rejected', 'cancelled'].includes(selectedItem.status) && canPerformAction(selectedItem) && (
+                  {!['approved', 'rejected', 'cancelled'].includes(selectedItem.status) && canPerformAction(selectedItem, detailType) && (
                     <>
                       <textarea
                         value={actionComment}

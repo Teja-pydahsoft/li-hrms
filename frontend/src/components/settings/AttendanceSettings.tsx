@@ -45,6 +45,7 @@ const AttendanceSettings = () => {
                         allowInTimeEditing: featureFlags.allowInTimeEditing !== false,
                         allowOutTimeEditing: featureFlags.allowOutTimeEditing !== false,
                         allowAttendanceUpload: featureFlags.allowAttendanceUpload !== false,
+                        allowShiftChange: featureFlags.allowShiftChange !== false,
                     },
                 });
             }
@@ -76,6 +77,7 @@ const AttendanceSettings = () => {
                     allowInTimeEditing: true,
                     allowOutTimeEditing: true,
                     allowAttendanceUpload: true,
+                    allowShiftChange: true,
                 },
             };
             const res = await api.updateAttendanceSettings(payload);
@@ -355,7 +357,7 @@ const AttendanceSettings = () => {
                                 <Clock className="h-4 w-4 text-indigo-500" />
                                 Editing &amp; Upload Controls
                             </h3>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable or disable in-time editing, out-time editing, and attendance Excel upload on the attendance pages.</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable or disable in-time editing, out-time editing, shift change, and attendance Excel upload on the attendance pages.</p>
                         </div>
                         <div className="p-8 space-y-4">
                             <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50/50 dark:bg-black/10 border border-gray-100 dark:border-gray-800">
@@ -392,6 +394,24 @@ const AttendanceSettings = () => {
                                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all ${(attendanceSettings.featureFlags?.allowOutTimeEditing !== false) ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-800'}`}
                                 >
                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(attendanceSettings.featureFlags?.allowOutTimeEditing !== false) ? 'translate-x-6' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50/50 dark:bg-black/10 border border-gray-100 dark:border-gray-800">
+                                <div className="space-y-1">
+                                    <p className="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-tight">Allow Shift Change</p>
+                                    <p className="text-[10px] text-gray-400">When ON, users can change the shift from the attendance detail view dialog.</p>
+                                </div>
+                                <button
+                                    onClick={() => setAttendanceSettings({
+                                        ...attendanceSettings,
+                                        featureFlags: {
+                                            ...(attendanceSettings.featureFlags || {}),
+                                            allowShiftChange: !(attendanceSettings.featureFlags?.allowShiftChange !== false),
+                                        },
+                                    })}
+                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all ${(attendanceSettings.featureFlags?.allowShiftChange !== false) ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-800'}`}
+                                >
+                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(attendanceSettings.featureFlags?.allowShiftChange !== false) ? 'translate-x-6' : 'translate-x-1'}`} />
                                 </button>
                             </div>
                             <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50/50 dark:bg-black/10 border border-gray-100 dark:border-gray-800">

@@ -217,6 +217,11 @@ const LeaveSettingsSchema = new mongoose.Schema(
           type: Boolean,
           default: true
         }
+      },
+      // When true, approvers with a role later in the chain can act on requests still at an earlier step
+      allowHigherAuthorityToApproveLowerLevels: {
+        type: Boolean,
+        default: false
       }
     },
 
