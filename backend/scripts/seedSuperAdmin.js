@@ -19,8 +19,8 @@ const seedSuperAdmin = async () => {
 
     // Create super admin
     const superAdmin = await User.create({
-      email: process.env.SUPER_ADMIN_EMAIL || 'admin1@hrms.com',
-      password: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123',
+      email: 'teja@hrms.com',
+      password: 'Admin@123',
       name: 'Super Admin',
       role: 'super_admin',
       roles: ['super_admin'],
@@ -29,7 +29,7 @@ const seedSuperAdmin = async () => {
 
     console.log('✅ Super Admin created successfully!');
     console.log(`   Email: ${superAdmin.email}`);
-    console.log(`   Password: ${process.env.SUPER_ADMIN_PASSWORD || 'Admin@123'}`);
+    console.log(`   Password: ${'Admin@123'}`);
     console.log('   ⚠️  Please change the password after first login!');
 
     await closeMongoDB();
@@ -37,8 +37,8 @@ const seedSuperAdmin = async () => {
   } catch (error) {
     console.error('❌ Error seeding super admin:', error.message);
     console.error('   Full error:', error);
-    await closeMongoDB().catch(() => {});
-    if(process.env.NODE_ENV !== "test") process.exit(1);
+    await closeMongoDB().catch(() => { });
+    if (process.env.NODE_ENV !== "test") process.exit(1);
   }
 };
 

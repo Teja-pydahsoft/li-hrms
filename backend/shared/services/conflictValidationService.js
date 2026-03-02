@@ -20,12 +20,12 @@ const isDateInRange = (date, fromDate, toDate) => {
   const checkDate = typeof date === 'string' ? new Date(date) : date;
   const from = new Date(fromDate);
   const to = new Date(toDate);
-  
+
   // Set time to start/end of day for accurate comparison
   from.setHours(0, 0, 0, 0);
   to.setHours(23, 59, 59, 999);
   checkDate.setHours(12, 0, 0, 0); // Set to noon for date-only comparison
-  
+
   return checkDate >= from && checkDate <= to;
 };
 
@@ -56,12 +56,12 @@ const checkHalfDayConflict = (isHalfDay1, halfDayType1, isHalfDay2, halfDayType2
   if (!isHalfDay1 && !isHalfDay2) {
     return true;
   }
-  
+
   // If one is full day and other is half day, they conflict
   if ((!isHalfDay1 && isHalfDay2) || (isHalfDay1 && !isHalfDay2)) {
     return true;
   }
-  
+
   // Both are half day - check if same half
   if (isHalfDay1 && isHalfDay2) {
     // If same half type, they conflict
@@ -71,7 +71,7 @@ const checkHalfDayConflict = (isHalfDay1, halfDayType1, isHalfDay2, halfDayType2
     // Different halves (first_half vs second_half) - no conflict
     return false;
   }
-  
+
   return false;
 };
 
@@ -85,10 +85,10 @@ const checkHalfDayConflict = (isHalfDay1, halfDayType1, isHalfDay2, halfDayType2
  */
 const checkLeaveConflict = async (employeeId, employeeNumber, date, approvedOnly = false) => {
   try {
-    const statusFilter = approvedOnly 
+    const statusFilter = approvedOnly
       ? ['approved'] // Only approved for creation
       : ['pending', 'hod_approved', 'hr_approved', 'approved']; // All for approval
-    
+
     const leaves = await Leave.find({
       $or: [
         { employeeId: employeeId },
@@ -132,10 +132,10 @@ const checkLeaveConflict = async (employeeId, employeeNumber, date, approvedOnly
  */
 const checkODConflict = async (employeeId, employeeNumber, date, approvedOnly = false) => {
   try {
-    const statusFilter = approvedOnly 
+    const statusFilter = approvedOnly
       ? ['approved'] // Only approved for creation
       : ['pending', 'hod_approved', 'hr_approved', 'approved']; // All for approval
-    
+
     const ods = await OD.find({
       $or: [
         { employeeId: employeeId },
@@ -190,14 +190,10 @@ const checkAttendanceExists = async (employeeNumber, date) => {
       };
     }
 
-    if (!attendance.inTime) {
-      return {
-        hasAttendance: false,
-        attendance: attendance,
-        message: 'Employee has no in-time for this date',
-      };
-    }
+    // We no longer require an in-time to create a permission request, as requested by the user.
+    // However, if there are shifts, we can still capture the first one's inTime for reference if we wanted to.
 
+    // Just return success if the attendance record exists for the date
     return {
       hasAttendance: true,
       attendance: attendance,
@@ -316,7 +312,7 @@ const validateLeaveRequest = async (employeeId, employeeNumber, fromDate, toDate
   });
 
   const conflictingODs = [];
-  
+
   // Check each OD for conflicts
   for (const od of ods) {
     // Check if date ranges overlap
@@ -340,7 +336,7 @@ const validateLeaveRequest = async (employeeId, employeeNumber, fromDate, toDate
         // Multi-day leave or full-day leave - check each day in overlapping range
         const startDate = fromDate > od.fromDate ? fromDate : od.fromDate;
         const endDate = toDate < od.toDate ? toDate : od.toDate;
-        
+
         // If leave is single day full day, check if OD is on same day
         if (isSameDay(fromDate, toDate) && !isHalfDay) {
           // Full day leave - conflicts with any OD on same day
@@ -391,7 +387,7 @@ const validateODRequest = async (employeeId, employeeNumber, fromDate, toDate, i
   });
 
   const conflictingLeaves = [];
-  
+
   // Check each Leave for conflicts
   for (const leave of leaves) {
     // Check if date ranges overlap
@@ -415,7 +411,7 @@ const validateODRequest = async (employeeId, employeeNumber, fromDate, toDate, i
         // Multi-day OD or full-day OD - check each day in overlapping range
         const startDate = fromDate > leave.fromDate ? fromDate : leave.fromDate;
         const endDate = toDate < leave.toDate ? toDate : leave.toDate;
-        
+
         // If OD is single day full day, check if Leave is on same day
         if (isSameDay(fromDate, toDate) && !isHalfDay) {
           // Full day OD - conflicts with any Leave on same day

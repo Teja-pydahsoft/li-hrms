@@ -138,6 +138,16 @@ export default function SecurityGatePage() {
         );
     };
 
+    const sortedPermissions = [...permissions].sort((a, b) => {
+        const getLatestTime = (p: PermissionRequests) => {
+            if (p.gateInTime) return new Date(p.gateInTime).getTime();
+            if (p.gateOutTime) return new Date(p.gateOutTime).getTime();
+            if (p.permissionStartTime) return new Date(p.permissionStartTime).getTime();
+            return 0;
+        };
+        return getLatestTime(b) - getLatestTime(a);
+    });
+
     return (
         <div className="p-6 space-y-6">
             {/* Header */}
@@ -213,7 +223,7 @@ export default function SecurityGatePage() {
                                     </td>
                                 </tr>
                             ) : (
-                                permissions.map((p) => (
+                                sortedPermissions.map((p) => (
                                     <tr key={p._id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-3">

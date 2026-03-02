@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { api, Division, Department, Designation } from '@/lib/api';
 import { QRCodeSVG } from 'qrcode.react';
+import { Check, QrCode, Scan } from 'lucide-react';
 import LocationPhotoCapture from '@/components/LocationPhotoCapture';
 import Spinner from '@/components/Spinner';
 import EmployeeSelect from '@/components/EmployeeSelect';
@@ -165,6 +166,10 @@ interface PermissionRequest {
   approvedAt?: string;
   rejectedAt?: string;
   qrCode?: string;
+  gateOutSecret?: string;
+  gateInSecret?: string;
+  gateOutTime?: string;
+  gateInTime?: string;
   outpassUrl?: string;
   comments?: string;
   photoEvidence?: {
@@ -340,6 +345,69 @@ export default function OTAndPermissionsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showOTDialog]);
+
+  const handleGenerateGatePass = async (type: 'OUT' | 'IN') => {
+    if (!selectedQR) return;
+
+    setLoading(true);
+    try {
+      if (type === 'OUT') {
+        const res = await api.generateGateOutQR(selectedQR._id);
+        if (res.success) {
+          setSelectedQR({ ...selectedQR, qrCode: res.qrSecret, gateOutSecret: res.qrSecret });
+          showToast('Exit gate pass generated', 'success');
+        } else {
+          showToast(res.message || 'Error generating exit pass', 'error');
+        }
+      } else {
+        const res = await api.generateGateInQR(selectedQR._id);
+        if (res.success) {
+          setSelectedQR({ ...selectedQR, qrCode: res.qrSecret, gateInSecret: res.qrSecret });
+          showToast('Entry gate pass generated', 'success');
+        } else {
+          showToast(res.message || 'Error generating entry pass', 'error');
+        }
+      }
+    } catch (error) {
+      console.error(`Error generating ${type} pass:`, error);
+      showToast(`Error generating ${type === 'OUT' ? 'exit' : 'entry'} pass`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-generate Gate Pass when dialog opens
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
+    if (showQRDialog && selectedQR && !loading) {
+      const qrCodeData = selectedQR as any; // Cast to access gate properties
+      if (!qrCodeData.gateOutTime) {
+        // Needs OUT pass
+        if (!qrCodeData.qrCode || !qrCodeData.qrCode.startsWith('OUT:')) {
+          // Add a small delay to avoid state updates during render
+          timeoutId = setTimeout(() => {
+            handleGenerateGatePass('OUT');
+          }, 500);
+        }
+      } else if (!qrCodeData.gateInTime) {
+        // Needs IN pass, check 5 min delay
+        const now = new Date();
+        const gateOutTime = new Date(qrCodeData.gateOutTime);
+        const diffMs = now.getTime() - gateOutTime.getTime();
+        const minutesPassed = diffMs / (1000 * 60);
+
+        if (minutesPassed >= 5 && (!qrCodeData.qrCode || !qrCodeData.qrCode.startsWith('IN:'))) {
+          timeoutId = setTimeout(() => {
+            handleGenerateGatePass('IN');
+          }, 500);
+        }
+      }
+    }
+
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showQRDialog, selectedQR, loading]);
 
   const loadData = async () => {
     setLoading(true);
@@ -572,8 +640,8 @@ export default function OTAndPermissionsPage() {
     if (permissionFormData.employeeNumber && permissionFormData.date) {
       try {
         const attendanceRes = await api.getAttendanceDetail(permissionFormData.employeeNumber, permissionFormData.date);
-        if (!attendanceRes.success || !attendanceRes.data || !attendanceRes.data.inTime) {
-          const errorMsg = 'No attendance record found or employee has no in-time for this date. Permission cannot be created without attendance.';
+        if (!attendanceRes.success || !attendanceRes.data) {
+          const errorMsg = 'No attendance record found for this date. Permission cannot be created without attendance.';
           setPermissionValidationError(errorMsg);
           showToast(errorMsg, 'error');
           return;
@@ -1141,7 +1209,7 @@ export default function OTAndPermissionsPage() {
                                 Evidence
                               </button>
                             )}
-                            {perm.status === 'approved' && perm.qrCode && (
+                            {['approved', 'checked_out', 'checked_in'].includes(perm.status) && perm.qrCode && (
                               <button
                                 onClick={() => {
                                   setSelectedQR(perm);
@@ -1755,9 +1823,9 @@ export default function OTAndPermissionsPage() {
           <Portal>
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
               <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowQRDialog(false)} />
-              <div className="relative z-50 w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">Permission QR Code</h2>
+              <div className="relative z-50 w-full max-w-2xl rounded-[2.5rem] overflow-hidden bg-white dark:bg-slate-900 border border-white/20 shadow-2xl animate-in zoom-in-95 duration-300 flex flex-col">
+                <div className="absolute right-4 top-4 z-10">
+                  {/* Custom Header in dynamic UI, just the close button used from original */}
                   <button
                     onClick={() => {
                       setShowQRDialog(false);
@@ -1771,41 +1839,171 @@ export default function OTAndPermissionsPage() {
                   </button>
                 </div>
 
-                <div className="space-y-4 text-center">
-                  {selectedQR.qrCode ? (
-                    <>
-                      <div className="mx-auto flex h-64 w-64 items-center justify-center rounded-lg border-2 border-slate-300 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                        <QRCodeSVG
-                          value={selectedQR.outpassUrl || (typeof window !== 'undefined' ? `${window.location.origin}/outpass/${selectedQR.qrCode}` : `/outpass/${selectedQR.qrCode}`)}
-                          size={240}
-                          level="H"
-                          includeMargin={true}
-                        />
-                      </div>
-                      <div className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
-                        <p className="font-medium text-slate-900 dark:text-white">Employee: {selectedQR.employeeId?.employee_name || selectedQR.employeeNumber}</p>
-                        <p>Date: {formatDate(selectedQR.date)}</p>
-                        <p>Time: {formatTime(selectedQR.permissionStartTime)} - {formatTime(selectedQR.permissionEndTime)}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-500">QR Code: {selectedQR.qrCode}</p>
-                      </div>
-                      <div className="pt-2">
-                        <a
-                          href={selectedQR.outpassUrl || `/outpass/${selectedQR.qrCode}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 transition-colors"
-                        >
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                          </svg>
-                          View Outpass
-                        </a>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-sm text-slate-500 dark:text-slate-400">Loading QR Code...</div>
-                  )}
+                <div className="flex flex-col items-center p-6 sm:p-8 text-center bg-gradient-to-b from-blue-500/5 to-transparent border-b border-slate-100 dark:border-slate-800">
+                  <div className="w-16 h-16 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-4">
+                    <QrCode className="w-8 h-8 text-blue-500" />
+                  </div>
+                  <h2 className="text-xl font-black text-slate-900 dark:text-white uppercase tracking-tight">Gate Pass</h2>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mt-1">Permission Active</p>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2">
+                  {/* Left Column: Employee Info and Timeline */}
+                  <div className="p-6 sm:p-8 border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800 flex flex-col space-y-8">
+                    {/* Employee Info */}
+                    <div className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 text-left">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Employee Info</p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white line-clamp-1">{selectedQR.employeeId?.employee_name || selectedQR.employeeNumber}</p>
+                      <p className="text-[10px] font-bold text-slate-500 mt-2">{formatDate(selectedQR.date)}</p>
+                    </div>
+
+                    {/* Timeline */}
+                    <div className="relative border-l-2 border-slate-200 dark:border-slate-700 ml-2 space-y-8 pb-4">
+                      {/* Gate Out Step */}
+                      <div className="relative pl-6">
+                        <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-4 border-white dark:border-slate-900 ${(selectedQR as any).gateOutTime ? 'bg-emerald-500' : 'bg-orange-500'}`} />
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-widest">
+                            Gate Out
+                          </h3>
+                          {/* Status Badge */}
+                          {(selectedQR as any).gateOutTime ? (
+                            <span className="px-2 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center gap-1">
+                              <Check className="w-3 h-3" /> Verified {formatTime((selectedQR as any).gateOutTime)}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-[10px] font-black uppercase tracking-widest rounded-lg">
+                              Pending
+                            </span>
+                          )}
+                        </div>
+
+                        {!(selectedQR as any).gateOutTime && (
+                          <div className="mt-4 p-4 rounded-2xl bg-white border border-slate-100 dark:border-slate-800 dark:bg-slate-900 shadow-sm flex flex-col items-center gap-4">
+                            {(selectedQR as any).gateOutSecret || (selectedQR.qrCode && selectedQR.qrCode.startsWith('OUT:')) ? (
+                              <>
+                                <div className="relative p-2 rounded-xl bg-white border-4 border-orange-500/20 shadow-xl shadow-orange-500/5">
+                                  <QRCodeSVG value={(selectedQR as any).gateOutSecret || selectedQR.qrCode} size={160} level="H" includeMargin={true} />
+                                </div>
+                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                                  <Scan className="w-3 h-3 text-orange-500" /> Scan to Exit
+                                </div>
+                              </>
+                            ) : (
+                              <div className="h-32 flex items-center text-xs text-slate-400 font-bold uppercase tracking-widest">Generating QR...</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Gate In Step */}
+                      <div className="relative pl-6">
+                        <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-4 border-white dark:border-slate-900 ${(selectedQR as any).gateInTime ? 'bg-emerald-500' : (!(selectedQR as any).gateOutTime ? 'bg-slate-300 dark:bg-slate-700' : 'bg-blue-500')}`} />
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-widest">
+                            Gate In
+                          </h3>
+                          {/* Status Badge */}
+                          {(selectedQR as any).gateInTime ? (
+                            <span className="px-2 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center gap-1">
+                              <Check className="w-3 h-3" /> Verified {formatTime((selectedQR as any).gateInTime)}
+                            </span>
+                          ) : (!(selectedQR as any).gateOutTime ? (
+                            <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-widest rounded-lg">
+                              Awaiting Exit
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-lg">
+                              Pending
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* Content for Gate In */}
+                        {(selectedQR as any).gateOutTime && !(selectedQR as any).gateInTime && (
+                          <div className="mt-4 p-4 rounded-2xl bg-white border border-slate-100 dark:border-slate-800 dark:bg-slate-900 shadow-sm flex flex-col items-center gap-4">
+                            {(() => {
+                              const diff = (new Date().getTime() - new Date((selectedQR as any).gateOutTime).getTime()) / 60000;
+                              if (diff < 5) {
+                                return (
+                                  <div className="w-full text-center space-y-2 py-4">
+                                    <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                      <div className="h-full bg-blue-500 animate-[shimmer_2s_infinite]" style={{ width: `${(diff / 5) * 100}%` }} />
+                                    </div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Entry QR unlocks in {Math.ceil(5 - diff)}m</p>
+                                  </div>
+                                );
+                              }
+
+                              if ((selectedQR as any).gateInSecret || (selectedQR.qrCode && selectedQR.qrCode.startsWith('IN:'))) {
+                                return (
+                                  <>
+                                    <div className="relative p-2 rounded-xl bg-white border-4 border-emerald-500/20 shadow-xl shadow-emerald-500/5">
+                                      <QRCodeSVG value={(selectedQR as any).gateInSecret || selectedQR.qrCode} size={160} level="H" includeMargin={true} />
+                                    </div>
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                                      <Scan className="w-3 h-3 text-emerald-500" /> Scan to Enter
+                                    </div>
+                                  </>
+                                );
+                              }
+
+                              return (
+                                <div className="h-32 flex items-center text-xs text-slate-400 font-bold uppercase tracking-widest">Generating QR...</div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Summary */}
+                  <div className="p-6 sm:p-8 flex flex-col justify-center bg-slate-50/50 dark:bg-slate-900/50 relative">
+                    {/* Trip Completed Global Message */}
+                    {(selectedQR as any).gateOutTime && (selectedQR as any).gateInTime ? (
+                      <div className="w-full p-6 rounded-3xl bg-emerald-500/5 border border-emerald-500/10 text-center animate-in zoom-in-95 duration-500">
+                        <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                          <Check className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight">Trip Completed</h3>
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1 mb-4">Both passes verified</p>
+
+                        <div className="grid grid-cols-2 gap-2 border-t border-emerald-500/10 pt-4 mt-2">
+                          <div className="flex flex-col items-center border-r border-emerald-500/10">
+                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 mb-1">Requested</span>
+                            <span className="text-sm font-black text-slate-900 dark:text-white">{selectedQR.permissionHours || (selectedQR as any).otHours} hrs</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 mb-1">Spent Time</span>
+                            {(() => {
+                              const diffMs = new Date((selectedQR as any).gateInTime).getTime() - new Date((selectedQR as any).gateOutTime).getTime();
+                              const diffMins = Math.floor(diffMs / 60000);
+                              const hours = Math.floor(diffMins / 60);
+                              const mins = diffMins % 60;
+                              return (
+                                <span className={`text-sm font-black ${hours > (selectedQR.permissionHours || (selectedQR as any).otHours || 0) ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                  {hours > 0 ? `${hours}h ` : ''}{mins}m
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
+                        <Scan className="w-32 h-32" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => { setShowQRDialog(false); setSelectedQR(null); }}
+                  className="w-full h-16 border-t border-slate-100 dark:border-slate-800 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all font-bold"
+                >
+                  Close Pass
+                </button>
               </div>
             </div>
           </Portal>
