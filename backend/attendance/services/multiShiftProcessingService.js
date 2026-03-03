@@ -402,6 +402,9 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                                 const shiftEnd = timeStringToDate(split.assignedShift.endTime, formatDate(sIn), isOvernightSeg);
                                 const lateInMs = sIn < shiftStart ? 0 : (sIn.getTime() - shiftStart.getTime());
                                 const earlyOutMs = (sOut && sOut < shiftEnd) ? (shiftEnd.getTime() - sOut.getTime()) : 0;
+                                // Half-day loss is the penalty; do not also count early-out (avoid double penalty)
+                                const segEarlyOutMs = segStatus === 'HALF_DAY' ? 0 : earlyOutMs;
+                                const segEarlyOutMinutes = segStatus === 'HALF_DAY' ? 0 : Math.round(earlyOutMs / 60000);
 
                                 const pSplitShift = {
                                     shiftNumber: shiftCounter,
@@ -423,8 +426,8 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                                     expectedHours: expectedH,
                                     isLateIn: lateInMs > 0,
                                     lateInMinutes: Math.round(lateInMs / 60000),
-                                    isEarlyOut: earlyOutMs > 0,
-                                    earlyOutMinutes: Math.round(earlyOutMs / 60000),
+                                    isEarlyOut: segEarlyOutMs > 0,
+                                    earlyOutMinutes: segEarlyOutMinutes,
                                     payableShift: segPayable,
                                 };
                                 processedShifts.push(pSplitShift);
@@ -619,6 +622,9 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                 } else if (statusDuration >= (expectedDuration * 0.40)) {
                     pShift.status = 'HALF_DAY';
                     pShift.payableShift = basePayable * 0.5;
+                    // Half-day loss is the penalty; do not also count early-out in aggregates (avoid double penalty)
+                    pShift.earlyOutMinutes = null;
+                    pShift.isEarlyOut = false;
                 } else {
                     pShift.status = 'ABSENT';
                     pShift.payableShift = 0;

@@ -7,10 +7,121 @@
 const AttendanceDaily = require('../model/AttendanceDaily');
 const Employee = require('../../employees/model/Employee');
 const OD = require('../../leaves/model/OD');
-const { detectAndAssignShift } = require('../../shifts/services/shiftDetectionService');
+const { detectAndAssignShift, getShiftsForEmployee } = require('../../shifts/services/shiftDetectionService');
 const { extractISTComponents, createISTDate } = require('../../shared/utils/dateUtils');
 
 const formatDate = (date) => extractISTComponents(date).dateStr;
+
+/** IST date string for the day after the given YYYY-MM-DD */
+function nextDateStr(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00+05:30');
+  d.setDate(d.getDate() + 1);
+  return extractISTComponents(d).dateStr;
+}
+
+/**
+ * Time string (HH:mm) to minutes from midnight.
+ */
+function timeToMinutes(timeStr) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/**
+ * When strict IN/OUT is disabled: use assigned shift timings to decide which punch is IN and which is OUT.
+ * All punches (including type null / thumb-only) are considered. Each punch is classified by proximity to
+ * shift start (IN) or shift end (OUT). Overnight: shift end is next day, so next-day punch at shift end = OUT.
+ *
+ * Rule: First punch on today's date in the window [00:00, previous overnight shift end + 1 hour] is the
+ * OUT of that overnight — do not use it as today's IN. So we only accept today's IN after shift end + 1 hour.
+ * (Real-time logs: OUT comes at shift end; next shift IN comes at least after that.)
+ */
+async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processingMode) {
+  if (!allPunches || allPunches.length === 0) return null;
+  const shiftOptions = { rosterStrictWhenPresent: processingMode?.rosterStrictWhenPresent === true };
+  const { shifts } = await getShiftsForEmployee(employeeNumber, date, shiftOptions);
+  if (!shifts || shifts.length === 0) return null;
+
+  const shift = shifts[0];
+  const startTime = shift.startTime;
+  const endTime = shift.endTime;
+  if (!startTime || !endTime) return null;
+
+  const startMins = timeToMinutes(startTime);
+  const endMins = timeToMinutes(endTime);
+  const isOvernight = endMins <= startMins || (startMins >= 20 * 60 && endMins < 12 * 60);
+
+  const shiftStartDate = createISTDate(date, startTime);
+  const shiftEndDate = isOvernight
+    ? createISTDate(nextDateStr(date), endTime)
+    : createISTDate(date, endTime);
+
+  const nextDay = nextDateStr(date);
+  const punchesInWindow = allPunches.filter(p => {
+    const { dateStr } = extractISTComponents(new Date(p.timestamp));
+    return dateStr === date || (isOvernight && dateStr === nextDay);
+  });
+  if (punchesInWindow.length === 0) return null;
+
+  // Previous day's overnight OUT lands on today in [00:00, endTime+1hr]. Reserve that first punch so we don't use it as today's IN.
+  const prevDate = (() => { const d = new Date(date + 'T12:00:00+05:30'); d.setDate(d.getDate() - 1); return extractISTComponents(d).dateStr; })();
+  const { shifts: prevShifts } = await getShiftsForEmployee(employeeNumber, prevDate, shiftOptions);
+  let reservedOvernightOutPunch = null;
+  if (prevShifts && prevShifts.length > 0) {
+    for (const s of prevShifts) {
+      const pe = (s.endTime || '').split(':').map(Number);
+      const pendMins = (pe[0] || 0) * 60 + (pe[1] || 0);
+      const ps = (s.startTime || '').split(':').map(Number);
+      const pstartMins = (ps[0] || 0) * 60 + (ps[1] || 0);
+      const prevIsOvernight = pendMins <= pstartMins || (pstartMins >= 20 * 60 && pendMins < 12 * 60);
+      if (!prevIsOvernight) continue;
+      const windowEndMins = pendMins + 60;
+      const windowEndHour = Math.floor(windowEndMins / 60) % 24;
+      const windowEndMin = windowEndMins % 60;
+      const windowEndTimeStr = `${String(windowEndHour).padStart(2, '0')}:${String(windowEndMin).padStart(2, '0')}`;
+      const windowEndToday = createISTDate(date, windowEndTimeStr);
+      const punchesOnDateOnly = punchesInWindow.filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === date);
+      punchesOnDateOnly.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      const firstInWindow = punchesOnDateOnly.find(p => new Date(p.timestamp) <= windowEndToday);
+      if (firstInWindow) {
+        reservedOvernightOutPunch = firstInWindow;
+        break;
+      }
+    }
+  }
+
+  const inCandidates = [];
+  const outCandidates = [];
+  const isReserved = (p) => {
+    if (!reservedOvernightOutPunch) return false;
+    if (p === reservedOvernightOutPunch) return true;
+    const a = p._id || p.id;
+    const b = reservedOvernightOutPunch._id || reservedOvernightOutPunch.id;
+    return a != null && b != null && String(a) === String(b);
+  };
+  for (const p of punchesInWindow) {
+    if (isReserved(p)) continue;
+    const t = new Date(p.timestamp).getTime();
+    const distStart = Math.abs(t - shiftStartDate.getTime());
+    const distEnd = Math.abs(t - shiftEndDate.getTime());
+    if (distStart <= distEnd) {
+      inCandidates.push(p);
+    } else {
+      outCandidates.push(p);
+    }
+  }
+
+  if (inCandidates.length === 0 || outCandidates.length === 0) return null;
+  inCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  outCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const inPunch = inCandidates[0];
+  const outPunch = outCandidates[outCandidates.length - 1];
+  const inTime = new Date(inPunch.timestamp);
+  const outTime = new Date(outPunch.timestamp);
+  if (outTime <= inTime) return null;
+  return { inPunch, outPunch, firstInTime: inTime, lastOutTime: outTime };
+}
 
 /**
  * Compute working duration for OT: clamp to shift window so early arrival does not inflate OT.
@@ -51,20 +162,69 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       return dateStr === date;
     });
 
-    const ins = targetDatePunches.filter(p => p.type === 'IN');
-    const outs = targetDatePunches.filter(p => p.type === 'OUT');
+    const isIN = (p) => p.type === 'IN' || p.punch_state === 0 || p.punch_state === '0';
+    const isOUT = (p) => p.type === 'OUT' || p.punch_state === 1 || p.punch_state === '1';
 
-    if (ins.length === 0 || outs.length === 0) {
-      // No valid pairing - create/update with empty or partial
-      const updateData = buildEmptyUpdate(employeeNumber, date);
-      const dailyRecord = await upsertDaily(employeeNumber, date, updateData);
-      return { success: true, dailyRecord, shiftsProcessed: 0, totalHours: 0, totalOT: 0 };
+    let firstInTime = null;
+    let lastOutTime = null;
+    let inPunchRecord = null;
+    let outPunchRecord = null;
+
+    const strict = processingMode.strictCheckInOutOnly !== false;
+
+    // When strict IN/OUT is disabled: use assigned shift timings to pick IN/OUT from all punches (including null/thumb).
+    // Respects overnight: OUT at shift end may be next day.
+    if (!strict) {
+      const pair = await getShiftAwareInOutPair(employeeNumber, date, allPunches, processingMode);
+      if (pair) {
+        firstInTime = pair.firstInTime;
+        lastOutTime = pair.lastOutTime;
+        inPunchRecord = pair.inPunch;
+        outPunchRecord = pair.outPunch;
+      }
     }
 
-    const firstInTime = new Date(ins[0].timestamp);
-    const lastOutTime = new Date(outs[outs.length - 1].timestamp);
+    // Fallback: typed IN/OUT (and punch_state), first IN and last OUT on date, then overnight next-day first OUT
+    if (!firstInTime || !lastOutTime) {
+      const ins = targetDatePunches.filter(isIN);
+      const outs = targetDatePunches.filter(isOUT);
+      firstInTime = ins.length ? new Date(ins[0].timestamp) : null;
+      lastOutTime = outs.length ? new Date(outs[outs.length - 1].timestamp) : null;
+      inPunchRecord = ins.length ? ins[0] : null;
+      outPunchRecord = outs.length ? outs[outs.length - 1] : null;
 
-    if (lastOutTime <= firstInTime) {
+      if (firstInTime && (!lastOutTime || lastOutTime <= firstInTime)) {
+        const nextDay = nextDateStr(date);
+        const nextDayPunches = allPunches.filter(p => {
+          const { dateStr } = extractISTComponents(new Date(p.timestamp));
+          return dateStr === nextDay;
+        });
+        const nextDayOuts = nextDayPunches.filter(isOUT);
+        if (nextDayOuts.length) {
+          const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
+          if (nextDayFirstOut > firstInTime) {
+            lastOutTime = nextDayFirstOut;
+            outPunchRecord = nextDayOuts[0];
+          }
+        }
+      }
+    }
+
+    // Only IN, no OUT yet → PARTIAL
+    if (firstInTime && !lastOutTime) {
+      const inPunch = inPunchRecord || targetDatePunches.filter(isIN)[0];
+      if (!inPunch) {
+        const updateData = buildEmptyUpdate(employeeNumber, date);
+        const dailyRecord = await upsertDaily(employeeNumber, date, updateData);
+        return { success: true, dailyRecord, shiftsProcessed: 0, totalHours: 0, totalOT: 0 };
+      }
+      const partialRecord = await buildAndUpsertPartialSingleShift(
+        employeeNumber, date, inPunch, generalConfig, processingMode
+      );
+      return { success: true, dailyRecord: partialRecord, shiftsProcessed: 1, totalHours: 0, totalOT: 0 };
+    }
+
+    if (!firstInTime || !lastOutTime || lastOutTime <= firstInTime) {
       const updateData = buildEmptyUpdate(employeeNumber, date);
       const dailyRecord = await upsertDaily(employeeNumber, date, updateData);
       return { success: true, dailyRecord, shiftsProcessed: 0, totalHours: 0, totalOT: 0 };
@@ -105,8 +265,8 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       extraHours,
       otHours: 0, // Only set when OT is approved via Convert to OT flow
       status: 'incomplete',
-      inPunchId: ins[0]._id || ins[0].id,
-      outPunchId: outs[outs.length - 1]._id || outs[outs.length - 1].id,
+      inPunchId: (inPunchRecord && (inPunchRecord._id || inPunchRecord.id)) || null,
+      outPunchId: (outPunchRecord && (outPunchRecord._id || outPunchRecord.id)) || null,
     };
 
     if (shiftAssignment?.success) {
@@ -172,6 +332,67 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
     console.error('[SingleShift] Error:', error);
     return { success: false, error: error.message };
   }
+}
+
+/**
+ * Build and upsert a PARTIAL daily record when we have only IN (no OUT yet).
+ * Realtime: IN comes first; OUT comes after shift ends. So we persist PARTIAL so UI shows "checked in".
+ */
+async function buildAndUpsertPartialSingleShift(employeeNumber, date, inPunch, generalConfig, processingMode) {
+  const firstInTime = new Date(inPunch.timestamp);
+  const configWithMode = { ...generalConfig, processingMode };
+  const shiftAssignment = await detectAndAssignShift(
+    employeeNumber,
+    date,
+    firstInTime,
+    null, // no OUT yet
+    configWithMode
+  );
+
+  const pShift = {
+    shiftNumber: 1,
+    inTime: firstInTime,
+    outTime: null,
+    duration: 0,
+    punchHours: 0,
+    workingHours: 0,
+    odHours: 0,
+    extraHours: 0,
+    otHours: 0,
+    status: 'incomplete',
+    payableShift: 0,
+    inPunchId: inPunch._id || inPunch.id,
+    outPunchId: null,
+  };
+
+  if (shiftAssignment?.success) {
+    pShift.shiftId = shiftAssignment.assignedShift;
+    pShift.shiftName = shiftAssignment.shiftName;
+    pShift.shiftStartTime = shiftAssignment.shiftStartTime;
+    pShift.shiftEndTime = shiftAssignment.shiftEndTime;
+    pShift.lateInMinutes = shiftAssignment.lateInMinutes;
+    pShift.earlyOutMinutes = null;
+    pShift.isLateIn = shiftAssignment.isLateIn;
+    pShift.isEarlyOut = false;
+    pShift.expectedHours = shiftAssignment.expectedHours ?? 8;
+  }
+
+  const updateData = {
+    shifts: [pShift],
+    totalShifts: 1,
+    totalWorkingHours: 0,
+    totalOTHours: 0,
+    extraHours: 0,
+    payableShifts: 0,
+    status: 'PARTIAL',
+    lastSyncedAt: new Date(),
+    totalLateInMinutes: pShift.lateInMinutes || 0,
+    totalEarlyOutMinutes: 0,
+    totalExpectedHours: pShift.expectedHours || 8,
+    otHours: 0,
+  };
+
+  return upsertDaily(employeeNumber, date, updateData);
 }
 
 function buildEmptyUpdate(employeeNumber, date) {

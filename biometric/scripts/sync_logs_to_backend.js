@@ -43,7 +43,7 @@ const AttendanceLog =
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb+srv://teampydah:TeamPydah@teampydah.y4zj6wh.mongodb.net/biometric_logs';
+    const mongoURI =  'mongodb+srv://teampydah:TeamPydah@teampydah.y4zj6wh.mongodb.net/biometric_logs';
 
     console.log('\n🚀 Starting Biometric Log Resync...\n');
     console.log('🔌 Connecting to MongoDB...');
@@ -52,7 +52,7 @@ async function main() {
 
     // ── STEP 2: Resend logs to backend (Filtered by date) ────────────────────
     // Jan 20 00:00 — till date (today end of day)
-    const START_DATE = new Date('2026-01-20T00:00:00.000Z');
+    const START_DATE = new Date('2026-01-10T00:00:00.000Z');
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 

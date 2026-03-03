@@ -103,7 +103,8 @@ class DateCycleService {
                 cycleEndDate.setDate(lastDayOfCurrentMonth);
             }
             
-            cycleMonth = targetDate.getMonth(); // Previous month number
+            // Cycle started in prevMonth — use 1-based month (1-12) for that month
+            cycleMonth = prevMonth.getMonth() + 1;
             cycleYear = prevMonth.getFullYear();
         }
 
