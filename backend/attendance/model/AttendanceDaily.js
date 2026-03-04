@@ -567,6 +567,7 @@ attendanceDailySchema.post('save', function () {
 
   setImmediate(async () => {
     try {
+      console.log('[OD-FLOW] AttendanceDaily post-save: triggering recalculateOnAttendanceUpdate', { employeeNumber, date });
       const { recalculateOnAttendanceUpdate } = require('../services/summaryCalculationService');
       const { detectExtraHours } = require('../services/extraHoursService');
 

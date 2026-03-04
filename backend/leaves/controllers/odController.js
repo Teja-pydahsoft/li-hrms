@@ -981,37 +981,79 @@ exports.updateOD = async (req, res) => {
 
     await od.save();
 
-    // NEW: If OD is hour-based and approved, update AttendanceDaily (same date format as approval flow)
-    if (od.status === 'approved' && od.odType_extended === 'hours' && od.durationHours) {
+    // When OD is approved (e.g. Super Admin set status via updateOD), update AttendanceDaily for each day in range and recalc monthly summary
+    if (od.status === 'approved') {
       try {
+        console.log('[OD-FLOW] updateOD: OD is approved', { odId: od._id?.toString(), emp_no: od.emp_no, odType_extended: od.odType_extended });
         const AttendanceDaily = require('../../attendance/model/AttendanceDaily');
         const formatDate = (date) => {
           const d = new Date(date);
           return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         };
-
-        const attendanceDate = formatDate(od.fromDate);
-        const attendance = await AttendanceDaily.findOne({
-          employeeNumber: String(od.emp_no || '').toUpperCase(),
-          date: attendanceDate,
-        });
-
-        if (attendance) {
-          attendance.odHours = od.durationHours || 0;
-          attendance.odDetails = {
-            odStartTime: od.odStartTime,
-            odEndTime: od.odEndTime,
-            durationHours: od.durationHours,
-            odType: od.odType_extended,
-            odId: od._id,
-            approvedAt: od.approvedAt || new Date(),
-            approvedBy: od.approvedBy || req.user._id,
-          };
-          await attendance.save(); // post-save hook recalculates totalWorkingHours, status, payableShifts
-          console.log(`✅ OD hours updated in AttendanceDaily for ${od.emp_no} on ${attendanceDate}`);
+        const dateFrom = formatDate(od.fromDate);
+        const dateTo = formatDate(od.toDate);
+        const empNoUpper = (od.emp_no != null ? String(od.emp_no).trim() : '').toUpperCase();
+        if (empNoUpper) {
+          const datesToUpdate = [];
+          let d = new Date(dateFrom + 'T12:00:00');
+          const end = new Date(dateTo + 'T12:00:00');
+          while (d <= end) {
+            datesToUpdate.push(formatDate(d));
+            d.setDate(d.getDate() + 1);
+          }
+          const empNoVariants = [...new Set([empNoUpper, String(od.emp_no)].filter(Boolean))];
+          // Only touch AttendanceDaily for hour-based OD. Half-day / full-day contribute only at monthly summary.
+          for (const attendanceDate of datesToUpdate) {
+            if (od.odType_extended === 'hours' && od.durationHours) {
+              const attendance = await AttendanceDaily.findOne({
+                date: attendanceDate,
+                employeeNumber: empNoVariants.length ? { $in: empNoVariants } : empNoUpper,
+              });
+              if (attendance) {
+                attendance.odHours = od.durationHours || 0;
+                attendance.odDetails = {
+                  odStartTime: od.odStartTime,
+                  odEndTime: od.odEndTime,
+                  durationHours: od.durationHours,
+                  odType: od.odType_extended,
+                  odId: od._id,
+                  approvedAt: od.approvedAt || new Date(),
+                  approvedBy: od.approvedBy || req.user._id,
+                };
+                await attendance.save();
+                console.log(`✅ [updateOD] AttendanceDaily updated (hour-based OD) for ${od.emp_no} on ${attendanceDate}`);
+              } else {
+                const newDaily = new AttendanceDaily({
+                  employeeNumber: empNoUpper,
+                  date: attendanceDate,
+                  shifts: [],
+                  odHours: od.durationHours || 0,
+                  odDetails: {
+                    odStartTime: od.odStartTime,
+                    odEndTime: od.odEndTime,
+                    durationHours: od.durationHours,
+                    odType: od.odType_extended,
+                    odId: od._id,
+                    approvedAt: od.approvedAt || new Date(),
+                    approvedBy: od.approvedBy || req.user._id,
+                  },
+                });
+                await newDaily.save();
+                console.log(`✅ [updateOD] AttendanceDaily created (hour-based OD) for ${od.emp_no} on ${attendanceDate}`);
+              }
+            }
+            // Half-day / full-day: no daily create/update; recalc below adds 0.5/1 to monthly summary for OD-only days
+          }
+          // Explicit recalc so monthly summary reflects OD immediately (same as processODAction)
+          console.log('[OD-FLOW] updateOD: calling recalculateOnAttendanceUpdate for', datesToUpdate.length, 'dates', datesToUpdate);
+          const { recalculateOnAttendanceUpdate } = require('../../attendance/services/summaryCalculationService');
+          for (const attendanceDate of datesToUpdate) {
+            await recalculateOnAttendanceUpdate(empNoUpper, attendanceDate);
+          }
+          console.log('[OD-FLOW] updateOD: recalc done');
         }
       } catch (error) {
-        console.error('Error updating OD hours in AttendanceDaily:', error);
+        console.error('Error updating AttendanceDaily / recalc on OD approval (updateOD):', error);
       }
     }
 
@@ -1472,6 +1514,7 @@ exports.processODAction = async (req, res) => {
     // When OD is fully approved, update or create AttendanceDaily for each day in OD range so totalWorkingHours/status/payableShifts reflect OD
     if (action === 'approve' && od.status === 'approved') {
       try {
+        console.log('[OD-FLOW] processODAction: OD fully approved', { odId: od._id?.toString(), emp_no: od.emp_no, odType_extended: od.odType_extended, fromDate: od.fromDate, toDate: od.toDate });
         const AttendanceDaily = require('../../attendance/model/AttendanceDaily');
         const formatDate = (date) => {
           const d = new Date(date);
@@ -1481,7 +1524,10 @@ exports.processODAction = async (req, res) => {
         const dateTo = formatDate(od.toDate);
         const empNoRaw = od.emp_no != null ? String(od.emp_no).trim() : '';
         const empNoUpper = empNoRaw.toUpperCase();
-        if (!empNoUpper) return;
+        if (!empNoUpper) {
+          console.log('[OD-FLOW] processODAction: skip (no emp_no)');
+          return;
+        }
 
         const datesToUpdate = [];
         let d = new Date(dateFrom + 'T12:00:00');
@@ -1490,17 +1536,18 @@ exports.processODAction = async (req, res) => {
           datesToUpdate.push(formatDate(d));
           d.setDate(d.getDate() + 1);
         }
+        console.log('[OD-FLOW] processODAction: datesToUpdate', datesToUpdate, 'hourBased=', od.odType_extended === 'hours');
 
+        // Only touch AttendanceDaily for hour-based OD. Half-day and full-day OD contribute only at monthly summary (no daily create/update).
         for (const attendanceDate of datesToUpdate) {
-          // Find AttendanceDaily (match common employeeNumber formats: "2067", 2067, etc.)
           const empNoVariants = [...new Set([empNoUpper, empNoRaw, String(od.emp_no)].filter(Boolean))];
           const attendance = await AttendanceDaily.findOne({
             date: attendanceDate,
             employeeNumber: empNoVariants.length ? { $in: empNoVariants } : empNoUpper,
           });
 
-          if (attendance) {
-            if (od.odType_extended === 'hours') {
+          if (od.odType_extended === 'hours') {
+            if (attendance) {
               attendance.odHours = od.durationHours || 0;
               attendance.odDetails = {
                 odStartTime: od.odStartTime,
@@ -1511,14 +1558,10 @@ exports.processODAction = async (req, res) => {
                 approvedAt: new Date(),
                 approvedBy: req.user._id,
               };
-            }
-            await attendance.save(); // post-save hook recalculates monthly summary from all approved ODs
-            console.log(`✅ AttendanceDaily updated for OD approval: ${od.emp_no} on ${attendanceDate}`);
-          } else {
-            const isFullDayOD = od.odType_extended === 'full_day' || (!od.odType_extended && !od.isHalfDay);
-            const isHourBased = od.odType_extended === 'hours';
-            if (isHourBased) {
-              attendance = new AttendanceDaily({
+              await attendance.save();
+              console.log(`✅ AttendanceDaily updated (hour-based OD) for ${od.emp_no} on ${attendanceDate}`);
+            } else {
+              const newDaily = new AttendanceDaily({
                 employeeNumber: empNoUpper,
                 date: attendanceDate,
                 shifts: [],
@@ -1533,31 +1576,22 @@ exports.processODAction = async (req, res) => {
                   approvedBy: req.user._id,
                 },
               });
-              await attendance.save();
-              console.log(`✅ AttendanceDaily created with hour-based OD for ${od.emp_no} on ${attendanceDate}`);
-            } else if (isFullDayOD) {
-              attendance = new AttendanceDaily({
-                employeeNumber: empNoUpper,
-                date: attendanceDate,
-                shifts: [],
-                status: 'PRESENT',
-                payableShifts: 1,
-                totalWorkingHours: 0,
-              });
-              await attendance.save(); // post-save triggers monthly summary recalc
-              console.log(`✅ AttendanceDaily created for full-day OD: ${od.emp_no} on ${attendanceDate}`);
+              await newDaily.save();
+              console.log(`✅ AttendanceDaily created (hour-based OD) for ${od.emp_no} on ${attendanceDate}`);
             }
-            // Half-day OD with no record: do not create daily; monthly summary adds 0.5 in recalc
           }
+          // Half-day / full-day: do not create or update daily; recalc below will add 0.5/1 to monthly summary for OD-only days
         }
 
         // Explicitly recalc monthly summary so it reflects hour-based OD (shift/day -> PRESENT)
         // Post-save on each daily runs async (setImmediate); this ensures summary is updated in this request
         try {
+          console.log('[OD-FLOW] processODAction: calling recalculateOnAttendanceUpdate for', datesToUpdate.length, 'dates');
           const { recalculateOnAttendanceUpdate } = require('../../attendance/services/summaryCalculationService');
           for (const attendanceDate of datesToUpdate) {
             await recalculateOnAttendanceUpdate(empNoUpper, attendanceDate);
           }
+          console.log('[OD-FLOW] processODAction: recalc done for all dates');
         } catch (recalcErr) {
           console.error('Error recalculating monthly summary after OD approval:', recalcErr);
         }

@@ -503,6 +503,7 @@ ODSchema.post('save', async function () {
   try {
     // Only update if status is 'approved' and this is a new approval
     if (this.status === 'approved' && this.isModified('status')) {
+      console.log('[OD-FLOW] OD post-save: status=approved and modified, calling recalculateOnODApproval', { odId: this._id?.toString() });
       const { recalculateOnODApproval } = require('../../attendance/services/summaryCalculationService');
       await recalculateOnODApproval(this);
     }

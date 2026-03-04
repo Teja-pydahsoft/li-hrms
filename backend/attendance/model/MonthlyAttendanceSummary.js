@@ -66,6 +66,19 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       min: 0,
     },
 
+    // Total week-off days in the period (from roster / AttendanceDaily status WEEK_OFF)
+    totalWeeklyOffs: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Total holiday days in the period (from roster / AttendanceDaily status HOLIDAY)
+    totalHolidays: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     // Total present days in this month
     totalPresentDays: {
       type: Number,
