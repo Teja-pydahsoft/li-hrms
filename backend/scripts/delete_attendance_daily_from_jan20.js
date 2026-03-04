@@ -17,7 +17,7 @@ const mongoose = require('mongoose');
 const AttendanceDaily = require('../attendance/model/AttendanceDaily');
 
 // Date range: Jan 20, 2026 — today (YYYY-MM-DD)
-const START_DATE = '2026-01-20';
+const START_DATE = '2026-01-10';
 function getTodayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
