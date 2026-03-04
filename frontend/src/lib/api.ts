@@ -3082,22 +3082,23 @@ export const api = {
   },
 
   // Payroll
-  calculatePayroll: async (employeeId: string, month: string, query: string = '', arrears?: Array<{ id: string, amount: number, employeeId?: string }>) => {
+  calculatePayroll: async (
+    employeeId: string,
+    month: string,
+    query: string = '',
+    arrears?: Array<{ id: string; amount: number; employeeId?: string }>,
+    deductions?: Array<{ id: string; amount: number; employeeId?: string }>
+  ) => {
     const path = `/payroll/calculate${query || ''}`;
-
-    // Format arrears to use arrearId instead of id
-    const formattedArrears = arrears?.map(arrear => ({
-      arrearId: arrear.id,
-      amount: arrear.amount,
-      employeeId: arrear.employeeId
-    })) || [];
-
+    const formattedArrears = arrears?.map((a) => ({ arrearId: a.id, amount: a.amount, employeeId: a.employeeId })) || [];
+    const formattedDeductions = deductions?.map((d) => ({ deductionId: d.id, amount: d.amount, employeeId: d.employeeId })) || [];
     return apiRequest<any>(path, {
       method: 'POST',
       body: JSON.stringify({
         employeeId,
         month,
-        arrears: formattedArrears
+        arrears: formattedArrears,
+        deductions: formattedDeductions,
       }),
     });
   },
@@ -3477,6 +3478,39 @@ export const api = {
       body: JSON.stringify({ nextStatus, ...data }),
     });
   },
+
+  // Manual Deductions APIs (same flow as arrears, but applied as deduction)
+  getDeductions: async (filters?: { status?: string; employee?: string; department?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.employee) params.append('employee', filters.employee);
+    if (filters?.department) params.append('department', filters.department);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return apiRequest<any>(`/manual-deductions${query}`, { method: 'GET' });
+  },
+  getDeductionById: async (id: string) => apiRequest<any>(`/manual-deductions/${id}`, { method: 'GET' }),
+  createDeduction: async (data: any) => apiRequest<any>('/manual-deductions', { method: 'POST', body: JSON.stringify(data) }),
+  updateDeduction: async (id: string, data: any) => apiRequest<any>(`/manual-deductions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getPendingDeductions: async (employeeId: string) => apiRequest<any>(`/manual-deductions/employee/${employeeId}/pending`, { method: 'GET' }),
+  getPendingDeductionApprovals: async () => apiRequest<any>('/manual-deductions/pending-approvals', { method: 'GET' }),
+  processDeductionAction: async (id: string, approved: boolean, comments?: string, modifiedAmount?: number) => apiRequest<any>(`/manual-deductions/${id}/action`, {
+    method: 'PUT',
+    body: JSON.stringify({ approved, comments, modifiedAmount }),
+  }),
+  revokeDeductionApproval: async (id: string, reason?: string) => apiRequest<any>(`/manual-deductions/${id}/revoke`, { method: 'PUT', body: JSON.stringify({ reason }) }),
+  getDeductionStats: async () => apiRequest<any>('/manual-deductions/stats/summary', { method: 'GET' }),
+  editDeduction: async (id: string, data: { startMonth?: string; endMonth?: string; monthlyAmount?: number; totalAmount?: number; reason?: string }) =>
+    apiRequest<any>(`/manual-deductions/${id}/edit`, { method: 'PUT', body: JSON.stringify(data) }),
+  transitionDeduction: async (id: string, nextStatus: string, data?: Record<string, unknown>) =>
+    apiRequest<any>(`/manual-deductions/${id}/transition`, { method: 'PUT', body: JSON.stringify({ nextStatus, ...data }) }),
+  getDeductionsForPayroll: async (params?: { employeeId?: string; month?: string; year?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.employeeId) q.append('employeeId', params.employeeId);
+    if (params?.month) q.append('month', params.month);
+    if (params?.year) q.append('year', params.year);
+    return apiRequest<any>(`/manual-deductions/for-payroll?${q.toString()}`, { method: 'GET' });
+  },
+
   // Workflows
   // (Workflow methods moved up to avoid duplicates)
   // Activity Feed

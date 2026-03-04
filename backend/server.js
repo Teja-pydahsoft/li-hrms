@@ -143,6 +143,10 @@ app.use('/api/pay-register', payRegisterRoutes);
 const arrearsRoutes = require('./arrears/index.js');
 app.use('/api/arrears', arrearsRoutes);
 
+// Manual Deductions routes
+const manualDeductionsRoutes = require('./manual-deductions/index.js');
+app.use('/api/manual-deductions', manualDeductionsRoutes);
+
 // PayrollBatch routes
 const payrollBatchRoutes = require('./payroll/routes/payrollBatchRoutes.js');
 app.use('/api/payroll-batch', payrollBatchRoutes);

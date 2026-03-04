@@ -12,6 +12,7 @@ const deductionService = require('./deductionService');
 const loanAdvanceService = require('./loanAdvanceService');
 const ArrearsIntegrationService = require('./arrearsIntegrationService');
 const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+const DeductionIntegrationService = require('./deductionIntegrationService');
 const PayrollBatchService = require('./payrollBatchService');
 const PayrollBatch = require('../model/PayrollBatch');
 const {
@@ -1446,6 +1447,22 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
       }
     }
 
+    // Process manual deductions (reduce net pay)
+    const deductionSettlements = options.deductionSettlements || [];
+    if (deductionSettlements.length > 0) {
+      try {
+        await DeductionIntegrationService.addDeductionsToPayroll(
+          payrollRecord,
+          deductionSettlements,
+          employeeId
+        );
+        const dedAmount = payrollRecord.manualDeductionsAmount || 0;
+        console.log(`\n--- Manual Deductions applied: ₹${dedAmount} ---`);
+      } catch (deductionError) {
+        console.error('Error processing manual deductions:', deductionError);
+      }
+    }
+
     // Final Net Salary Round-Off
     const exactNetValue = payrollRecord.get('netSalary') || 0;
     const roundedNetValue = Math.ceil(exactNetValue);
@@ -1555,6 +1572,10 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
         arrearsAmount: payrollRecord.arrearsAmount || 0,
         arrearsSettlements: payrollRecord.arrearsSettlements || [],
       },
+      manualDeductions: {
+        manualDeductionsAmount: payrollRecord.manualDeductionsAmount || 0,
+        deductionSettlements: payrollRecord.deductionSettlements || [],
+      },
       netSalary: finalNet,
       roundOff: finalRoundOff,
       status: payrollRecord.status,
@@ -1577,6 +1598,23 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
       } catch (settlementError) {
         console.error('Error processing arrears settlements:', settlementError);
         // Log but don't fail - payroll is already saved
+      }
+    }
+
+    // Process manual deduction settlements after payroll is saved
+    if (deductionSettlements && deductionSettlements.length > 0) {
+      try {
+        console.log('\n--- Processing Manual Deduction Settlement Records ---');
+        await DeductionIntegrationService.processDeductionSettlements(
+          employeeId,
+          month,
+          deductionSettlements,
+          userId,
+          payrollRecord._id.toString()
+        );
+        console.log('✓ Manual deduction settlements processed successfully');
+      } catch (settlementError) {
+        console.error('Error processing deduction settlements:', settlementError);
       }
     }
 

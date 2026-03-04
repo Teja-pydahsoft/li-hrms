@@ -694,6 +694,25 @@ exports.processCCLAction = async (req, res) => {
       canProcess = checkJurisdiction(fullUser, ccl);
     }
 
+    // 4. Setting: Allow higher authority to approve lower levels (same as Leave/OD)
+    if (!canProcess && ccl.workflow?.approvalChain?.length > 0) {
+      const workflowSettings = await getWorkflowSettings();
+      const allowHigher = workflowSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+      if (allowHigher) {
+        const chain = ccl.workflow.approvalChain.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        const roleOrder = chain.map(s => (s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+        const requiredIdx = roleOrder.indexOf(requiredRole.toLowerCase());
+        let userIdx = roleOrder.indexOf(userRole.toLowerCase());
+        if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+        if (requiredIdx >= 0 && userIdx >= 0 && userIdx >= requiredIdx) {
+          canProcess = true;
+          if (['manager', 'hr'].includes(userRole)) {
+            canProcess = checkJurisdiction(fullUser, ccl);
+          }
+        }
+      }
+    }
+
     if (!canProcess) {
       return res.status(403).json({ success: false, error: 'Not authorized to process this CCL' });
     }

@@ -93,6 +93,11 @@ const payrollRecordSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Manual deductions (approved deduction requests settled in this payroll)
+    manualDeductionsAmount: {
+      type: Number,
+      default: 0,
+    },
     // Pay for extra days specifically
     extraDaysPay: {
       type: Number,

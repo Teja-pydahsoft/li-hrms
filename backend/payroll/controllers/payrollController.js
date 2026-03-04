@@ -196,6 +196,10 @@ async function buildPayslipData(employeeId, month) {
       arrearsAmount: payrollRecord.arrearsAmount || 0,
       arrearsSettlements: payrollRecord.arrearsSettlements || [],
     },
+    manualDeductions: {
+      manualDeductionsAmount: payrollRecord.manualDeductionsAmount || 0,
+      deductionSettlements: payrollRecord.deductionSettlements || [],
+    },
     netSalary: payrollRecord.netSalary,
     totalPayableShifts: payrollRecord.totalPayableShifts,
     // Present days already include OD; do not add OD again in paid days.
@@ -451,17 +455,18 @@ exports.calculatePayroll = async (req, res) => {
           employeeId,
           month,
           req.user._id,
-          { source: 'payregister', arrearsSettlements: req.body.arrears || [] }
+          { source: 'payregister', arrearsSettlements: req.body.arrears || [], deductionSettlements: req.body.deductions || [] }
         );
         result = { payrollRecord: result.payrollRecord, batchId: result.batchId, payslip: result.payslip };
       } else {
-        const options = { source: 'payregister', arrearsSettlements: req.body.arrears || [] };
+        const options = { source: 'payregister', arrearsSettlements: req.body.arrears || [], deductionSettlements: req.body.deductions || [] };
         result = await payrollCalculationService.calculatePayrollNew(employeeId, month, req.user._id, options);
       }
     } else {
       const options = {
         source: useLegacy ? 'all' : 'payregister',
         arrearsSettlements: req.body.arrears || [],
+        deductionSettlements: req.body.deductions || [],
       };
       result = await payrollCalculationService.calculatePayrollNew(employeeId, month, req.user._id, options);
     }

@@ -54,6 +54,7 @@ const OUTPUT_FIELD_OPTIONS: { value: string; label: string }[] = [
   { value: 'loanAdvance.remainingBalance', label: 'Loans (remaining balance)' },
   { value: 'roundOff', label: 'Round off' },
   { value: 'arrears.arrearsAmount', label: 'Arrears' },
+  { value: 'manualDeductions.manualDeductionsAmount', label: 'Manual deductions' },
 ];
 
 export default function PayrollConfigPage() {
