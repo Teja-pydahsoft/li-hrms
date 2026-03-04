@@ -1676,7 +1676,7 @@ export default function LeavesPage() {
             {/* Pending Leaves */}
             <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-blue-700 dark:bg-blue-400/20 dark:text-blue-300 mb-3 border border-blue-200/60 dark:border-blue-500/30">
-                <CalendarIcon className="w-4 h-4" />
+                <CalendarIcon />
                 Pending Leaves ({pendingLeavesTotal})
               </h3>
 
@@ -1759,7 +1759,7 @@ export default function LeavesPage() {
             {/* Pending ODs */}
             <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-purple-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-purple-700 dark:bg-purple-400/20 dark:text-purple-300 mb-3 border border-purple-200/60 dark:border-purple-500/30">
-                <BriefcaseIcon className="w-4 h-4" />
+                <BriefcaseIcon />
                 Pending ODs ({pendingODsTotal})
               </h3>
 
