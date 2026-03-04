@@ -68,7 +68,8 @@ class DateCycleService {
         }
 
         // Custom cycle (e.g., 26th to 25th)
-        let cycleStartDate, cycleEndDate, cycleMonth, cycleYear;
+        // Month/year are taken from the period END so that 26 Jan–25 Feb → February (2), not January (1).
+        let cycleStartDate, cycleEndDate;
 
         if (targetDate.getDate() >= startDay) {
             // Date falls in current month's cycle
@@ -84,9 +85,6 @@ class DateCycleService {
             if (endDay > lastDayOfNextMonth) {
                 cycleEndDate.setDate(lastDayOfNextMonth);
             }
-            
-            cycleMonth = targetDate.getMonth() + 1;
-            cycleYear = targetDate.getFullYear();
         } else {
             // Date falls in previous month's cycle
             const prevMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
@@ -102,11 +100,11 @@ class DateCycleService {
             if (endDay > lastDayOfCurrentMonth) {
                 cycleEndDate.setDate(lastDayOfCurrentMonth);
             }
-            
-            // Cycle started in prevMonth — use 1-based month (1-12) for that month
-            cycleMonth = prevMonth.getMonth() + 1;
-            cycleYear = prevMonth.getFullYear();
         }
+
+        // Use period end date for month/year so 26 Jan–25 Feb → month 2 (February)
+        const cycleMonth = cycleEndDate.getMonth() + 1;
+        const cycleYear = cycleEndDate.getFullYear();
 
         return {
             startDate: cycleStartDate,

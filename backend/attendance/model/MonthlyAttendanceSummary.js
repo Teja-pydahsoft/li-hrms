@@ -86,12 +86,12 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       min: 0,
     },
 
-    // Total days in the month (28/29/30/31)
+    // Total days in the pay period (respects pay cycle: e.g. 28–31 for calendar month, or 33 for 25 Jan–26 Feb)
     totalDaysInMonth: {
       type: Number,
       required: [true, 'Total days in month is required'],
       min: 28,
-      max: 31,
+      max: 35,
     },
 
     // Total payable shifts in this month
@@ -249,6 +249,7 @@ monthlyAttendanceSummarySchema.statics.getOrCreate = async function (employeeId,
   let summary = await this.findOne({ employeeId, month: monthStr });
 
   if (!summary) {
+    // New summary: use calendar month days as initial value; calculateMonthlySummary overwrites with pay-period length
     summary = await this.create({
       employeeId,
       emp_no,
@@ -259,9 +260,8 @@ monthlyAttendanceSummarySchema.statics.getOrCreate = async function (employeeId,
       totalDaysInMonth,
     });
   } else {
-    // Update month name and total days in case month/year changed
+    // Update month name only; totalDaysInMonth is set from pay period in calculateMonthlySummary (respects pay cycle)
     summary.monthName = monthName;
-    summary.totalDaysInMonth = totalDaysInMonth;
     await summary.save();
   }
 

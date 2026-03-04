@@ -6,6 +6,15 @@ const Shift = require('../../shifts/model/Shift');
 const { createISTDate, extractISTComponents, getAllDatesInRange } = require('../../shared/utils/dateUtils');
 const dateCycleService = require('../../leaves/services/dateCycleService');
 
+/** Normalize to YYYY-MM-DD for reliable set membership (attendance date vs OD loop date) */
+function toNormalizedDateStr(val) {
+  if (!val) return '';
+  if (val instanceof Date) return extractISTComponents(val).dateStr;
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  return extractISTComponents(new Date(val)).dateStr;
+}
+
 /**
  * Monthly summary is recalculated in the background when:
  * - An AttendanceDaily doc is saved (post-save hook defers recalc via setImmediate)
@@ -58,9 +67,9 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     const startDate = createISTDate(startDateStr);
     const endDate = createISTDate(endDateStr);
 
-    // Month days = number of days in the pay period (respects pay cycle 26-25 or 1-31)
+    // Month days = exact number of days in the pay period (fully respects pay cycle e.g. 25 Jan–26 Feb = 33 days)
     const periodDays = getAllDatesInRange(startDateStr, endDateStr).length;
-    summary.totalDaysInMonth = Math.min(31, Math.max(28, periodDays));
+    summary.totalDaysInMonth = Math.round(periodDays);
 
     // Normalize emp_no so we match AttendanceDaily.employeeNumber (schema uses uppercase)
     const empNoNorm = (emp_no && String(emp_no).trim()) ? String(emp_no).toUpperCase() : emp_no;
@@ -73,7 +82,7 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         $lte: endDateStr,
       },
     })
-      .select('status shifts totalWorkingHours extraHours totalLateInMinutes totalEarlyOutMinutes payableShifts')
+      .select('date status shifts totalWorkingHours extraHours totalLateInMinutes totalEarlyOutMinutes payableShifts')
       .populate('shifts.shiftId', 'payableShifts name')
       .lean();
     console.log('[OD-FLOW] calculateMonthlySummary loaded dailies', { emp_no: empNoNorm, period: `${startDateStr}..${endDateStr}`, count: attendanceRecords.length });
@@ -88,15 +97,16 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     summary.totalWeeklyOffs = totalWeeklyOffs;
     summary.totalHolidays = totalHolidays;
 
-    // 3. Calculate total present days (Half-day counts as 0.5). Exclude WEEK_OFF and HOLIDAY — they are not present.
+    // 3. Calculate total present days: only PRESENT (1) and HALF_DAY (0.5). PARTIAL/ABSENT do not count as present (clearer picture).
     let totalPresentDays = 0;
     for (const record of attendanceRecords) {
       if (record.status === 'WEEK_OFF' || record.status === 'HOLIDAY') continue;
-      if (record.status === 'PRESENT' || record.status === 'PARTIAL') {
+      if (record.status === 'PRESENT') {
         totalPresentDays += 1;
       } else if (record.status === 'HALF_DAY') {
         totalPresentDays += 0.5;
       }
+      // PARTIAL, ABSENT: do not add to present days
     }
     summary.totalPresentDays = Math.round(totalPresentDays * 10) / 10;
 
@@ -133,15 +143,9 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       // Count each day in the leave range that falls within the month
       let currentDate = new Date(leaveStart);
       while (currentDate <= leaveEnd) {
-        const { year: currentYear, month: currentMonth } = extractISTComponents(currentDate);
-
-        // Check if this date is within the target payroll period
-        if (currentYear === startComponents.year && currentMonth === startComponents.month &&
-          currentDate >= payrollStart && currentDate <= payrollEnd) {
+        if (currentDate >= payrollStart && currentDate <= payrollEnd) {
           totalLeaveDays += leave.isHalfDay ? 0.5 : 1;
         }
-
-        // Move to next day
         currentDate.setDate(currentDate.getDate() + 1);
       }
     }
@@ -175,31 +179,24 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       // Count each day in the OD range that falls within the month
       let currentDate = new Date(odStart);
       while (currentDate <= odEnd) {
-        const { year: currentYear, month: currentMonth } = extractISTComponents(currentDate);
-
-        // Check if this date is within the target payroll period
-        if (currentYear === startComponents.year && currentMonth === startComponents.month &&
-          currentDate >= payrollStart && currentDate <= payrollEnd) {
+        if (currentDate >= payrollStart && currentDate <= payrollEnd) {
           totalODDays += od.isHalfDay ? 0.5 : 1;
         }
-
-        // Move to next day
         currentDate.setDate(currentDate.getDate() + 1);
       }
     }
     summary.totalODs = Math.round(totalODDays * 10) / 10; // Round to 1 decimal
 
-    // 6. Total payable shifts and present days: add half-day (0.5) / full-day (1) OD for days with no attendance record
-    // So monthly aggregates include approved half-day and full-day OD even when no punch record exists.
-    const datesWithAttendance = new Set((attendanceRecords || []).map(r => r.date));
+    // 6. Total payable shifts: add half-day (0.5) / full-day (1) OD for days with no attendance record
+    const datesWithAttendance = new Set((attendanceRecords || []).map(r => toNormalizedDateStr(r.date)));
     let odOnlyPresentDays = 0;
     for (const od of approvedODs || []) {
       if (od.odType_extended === 'hours') continue;
       const contrib = od.isHalfDay ? 0.5 : 1;
-      let d = new Date(extractISTComponents(od.fromDate).dateStr);
-      const odEnd = new Date(extractISTComponents(od.toDate).dateStr);
+      let d = new Date(extractISTComponents(od.fromDate).dateStr + 'T12:00:00Z');
+      const odEnd = new Date(extractISTComponents(od.toDate).dateStr + 'T12:00:00Z');
       while (d <= odEnd) {
-        const dateStr = extractISTComponents(d).dateStr;
+        const dateStr = toNormalizedDateStr(d);
         if (dateStr >= startDateStr && dateStr <= endDateStr && !datesWithAttendance.has(dateStr)) {
           totalPayableShifts += contrib;
           odOnlyPresentDays += contrib;
@@ -207,7 +204,8 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         d.setDate(d.getDate() + 1);
       }
     }
-    summary.totalPresentDays = Math.round((totalPresentDays + odOnlyPresentDays) * 10) / 10;
+    // Present days = attendance (PRESENT + HALF_DAY only) + all OD days (so OD is included in present days)
+    summary.totalPresentDays = Math.round((totalPresentDays + summary.totalODs) * 10) / 10;
     summary.totalPayableShifts = Math.round(totalPayableShifts * 100) / 100; // Round to 2 decimals
     console.log('[OD-FLOW] calculateMonthlySummary totals (from dailies + OD-only)', {
       emp_no,
@@ -463,7 +461,7 @@ async function recalculateOnODApproval(od) {
     const fromStr = extractISTComponents(od.fromDate).dateStr;
     const toStr = extractISTComponents(od.toDate).dateStr;
 
-    // Only touch AttendanceDaily for hour-based OD. Half-day and full-day OD contribute only at monthly summary (no daily create/update).
+    // Touch AttendanceDaily for hour-based OD (create/ensure daily) and for half-day OD (re-save existing dailies so pre-save runs and applies half-vs-punches logic).
     if (od.odType_extended === 'hours') {
       console.log('[OD-FLOW] recalculateOnODApproval: touching dailies (hour-based)');
       let d = new Date(fromStr);
@@ -477,9 +475,23 @@ async function recalculateOnODApproval(od) {
         await daily.save();
         d.setDate(d.getDate() + 1);
       }
-    } else {
-      console.log('[OD-FLOW] recalculateOnODApproval: not touching dailies (half/full-day), will recalc summary only');
+    } else if (od.odType_extended === 'half_day' || od.isHalfDay) {
+      console.log('[OD-FLOW] recalculateOnODApproval: re-saving dailies for half-day OD (so half-vs-punches is applied)');
+      let d = new Date(fromStr);
+      const toDate = new Date(toStr);
+      while (d <= toDate) {
+        const dateStr = extractISTComponents(d).dateStr;
+        const daily = await AttendanceDaily.findOne({ employeeNumber: empNo, date: dateStr });
+        if (daily) {
+          await daily.save();
+        } else {
+          const newDaily = new AttendanceDaily({ employeeNumber: empNo, date: dateStr, shifts: [] });
+          await newDaily.save();
+        }
+        d.setDate(d.getDate() + 1);
+      }
     }
+    // Full-day OD: no daily create/update; contribution is added in monthly summary OD-only logic.
 
     // Recalculate monthly summaries for affected payroll cycles (half/full-day OD contribute 0.5/1 via OD-only logic in calculateMonthlySummary)
     const { payrollCycle: startCycle } = await dateCycleService.getPeriodInfo(od.fromDate);
@@ -503,11 +515,30 @@ async function recalculateOnODApproval(od) {
   }
 }
 
+/**
+ * Delete monthly attendance summaries (for a given month or all).
+ * Use before full recalc to ensure clean state.
+ * @param {{ year?: number, monthNumber?: number }} [options] - If both provided, delete only that month; otherwise delete all.
+ * @returns {Promise<{ deletedCount: number }>}
+ */
+async function deleteAllMonthlySummaries(options = {}) {
+  const { year, monthNumber } = options;
+  let query = {};
+  if (year != null && monthNumber != null) {
+    const monthStr = `${year}-${String(monthNumber).padStart(2, '0')}`;
+    query.month = monthStr;
+  }
+  const result = await MonthlyAttendanceSummary.deleteMany(query);
+  console.log('[summaryCalculationService] deleteAllMonthlySummaries', { query, deletedCount: result.deletedCount });
+  return { deletedCount: result.deletedCount };
+}
+
 module.exports = {
   calculateMonthlySummary,
   calculateAllEmployeesSummary,
   recalculateOnAttendanceUpdate,
   recalculateOnLeaveApproval,
   recalculateOnODApproval,
+  deleteAllMonthlySummaries,
 };
 

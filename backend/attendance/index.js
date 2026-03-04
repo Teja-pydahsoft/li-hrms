@@ -94,6 +94,7 @@ router.get('/monthly-summary', applyScopeFilter, monthlySummaryController.getAll
 router.get('/monthly-summary/:employeeId', applyScopeFilter, monthlySummaryController.getEmployeeMonthlySummary);
 router.post('/monthly-summary/calculate/:employeeId', authorize('manager', 'super_admin', 'sub_admin', 'hr'), monthlySummaryController.calculateEmployeeSummary);
 router.post('/monthly-summary/calculate-all', applyScopeFilter, authorize('manager', 'super_admin', 'sub_admin', 'hr'), monthlySummaryController.calculateAllSummaries);
+router.post('/monthly-summary/clear-and-recalculate', applyScopeFilter, authorize('manager', 'super_admin', 'sub_admin', 'hr'), monthlySummaryController.clearAndRecalculateSummaries);
 
 // Live Attendance Report Routes (Super Admin only)
 router.get('/reports/live', authorize('super_admin'), liveAttendanceReportController.getLiveAttendanceReport);

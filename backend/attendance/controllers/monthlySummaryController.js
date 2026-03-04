@@ -1,5 +1,5 @@
 const MonthlyAttendanceSummary = require('../model/MonthlyAttendanceSummary');
-const { calculateMonthlySummary, calculateAllEmployeesSummary } = require('../services/summaryCalculationService');
+const { calculateMonthlySummary, calculateAllEmployeesSummary, deleteAllMonthlySummaries } = require('../services/summaryCalculationService');
 const Employee = require('../../employees/model/Employee');
 
 /**
@@ -161,6 +161,46 @@ exports.calculateEmployeeSummary = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error calculating monthly summary',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Delete all monthly summaries (optionally for a month), then recalculate for given month
+ * @route   POST /api/attendance/monthly-summary/clear-and-recalculate
+ * @body    { year?, monthNumber?, clearAll?: boolean } - clearAll: if true, delete all summaries; else delete only for year+monthNumber. Then recalc for year+monthNumber (default current month).
+ * @access  Private (Super Admin, Sub Admin, HR)
+ */
+exports.clearAndRecalculateSummaries = async (req, res) => {
+  try {
+    const { year, monthNumber, clearAll } = req.body || {};
+    const now = new Date();
+    const calcYear = year != null ? Number(year) : now.getFullYear();
+    const calcMonth = monthNumber != null ? Number(monthNumber) : now.getMonth() + 1;
+
+    const deleteOptions = clearAll ? {} : { year: calcYear, monthNumber: calcMonth };
+    const { deletedCount } = await deleteAllMonthlySummaries(deleteOptions);
+
+    const results = await calculateAllEmployeesSummary(calcYear, calcMonth);
+    const successCount = results.filter((r) => r.success).length;
+    const failureCount = results.filter((r) => !r.success).length;
+
+    res.status(200).json({
+      success: true,
+      message: `Deleted ${deletedCount} summary/summaries; recalculated for ${calcYear}-${String(calcMonth).padStart(2, '0')}: ${successCount} succeeded, ${failureCount} failed.`,
+      data: {
+        deletedCount,
+        period: { year: calcYear, monthNumber: calcMonth },
+        recalc: { total: results.length, successCount, failureCount },
+        results,
+      },
+    });
+  } catch (error) {
+    console.error('Error in clear-and-recalculate:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error clearing and recalculating monthly summaries',
       error: error.message,
     });
   }

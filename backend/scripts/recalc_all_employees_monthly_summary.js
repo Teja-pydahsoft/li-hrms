@@ -6,7 +6,8 @@
  * Usage (from backend folder):
  *   node scripts/recalc_all_employees_monthly_summary.js
  *   MONTH=2026-02 node scripts/recalc_all_employees_monthly_summary.js
- *   MONTH=2026-01 node scripts/recalc_all_employees_monthly_summary.js
+ *   CLEAR_FIRST=1 node scripts/recalc_all_employees_monthly_summary.js   # delete ALL summaries then recalc for MONTH (or current month)
+ *   CLEAR_FIRST=1 MONTH=2025-03 node scripts/recalc_all_employees_monthly_summary.js
  *
  * MONTH = YYYY-MM (calendar month). Pay period is resolved from payroll settings
  * (e.g. 26th–25th or 1st–31st) so the summary reflects the correct cycle.
@@ -14,7 +15,7 @@
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const mongoose = require('mongoose');
-const { calculateAllEmployeesSummary } = require('../attendance/services/summaryCalculationService');
+const { calculateAllEmployeesSummary, deleteAllMonthlySummaries } = require('../attendance/services/summaryCalculationService');
 
 async function run() {
   try {
@@ -32,6 +33,13 @@ async function run() {
       console.log('Using MONTH:', monthStr);
     }
     const [year, monthNumber] = monthStr.split('-').map(Number);
+
+    const clearFirst = process.env.CLEAR_FIRST === '1' || process.env.CLEAR_FIRST === 'true';
+    if (clearFirst) {
+      console.log('CLEAR_FIRST=1: Deleting ALL monthly attendance summaries...');
+      const { deletedCount } = await deleteAllMonthlySummaries();
+      console.log('Deleted', deletedCount, 'summary/summaries.\n');
+    }
 
     console.log('\nRecalculating monthly summary for ALL active employees...');
     console.log('Year:', year, 'Month:', monthNumber, '(' + monthStr + ')\n');
