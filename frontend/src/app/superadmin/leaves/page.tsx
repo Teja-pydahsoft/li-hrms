@@ -1479,7 +1479,7 @@ export default function LeavesPage() {
             </div>
             <div>
               <div className="text-2xl font-bold text-yellow-600">{totalPending}</div>
-              <div className="text-sm text-slate-500">Pending Approvals</div>
+              <div className="text-sm text-slate-500">Actions Required</div>
             </div>
           </div>
         </div>
@@ -1534,7 +1534,7 @@ export default function LeavesPage() {
           >
             <span className="flex items-center gap-2">
               <ClockIcon />
-              Pending Approvals ({totalPending})
+              Actions Required ({totalPending})
             </span>
           </button>
         </div>

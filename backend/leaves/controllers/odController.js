@@ -1186,7 +1186,7 @@ exports.getPendingApprovals = async (req, res) => {
       const roleVariants = [userRole];
       if (userRole === 'hr') roleVariants.push('final_authority');
       filter['$or'] = [
-        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants } } } },
+        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants }, status: 'pending' } } },
         { 'workflow.reportingManagerIds': req.user._id.toString() }
       ];
       const employeeIds = await getEmployeeIdsInScope(req.user);
@@ -1198,7 +1198,10 @@ exports.getPendingApprovals = async (req, res) => {
       filter.status = { $nin: ['approved', 'rejected', 'cancelled'] };
     }
     else {
-      filter['workflow.reportingManagerIds'] = req.user._id.toString();
+      filter['$or'] = [
+        { 'workflow.approvalChain': { $elemMatch: { role: userRole, status: 'pending' } } },
+        { 'workflow.reportingManagerIds': req.user._id.toString() }
+      ];
       filter.status = { $nin: ['approved', 'rejected', 'cancelled'] };
     }
 

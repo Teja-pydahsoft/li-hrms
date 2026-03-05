@@ -397,7 +397,7 @@ const getPolicyDateBounds = (policy: { allowBackdated?: boolean; maxBackdatedDay
 
 export default function LeavesPage() {
   const { getModuleConfig, hasPermission, activeWorkspace } = useWorkspace();
-  const [activeTab, setActiveTab] = useState<'leaves' | 'od' | 'pending'>('leaves');
+  const [activeTab, setActiveTab] = useState<'leaves' | 'od' | 'pending' | 'in_progress'>('leaves');
   const [leaves, setLeaves] = useState<LeaveApplication[]>([]);
   const [ods, setODs] = useState<ODApplication[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<LeaveApplication[]>([]);
@@ -1728,22 +1728,74 @@ export default function LeavesPage() {
   const filteredPendingLeaves = useMemo(() => filterData(pendingLeaves), [pendingLeaves, leaveFilters]);
   const filteredPendingODs = useMemo(() => filterData(pendingODs), [pendingODs, leaveFilters]);
 
-  const stats = useMemo(() => {
-    const calc = (items: any[]) => ({
-      total: items.length,
-      approved: items.filter(i => i.status === 'approved').length,
-      pending: items.filter(i => ['pending', 'hod_approved', 'manager_approved'].includes(i.status)).length,
-      rejected: items.filter(i => ['rejected', 'hod_rejected', 'hr_rejected', 'cancelled'].includes(i.status)).length,
+  const inProgressLeaves = useMemo(() => {
+    const pendingIds = new Set(pendingLeaves.map(p => p._id));
+    const userId = currentUser?.id || currentUser?._id;
+    return leaves.filter(i => {
+      if (['approved', 'rejected', 'cancelled'].includes(i.status) || pendingIds.has(i._id)) return false;
+      // Only show if user has already acted on it (approved or rejected step in chain)
+      const chain = (i as any).workflow?.approvalChain || [];
+      return chain.some((s: any) =>
+        (s.status === 'approved' || s.status === 'rejected') &&
+        ((s.actionBy?._id || s.actionBy)?.toString() === String(userId))
+      );
     });
+  }, [leaves, pendingLeaves, currentUser]);
+
+  const inProgressODs = useMemo(() => {
+    const pendingIds = new Set(pendingODs.map(p => p._id));
+    const userId = currentUser?.id || currentUser?._id;
+    return ods.filter(i => {
+      if (['approved', 'rejected', 'cancelled'].includes(i.status) || pendingIds.has(i._id)) return false;
+      // Only show if user has already acted on it
+      const chain = (i as any).workflow?.approvalChain || [];
+      return chain.some((s: any) =>
+        (s.status === 'approved' || s.status === 'rejected') &&
+        ((s.actionBy?._id || s.actionBy)?.toString() === String(userId))
+      );
+    });
+  }, [ods, pendingODs, currentUser]);
+
+  const filteredInProgressLeaves = useMemo(() => filterData(inProgressLeaves), [inProgressLeaves, leaveFilters]);
+  const filteredInProgressODs = useMemo(() => filterData(inProgressODs), [inProgressODs, leaveFilters]);
+
+  const stats = useMemo(() => {
+    const calc = (items: any[], pendingList: any[]) => {
+      const pendingIds = new Set(pendingList.map(p => p._id));
+      const userId = currentUser?.id || currentUser?._id;
+
+      const inProgress = items.filter(i => {
+        if (['approved', 'rejected', 'cancelled'].includes(i.status) || pendingIds.has(i._id)) return false;
+        const chain = (i as any).workflow?.approvalChain || [];
+        return chain.some((s: any) =>
+          (s.status === 'approved' || s.status === 'rejected') &&
+          ((s.actionBy?._id || s.actionBy)?.toString() === String(userId))
+        );
+      });
+
+      return {
+        total: items.length,
+        approved: items.filter(i => i.status === 'approved').length,
+        myActions: pendingList.length,
+        inProgress: inProgress.length,
+        totalPending: pendingList.length + inProgress.length,
+        rejected: items.filter(i => ['rejected', 'hod_rejected', 'hr_rejected', 'cancelled'].includes(i.status)).length,
+      };
+    };
+
+    const leavesStats = calc(leaves, pendingLeaves);
+    const odsStats = calc(ods, pendingODs);
 
     return {
-      leaves: calc(leaves),
-      ods: calc(ods),
-      totalPending: pendingLeaves.length + pendingODs.length
+      leaves: leavesStats,
+      ods: odsStats,
+      totalMyActions: pendingLeaves.length + pendingODs.length,
+      totalInProgress: leavesStats.inProgress + odsStats.inProgress
     };
   }, [leaves, ods, pendingLeaves, pendingODs]);
 
-  const totalPending = stats.totalPending;
+  const totalMyActions = stats.totalMyActions;
+  const totalInProgress = stats.totalInProgress;
 
   // Build role order from the leave/OD's stored workflow (dynamic per record)
   const getRoleOrderFromItem = (item: LeaveApplication | ODApplication): string[] => {
@@ -1924,7 +1976,7 @@ export default function LeavesPage() {
           />
           <StatCard
             title="Pending Leaves"
-            value={stats.leaves.pending}
+            value={stats.leaves.totalPending}
             icon={Clock3}
             bgClass="bg-amber-500/10"
             iconClass="text-amber-600 dark:text-amber-400"
@@ -1951,7 +2003,7 @@ export default function LeavesPage() {
           />
           <StatCard
             title="Pending ODs"
-            value={stats.ods.pending}
+            value={stats.ods.totalPending}
             icon={Clock}
             bgClass="bg-violet-500/10"
             iconClass="text-violet-600 dark:text-violet-400"
@@ -1990,7 +2042,7 @@ export default function LeavesPage() {
                   <div className="w-2 h-2 rounded-full bg-amber-500"></div>
                   <span className="text-xs text-slate-600 dark:text-slate-400">Pending</span>
                 </div>
-                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.leaves.pending}</span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.leaves.totalPending}</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-1.5">
@@ -2021,7 +2073,7 @@ export default function LeavesPage() {
                   <div className="w-2 h-2 rounded-full bg-violet-500"></div>
                   <span className="text-xs text-slate-600 dark:text-slate-400">Pending</span>
                 </div>
-                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.ods.pending}</span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.ods.totalPending}</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-1.5">
@@ -2162,7 +2214,8 @@ export default function LeavesPage() {
             {[
               { id: 'leaves', label: 'Leaves', icon: Calendar, count: leaves.length, activeColor: 'blue' },
               { id: 'od', label: 'On Duty', icon: Briefcase, count: ods.length, activeColor: 'purple' },
-              { id: 'pending', label: 'Pending', icon: Clock3, count: totalPending, activeColor: 'orange' }
+              { id: 'pending', label: 'Actions Required', icon: Clock3, count: totalMyActions, activeColor: 'orange' },
+              { id: 'in_progress', label: 'In Progress', icon: Clock, count: totalInProgress, activeColor: 'blue' }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -2833,15 +2886,166 @@ export default function LeavesPage() {
                   </div>
                 )}
 
-                {totalPending === 0 && (
+                {totalMyActions === 0 && (
                   <div className="text-center py-12 text-slate-500">
                     No pending approvals
                   </div>
                 )}
               </>)}
             </div>
-          )
-          }
+          )}
+
+
+          {activeTab === 'in_progress' && (
+            <div className="p-4 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+              {loading ? (
+                <div className="space-y-4">
+                  <div className="h-5 w-40 bg-slate-200 dark:bg-slate-700 rounded animate-pulse mb-4"></div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {[...Array(3)].map((_, i) => (
+                      <div key={i} className="h-56 rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 animate-pulse">
+                        <div className="flex justify-between mb-4">
+                          <div className="flex gap-3">
+                            <div className="h-10 w-10 rounded-full bg-slate-200 dark:bg-slate-700"></div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-32 bg-slate-200 dark:bg-slate-700 rounded"></div>
+                              <div className="h-3 w-20 bg-slate-200 dark:bg-slate-700 rounded"></div>
+                            </div>
+                          </div>
+                          <div className="h-6 w-20 bg-slate-200 dark:bg-slate-700 rounded-full"></div>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="h-4 w-full bg-slate-200 dark:bg-slate-700 rounded"></div>
+                          <div className="h-4 w-3/4 bg-slate-200 dark:bg-slate-700 rounded"></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (<>
+                {/* In Progress Leaves */}
+                {filteredInProgressLeaves.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between px-2">
+                      <h3 className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-blue-700 dark:bg-blue-400/20 dark:text-blue-300 border border-blue-200/60 dark:border-blue-500/30">
+                        <Calendar className="w-4 h-4" />
+                        In Progress Leaves ({filteredInProgressLeaves.length})
+                      </h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {filteredInProgressLeaves.map((leave) => (
+                        <div key={leave._id} onClick={() => openDetailDialog(leave, 'leave')} className="cursor-pointer group relative flex flex-col justify-between rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-blue-200/60 dark:border-slate-800 dark:bg-slate-900">
+                          {/* Status Strip */}
+                          <div className="absolute top-0 left-0 w-1 h-full bg-blue-500/80 rounded-l-2xl group-hover:w-1.5 transition-all" />
+
+                          {/* Header */}
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600 font-bold dark:bg-blue-900/30 dark:text-blue-400">
+                                {getEmployeeInitials({ employee_name: leave.employeeId?.employee_name || '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: '' } as any)}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                  <h4 className="font-semibold text-slate-900 dark:text-white line-clamp-1">
+                                    {getEmployeeName({ employee_name: leave.employeeId?.employee_name || '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: leave.employeeId?.emp_no || leave.emp_no || '' } as Employee)}
+                                  </h4>
+                                </div>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                  {leave.employeeId?.emp_no || leave.emp_no}
+                                </p>
+                              </div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusColor(leave.status)}`}>
+                              {leave.status.replace('_', ' ')}
+                            </span>
+                          </div>
+
+                          {/* Content */}
+                          <div className="mb-0 space-y-2.5">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Type</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">{leave.leaveType}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Duration</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">{leave.numberOfDays} Day{leave.numberOfDays !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Dates</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300 text-right">
+                                {formatDate(leave.fromDate)}
+                                {leave.fromDate !== leave.toDate && ` - ${formatDate(leave.toDate)}`}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* In Progress ODs */}
+                {filteredInProgressODs.length > 0 && (
+                  <div className="space-y-4">
+                    <h3 className="inline-flex items-center gap-2 rounded-xl bg-purple-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-purple-700 dark:bg-purple-400/20 dark:text-purple-300 mb-0 border border-purple-200/60 dark:border-purple-500/30">
+                      <Briefcase className="w-4 h-4" />
+                      In Progress ODs ({filteredInProgressODs.length})
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {filteredInProgressODs.map((od) => (
+                        <div key={od._id} onClick={() => openDetailDialog(od, 'od')} className="cursor-pointer group relative flex flex-col justify-between rounded-xl border border-slate-200 border-l-4 border-l-purple-500 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700 dark:bg-slate-800">
+                          {/* Header */}
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600 font-bold dark:bg-purple-900/30 dark:text-purple-400">
+                                {getEmployeeInitials({ employee_name: od.employeeId?.employee_name || '', first_name: od.employeeId?.first_name, last_name: od.employeeId?.last_name, emp_no: '' } as any)}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <h4 className="font-semibold text-slate-900 dark:text-white line-clamp-1">
+                                  {getEmployeeName({ employee_name: od.employeeId?.employee_name || '', first_name: od.employeeId?.first_name, last_name: od.employeeId?.last_name, emp_no: od.employeeId?.emp_no || od.emp_no || '' } as Employee)}
+                                </h4>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                  {od.employeeId?.emp_no || od.emp_no}
+                                </p>
+                              </div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusColor(od.status)}`}>
+                              {od.status.replace('_', ' ')}
+                            </span>
+                          </div>
+
+                          {/* Content */}
+                          <div className="mb-0 space-y-2.5">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Type</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">{od.odType}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Duration</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">{od.numberOfDays} Day{od.numberOfDays !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-500 dark:text-slate-400">Dates</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300 text-right">
+                                {formatDate(od.fromDate)}
+                                {od.fromDate !== od.toDate && ` - ${formatDate(od.toDate)}`}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {totalInProgress === 0 && (
+                  <div className="text-center py-12 text-slate-500">
+                    No in-progress requests
+                  </div>
+                )}
+              </>)}
+            </div>
+          )}
 
 
         </div >
@@ -3662,10 +3866,168 @@ export default function LeavesPage() {
                         <div className="divide-y divide-slate-100 dark:divide-slate-700 max-h-40 overflow-y-auto">
                           {(selectedItem as LeaveApplication).splits!.map((split, idx) => (
                             <div key={idx} className="flex justify-between px-4 py-2.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                              <span className="text-slate-700 dark:text-slate-300">{formatDate(split.date)} {split.isHalfDay && '(Half)'}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-700 dark:text-slate-300">{formatDate(split.date)}</span>
+                                {split.isHalfDay && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 uppercase font-black">
+                                    {split.halfDayType === 'first_half' ? '1st' : '2nd'}
+                                  </span>
+                                )}
+                              </div>
                               <span className={`capitalize font-bold ${split.status === 'approved' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{split.status}</span>
                             </div>
                           ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Interactive Split Editor (For Approvers) */}
+                  {detailType === 'leave' && !['approved', 'rejected', 'cancelled'].includes(selectedItem.status) && (
+                    <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/50 p-6 border border-slate-200 dark:border-slate-700 space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Split & Decision</p>
+                          <p className="text-[10px] text-slate-500 font-medium uppercase tracking-tight mt-1">Manage individual day approvals</p>
+                        </div>
+                        <label className="flex items-center gap-3 cursor-pointer group">
+                          <input
+                            type="checkbox"
+                            checked={splitMode}
+                            onChange={(e) => {
+                              const enable = e.target.checked;
+                              setSplitMode(enable);
+                              if (enable && splitDrafts.length === 0 && detailType === 'leave' && selectedItem) {
+                                setSplitDrafts(buildInitialSplits(selectedItem as LeaveApplication));
+                              }
+                              if (!enable) {
+                                setSplitWarnings([]);
+                                setSplitErrors([]);
+                              }
+                            }}
+                            className="w-5 h-5 rounded-lg border-2 border-slate-300 text-blue-600 focus:ring-blue-500 transition-all group-hover:border-blue-400"
+                          />
+                          <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">Enable Split</span>
+                        </label>
+                      </div>
+
+                      {splitMode && (
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-300 space-y-4">
+                          <div className="flex flex-wrap gap-3 p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm">
+                            <div className="flex flex-col">
+                              <span className="text-[9px] uppercase font-black text-slate-400">Total</span>
+                              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{(selectedItem as LeaveApplication).numberOfDays}d</span>
+                            </div>
+                            <div className="w-px h-6 bg-slate-100 dark:bg-slate-700" />
+                            <div className="flex flex-col">
+                              <span className="text-[9px] uppercase font-black text-green-500">Approved</span>
+                              <span className="text-xs font-bold text-green-600 dark:text-green-400">{splitDrafts.filter(s => s.status === 'approved').reduce((sum, s) => sum + (s.isHalfDay ? 0.5 : 1), 0)}d</span>
+                            </div>
+                            <div className="w-px h-6 bg-slate-100 dark:bg-slate-700" />
+                            <div className="flex flex-col">
+                              <span className="text-[9px] uppercase font-black text-red-500">Rejected</span>
+                              <span className="text-xs font-bold text-red-600 dark:text-red-400">{splitDrafts.filter(s => s.status === 'rejected').reduce((sum, s) => sum + (s.isHalfDay ? 0.5 : 1), 0)}d</span>
+                            </div>
+                          </div>
+
+                          {splitErrors.length > 0 && (
+                            <div className="rounded-xl border border-red-200 bg-red-50/50 px-4 py-3 text-[11px] font-bold text-red-600 animate-pulse">
+                              {splitErrors.map((msg, idx) => (
+                                <div key={idx} className="flex items-center gap-2">
+                                  <div className="w-1 h-1 rounded-full bg-red-500" />
+                                  {msg}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="space-y-2 max-h-[280px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
+                            {splitDrafts.map((split, idx) => (
+                              <div key={`${split.date}-${idx}`} className="group flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-800 hover:border-blue-400/50 transition-all">
+                                <div className="flex items-center gap-3">
+                                  <div className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">{formatDate(split.date)}</div>
+                                  <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-500 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={split.isHalfDay || false}
+                                      onChange={(e) => updateSplitDraft(idx, { isHalfDay: e.target.checked })}
+                                      className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    Half
+                                  </label>
+                                  {split.isHalfDay && (
+                                    <select
+                                      value={split.halfDayType || 'first_half'}
+                                      onChange={(e) => updateSplitDraft(idx, { halfDayType: e.target.value as any })}
+                                      className="text-[10px] font-bold h-7 rounded-lg border border-slate-200 bg-slate-50 px-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white outline-none focus:border-blue-400"
+                                    >
+                                      <option value="first_half">1st Half</option>
+                                      <option value="second_half">2nd Half</option>
+                                    </select>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 ml-auto">
+                                  <select
+                                    value={split.leaveType}
+                                    onChange={(e) => updateSplitDraft(idx, { leaveType: e.target.value })}
+                                    className="text-[10px] font-bold h-8 rounded-lg border border-slate-200 bg-white px-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white outline-none focus:border-blue-400"
+                                  >
+                                    <option value="">Select Type</option>
+                                    {leaveTypes.map((lt) => (
+                                      <option key={lt.code} value={lt.code}>
+                                        {lt.name || lt.code}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    value={split.status}
+                                    onChange={(e) => updateSplitDraft(idx, { status: e.target.value as 'approved' | 'rejected' })}
+                                    className={`text-[10px] font-black h-8 rounded-lg border px-2 outline-none uppercase tracking-wider ${split.status === 'approved'
+                                        ? 'border-green-200 bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
+                                        : 'border-red-200 bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
+                                      }`}
+                                  >
+                                    <option value="approved">Approve</option>
+                                    <option value="rejected">Reject</option>
+                                  </select>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex gap-2 pt-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setSplitSaving(true);
+                                await validateSplitsForLeave();
+                                setSplitSaving(false);
+                              }}
+                              className="flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 transition-colors"
+                            >
+                              {splitSaving ? 'Validating...' : 'Validate'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setSplitSaving(true);
+                                const saved = await saveSplits();
+                                if (saved) {
+                                  toast.success('Splits updated');
+                                  const res = await api.getLeave((selectedItem as LeaveApplication)._id);
+                                  if (res?.success) {
+                                    setSelectedItem(res.data);
+                                    setSplitDrafts(buildInitialSplits(res.data));
+                                  }
+                                }
+                                setSplitSaving(false);
+                              }}
+                              className="flex-[2] py-2 text-[10px] font-black uppercase tracking-widest rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all active:scale-[0.98]"
+                            >
+                              {splitSaving ? 'Saving...' : 'Apply Splits'}
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
