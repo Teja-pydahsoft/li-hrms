@@ -121,6 +121,34 @@ function getRequiredServices(outputColumns) {
 }
 
 /**
+ * Normalize employee override payloads to ensure consistent structure.
+ * Mirrors the legacy payroll calculation behavior.
+ */
+function normalizeOverrides(list, fallbackCategory) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((ov) => ov && (ov.masterId || ov.name))
+    .map((ov) => {
+      const override = (ov && typeof ov.toObject === 'function') ? ov.toObject() : { ...ov };
+      override.category = override.category || fallbackCategory;
+
+      if (override.amount === undefined || override.amount === null) {
+        override.amount = (override.overrideAmount !== undefined && override.overrideAmount !== null)
+          ? override.overrideAmount
+          : 0;
+      }
+
+      if (typeof override.amount === 'string') {
+        override.amount = parseFloat(override.amount) || 0;
+      } else if (typeof override.amount !== 'number') {
+        override.amount = 0;
+      }
+
+      return override;
+    });
+}
+
+/**
  * Run only the services that are required by output columns; fill record so we don't depend on column order.
  * Order: basicPay (uses employee.gross_salary) → OT → allowances → attendance deduction → statutory → other deductions → loanAdvance → arrears.
  * Statutory is always skipped here and run in the column loop so paid/total days can come from output columns (by config header or auto-detect by name).
@@ -166,7 +194,7 @@ async function runRequiredServices(required, record, employee, employeeId, month
     };
     const includeMissing = await getIncludeMissingFlag(departmentId, divisionId);
     const { allowances: baseAllowances } = await buildBaseComponents(departmentId, basicPay, attendanceData, employee?.division_id);
-    const normalized = (employee?.employeeAllowances || []).filter((o) => o && (o.masterId || o.name)).map((o) => ({ ...o, category: 'allowance' }));
+    const normalized = normalizeOverrides(employee?.employeeAllowances || [], 'allowance');
     const resolvedAllowances = mergeWithOverrides(baseAllowances, normalized, includeMissing);
     let totalAllowances = 0;
     const allowanceBreakdown = (resolvedAllowances || [])
@@ -241,10 +269,91 @@ async function runRequiredServices(required, record, employee, employeeId, month
 
   if (required.needsAttendanceDeduction || required.needsStatutory || required.needsOtherDeductions || required.needsLoanAdvance) {
     const att = num(record.deductions?.attendanceDeduction);
-    const other = num(record.deductions?.totalOtherDeductions); // before manual: only allowances-deductions
+
+    // If we need other deductions but don't have a breakdown yet, populate it once using the resolver service
+    if (required.needsOtherDeductions) {
+      const hasOtherBreakdown = Array.isArray(record.deductions?.otherDeductions) && record.deductions.otherDeductions.length > 0;
+      if (!hasOtherBreakdown) {
+        const basicPay = num(record.earnings?.basicPay);
+        const earnedSalary = num(record.earnings?.payableAmount ?? record.earnings?.earnedSalary);
+        const grossSalary = num(record.earnings?.grossSalary);
+        const attendanceData = {
+          presentDays: record.attendance?.presentDays ?? 0,
+          paidLeaveDays: record.attendance?.paidLeaveDays ?? 0,
+          odDays: record.attendance?.odDays ?? 0,
+          monthDays: record.attendance?.totalDaysInMonth ?? 30,
+        };
+        const includeMissing = await getIncludeMissingFlag(departmentId, divisionId);
+        const { deductions: baseDeductions } = await buildBaseComponents(
+          departmentId,
+          basicPay,
+          attendanceData,
+          employee?.division_id,
+        );
+        const normalized = normalizeOverrides(employee?.employeeDeductions || [], 'deduction');
+        const resolvedDeductions = mergeWithOverrides(baseDeductions, normalized, includeMissing);
+
+        let totalOther = 0;
+        const otherBreakdown = (resolvedDeductions || [])
+          .filter((d) => d && d.name)
+          .map((d) => {
+            const baseAmount = (d.base || '').toLowerCase() === 'gross' ? grossSalary : earnedSalary;
+            const amount = deductionService.calculateDeductionAmount(d, baseAmount, grossSalary, attendanceData);
+            totalOther += amount;
+            return {
+              name: d.name,
+              amount,
+              type: d.type || 'fixed',
+              base: (d.base || '').toLowerCase() === 'gross' ? 'gross' : 'basic',
+            };
+          });
+
+        if (!record.deductions) record.deductions = {};
+        record.deductions.otherDeductions = otherBreakdown;
+        record.deductions.totalOtherDeductions = totalOther;
+        console.log('[DynamicPayroll][runRequiredServices] Populated otherDeductions from service:', otherBreakdown);
+      }
+    }
+
+    // Recompute "other" from breakdown, excluding components that belong to attendance / statutory / loan / advance / manual
+    const rawOther = Array.isArray(record.deductions?.otherDeductions)
+      ? record.deductions.otherDeductions
+      : [];
+    console.log('[DynamicPayroll][runRequiredServices] Raw otherDeductions breakdown:', rawOther.map((d) => ({
+      name: d?.name,
+      amount: d?.amount,
+    })));
+
+    const other = rawOther
+      .filter((d) => {
+        if (!d) return false;
+        const name = String(d.name || '').trim().toUpperCase();
+        // Exclude items that are tracked separately:
+        // - Attendance / late-early
+        // - Absent LOP
+        // - Statutory (EPF/ESI/PT) – handled via statutoryDeductions
+        // - Salary advance / loan – handled via loanAdvance
+        // - Manual Deduction – applied via manualDeductionsAmount
+        if (name === 'MANUAL DEDUCTION') return false;
+        if (name === 'ATTENDANCE DEDUCTION (LATE/EARLY)') return false;
+        if (name === 'ABSENT LOP DEDUCTION') return false;
+        return true;
+      })
+      .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
     const statutory = num(record.deductions?.statutoryCumulative); // may be 0 if prorateByColumn (filled in column loop)
     const loanEMI = num(record.loanAdvance?.totalEMI);
     const advance = num(record.loanAdvance?.advanceDeduction);
+
+    console.log('[DynamicPayroll][runRequiredServices] Aggregated components:', {
+      attendanceDeduction: att,
+      otherFiltered: other,
+      statutoryCumulative: statutory,
+      loanEMI,
+      advance,
+      manualDeductionsAmount: num(record.manualDeductionsAmount),
+    });
+
     if (!record.deductions) record.deductions = {};
     record.deductions.deductionsCumulative = other; // dynamic: only "other deductions" (allowances-deductions)
     record.deductions.totalDeductions = att + other + statutory + loanEMI + advance;
@@ -580,7 +689,7 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     }
     const includeMissing = await getIncludeMissingFlag(departmentId, divisionId);
     const { allowances: baseAllowances } = await buildBaseComponents(departmentId, basicPay, attendanceData, employee?.division_id);
-    const normalized = (employee?.employeeAllowances || []).filter((o) => o && (o.masterId || o.name)).map((o) => ({ ...o, category: 'allowance' }));
+    const normalized = normalizeOverrides(employee?.employeeAllowances || [], 'allowance');
     const resolvedAllowances = mergeWithOverrides(baseAllowances, normalized, includeMissing);
     let totalAllowances = 0;
     const allowanceBreakdown = (resolvedAllowances || [])
@@ -646,7 +755,7 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     }
     const includeMissing = await getIncludeMissingFlag(departmentId, divisionId);
     const { deductions: baseDeductions } = await buildBaseComponents(departmentId, record.earnings?.basicPay || 0, attendanceData, employee?.division_id);
-    const normalized = (employee?.employeeDeductions || []).filter((o) => o && (o.masterId || o.name)).map((o) => ({ ...o, category: 'deduction' }));
+    const normalized = normalizeOverrides(employee?.employeeDeductions || [], 'deduction');
     const resolvedDeductions = mergeWithOverrides(baseDeductions, normalized, includeMissing);
     let totalOther = 0;
     const otherBreakdown = (resolvedDeductions || [])
@@ -730,12 +839,44 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     const loanEMI = Number(record.loanAdvance?.totalEMI) || 0;
     const advance = Number(record.loanAdvance?.advanceDeduction) || 0;
     const manualDed = Number(record.manualDeductionsAmount) || 0;
-    // Other deductions from allowances-deductions config only (exclude "Manual Deduction" which is shown separately)
-    const otherDeductionsOnly = (record.deductions?.otherDeductions || [])
-      .filter((d) => d && String(d.name || '').trim() !== 'Manual Deduction')
+    console.log('[DynamicPayroll][resolveFieldValue] Raw :', record.deductions);
+    // Other deductions from allowances-deductions config only:
+    // exclude components that are tracked separately (attendance, absent LOP, statutory, loan/advance, manual)
+    const rawOther = Array.isArray(record.deductions?.otherDeductions)
+      ? record.deductions.otherDeductions
+      : [];
+    console.log('[DynamicPayroll][resolveFieldValue] Raw otherDeductions breakdown:', rawOther.map(d => ({
+      name: d?.name,
+      amount: d?.amount,
+    })));
+
+    const otherDeductionsOnly = rawOther
+      .filter((d) => {
+        if (!d) return false;
+        const name = String(d.name || '').trim().toUpperCase();
+        if (name === 'MANUAL DEDUCTION') return false;
+        if (name === 'ATTENDANCE DEDUCTION (LATE/EARLY)') return false;
+        if (name === 'ABSENT LOP DEDUCTION') return false;
+        if (name === 'EPF' || name === 'ESI' || name === 'PROFESSION TAX' || name === 'SALARY ADVANCE') return false;
+        return true;
+      })
       .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
     const fullTotal = att + otherDeductionsOnly + statutory + loanEMI + advance + manualDed;
+
+    console.log('[DynamicPayroll][resolveFieldValue] Aggregated components:', {
+      attendanceDeduction: att,
+      otherFiltered: otherDeductionsOnly,
+      statutoryCumulative: statutory,
+      loanEMI,
+      advance,
+      manualDeductionsAmount: manualDed,
+      totalDeductions: fullTotal,
+    });
     if (!record.deductions) record.deductions = {};
+    // Revert to original behaviour:
+    // - deductionsCumulative = only "other" deductions (after exclusions)
+    // - totalDeductions = full total (for net salary)
     record.deductions.deductionsCumulative = otherDeductionsOnly;
     record.deductions.totalDeductions = fullTotal;
     return path === 'deductions.deductionsCumulative' ? otherDeductionsOnly : fullTotal;
@@ -752,7 +893,15 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
       const advance = Number(record.loanAdvance?.advanceDeduction) || 0;
       const manualDed = Number(record.manualDeductionsAmount) || 0;
       const otherOnly = (record.deductions?.otherDeductions || [])
-        .filter((d) => d && String(d.name || '').trim() !== 'Manual Deduction')
+        .filter((d) => {
+          if (!d) return false;
+          const name = String(d.name || '').trim().toUpperCase();
+          if (name === 'MANUAL DEDUCTION') return false;
+          if (name === 'ATTENDANCE DEDUCTION (LATE/EARLY)') return false;
+          if (name === 'ABSENT LOP DEDUCTION') return false;
+          if (name === 'EPF' || name === 'ESI' || name === 'PROFESSION TAX' || name === 'SALARY ADVANCE') return false;
+          return true;
+        })
         .reduce((s, d) => s + (Number(d.amount) || 0), 0);
       totalDed = att + otherOnly + statutory + loanEMI + advance + manualDed;
       if (!record.deductions) record.deductions = {};
