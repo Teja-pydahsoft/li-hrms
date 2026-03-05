@@ -144,7 +144,7 @@ const getWorkflowSettings = async () => {
 // @access  Private
 exports.getODs = async (req, res) => {
   try {
-    const { status, employeeId, department, fromDate, toDate, page = 1, limit = 20 } = req.query;
+    const { status, employeeId, department, division, designation, fromDate, toDate, search, page = 1, limit = 20 } = req.query;
 
     // Multi-layered filter: Jurisdiction (Scope) AND Timing (Workflow)
     const scopeFilter = req.scopeFilter || { isActive: true };
@@ -161,8 +161,30 @@ exports.getODs = async (req, res) => {
     if (status) filter.status = status;
     if (employeeId) filter.employeeId = employeeId;
     if (department) filter.department = department;
+    if (division) filter.division_id = division;
+    if (designation) filter.designation = designation;
     if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+
+    // Search: by emp_no or employee name (resolve employee ids)
+    if (search && String(search).trim()) {
+      const searchStr = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(searchStr, 'i');
+      const matchedEmployees = await Employee.find({
+        $or: [
+          { emp_no: regex },
+          { employee_name: regex },
+          { first_name: regex },
+          { last_name: regex }
+        ]
+      }).select('_id').lean();
+      const ids = matchedEmployees.map(e => e._id);
+      if (ids.length > 0) {
+        filter.employeeId = { $in: ids };
+      } else {
+        filter.employeeId = { $in: [] };
+      }
+    }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -425,7 +447,14 @@ exports.applyOD = async (req, res) => {
         const scopeUser = await User.findById(req.user._id).select('role divisionMapping').lean();
         const userForScope = scopeUser || req.user;
         let scopedEmployeeIds = await getEmployeeIdsInScope(userForScope);
-        let isInScope = scopedEmployeeIds.some(id => id.toString() === targetEmployee._id.toString());
+
+        // Self-application safety: some deployments store employeeId as emp_no instead of ObjectId
+        const isSelfScoped =
+          (req.user.employeeRef && req.user.employeeRef.toString() === targetEmployee._id.toString()) ||
+          (req.user.employeeId && req.user.employeeId.toString() === targetEmployee._id.toString()) ||
+          (req.user.employeeId && targetEmployee.emp_no && String(req.user.employeeId).trim() === String(targetEmployee.emp_no).trim());
+
+        let isInScope = isSelfScoped || scopedEmployeeIds.some(id => id.toString() === targetEmployee._id.toString());
 
         if (!isInScope && req.user.role === 'hod') {
           const empDeptId = (targetEmployee.department_id?._id || targetEmployee.department_id)?.toString();
@@ -448,7 +477,7 @@ exports.applyOD = async (req, res) => {
             const userStr = req.user._id?.toString();
             const userEmployeeIdStr = (req.user.employeeId || req.user.employeeRef)?.toString();
             if ((userStr && reportingManagerIds.includes(userStr)) ||
-                (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
+              (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
               isInScope = true;
               console.log(`[Apply OD] ✅ User ${req.user._id} is reporting manager for employee ${empNo}`);
             }
@@ -1186,7 +1215,7 @@ exports.getPendingApprovals = async (req, res) => {
       const roleVariants = [userRole];
       if (userRole === 'hr') roleVariants.push('final_authority');
       filter['$or'] = [
-        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants } } } },
+        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants }, status: 'pending' } } },
         { 'workflow.reportingManagerIds': req.user._id.toString() }
       ];
       const employeeIds = await getEmployeeIdsInScope(req.user);
@@ -1198,7 +1227,10 @@ exports.getPendingApprovals = async (req, res) => {
       filter.status = { $nin: ['approved', 'rejected', 'cancelled'] };
     }
     else {
-      filter['workflow.reportingManagerIds'] = req.user._id.toString();
+      filter['$or'] = [
+        { 'workflow.approvalChain': { $elemMatch: { role: userRole, status: 'pending' } } },
+        { 'workflow.reportingManagerIds': req.user._id.toString() }
+      ];
       filter.status = { $nin: ['approved', 'rejected', 'cancelled'] };
     }
 
@@ -1480,51 +1512,51 @@ exports.processODAction = async (req, res) => {
         });
     }
 
-        od.workflow.history.push(historyEntry);
-        await od.save();
+    od.workflow.history.push(historyEntry);
+    await od.save();
 
-        // Employee history: OD final decision
-        try {
-          if (action === 'approve' && od.status === 'approved') {
-            await EmployeeHistory.create({
-              emp_no: od.emp_no,
-              event: 'od_approved',
-              performedBy: req.user._id,
-              performedByName: req.user.name,
-              performedByRole: userRole,
-              details: {
-                odId: od._id,
-                fromDate: od.fromDate,
-                toDate: od.toDate,
-                numberOfDays: od.numberOfDays,
-                odType: od.odType,
-                odType_extended: od.odType_extended,
-              },
-              comments: comments && comments.trim()
-                ? comments
-                : 'OD fully approved; employee will be on official duty for these dates',
-            });
-          } else if (action === 'reject' && od.status === 'rejected') {
-            await EmployeeHistory.create({
-              emp_no: od.emp_no,
-              event: 'od_rejected',
-              performedBy: req.user._id,
-              performedByName: req.user.name,
-              performedByRole: userRole,
-              details: {
-                odId: od._id,
-                fromDate: od.fromDate,
-                toDate: od.toDate,
-                numberOfDays: od.numberOfDays,
-              },
-              comments: comments && comments.trim()
-                ? comments
-                : 'OD rejected',
-            });
-          }
-        } catch (err) {
-          console.error('Failed to log OD approval/rejection history:', err.message);
-        }
+    // Employee history: OD final decision
+    try {
+      if (action === 'approve' && od.status === 'approved') {
+        await EmployeeHistory.create({
+          emp_no: od.emp_no,
+          event: 'od_approved',
+          performedBy: req.user._id,
+          performedByName: req.user.name,
+          performedByRole: userRole,
+          details: {
+            odId: od._id,
+            fromDate: od.fromDate,
+            toDate: od.toDate,
+            numberOfDays: od.numberOfDays,
+            odType: od.odType,
+            odType_extended: od.odType_extended,
+          },
+          comments: comments && comments.trim()
+            ? comments
+            : 'OD fully approved; employee will be on official duty for these dates',
+        });
+      } else if (action === 'reject' && od.status === 'rejected') {
+        await EmployeeHistory.create({
+          emp_no: od.emp_no,
+          event: 'od_rejected',
+          performedBy: req.user._id,
+          performedByName: req.user.name,
+          performedByRole: userRole,
+          details: {
+            odId: od._id,
+            fromDate: od.fromDate,
+            toDate: od.toDate,
+            numberOfDays: od.numberOfDays,
+          },
+          comments: comments && comments.trim()
+            ? comments
+            : 'OD rejected',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to log OD approval/rejection history:', err.message);
+    }
 
     // When OD is fully approved, update or create AttendanceDaily for each day in OD range so totalWorkingHours/status/payableShifts reflect OD
     if (action === 'approve' && od.status === 'approved') {
@@ -1795,10 +1827,15 @@ exports.deleteOD = async (req, res) => {
       });
     }
 
-    if (!['sub_admin', 'super_admin'].includes(req.user.role)) {
+    // Authorization: Admin can delete any, employee can delete their own if pending
+    const isAdmin = ['sub_admin', 'super_admin'].includes(req.user.role);
+    const isOwner = od.appliedBy?.toString() === req.user._id.toString() ||
+      (req.user.employeeRef && od.employeeId?.toString() === req.user.employeeRef.toString());
+
+    if (!isAdmin && !isOwner) {
       return res.status(403).json({
         success: false,
-        error: 'Not authorized to delete OD applications',
+        error: 'Not authorized to delete this OD application',
       });
     }
 

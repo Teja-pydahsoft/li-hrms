@@ -819,13 +819,12 @@ export default function PayRegisterPage() {
         position: 'top-end'
       });
 
-      // Filter arrears for this specific employee
-      // Note: ArrearsPayrollSection component stores arrears with employee info
-      // We need to filter selectedArrears to only include those for this employee
-      const employeeArrears = selectedArrears.filter((arrear) => arrear.employeeId === employeeId);
-      const employeeDeductions = selectedDeductions.filter((d) => d.employeeId === employeeId);
+      // Filter arrears and deductions for this specific employee (compare as string to avoid ObjectId mismatch)
+      const empIdStr = String(employeeId);
+      const employeeArrears = selectedArrears.filter((a) => a.employeeId != null && String(a.employeeId) === empIdStr);
+      const employeeDeductions = selectedDeductions.filter((d) => d.employeeId != null && String(d.employeeId) === empIdStr);
 
-      const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears, employeeDeductions);
+      const response = await api.calculatePayroll(empIdStr, monthStr, params, employeeArrears, employeeDeductions);
 
       if (response && response.data && response.data.batchId) {
         Swal.fire({
@@ -2720,7 +2719,8 @@ export default function PayRegisterPage() {
         <ArrearsPayrollSection
           month={month}
           year={year}
-          departmentId={selectedDepartment}
+          divisionId={selectedDivision || undefined}
+          departmentId={selectedDepartment || undefined}
           onArrearsSelected={handleArrearsSelected}
         />
       </div>
@@ -2734,7 +2734,8 @@ export default function PayRegisterPage() {
         <DeductionsPayrollSection
           month={monthStr}
           year={year}
-          departmentId={selectedDepartment}
+          divisionId={selectedDivision || undefined}
+          departmentId={selectedDepartment || undefined}
           onDeductionsSelected={handleDeductionsSelected}
         />
       </div>

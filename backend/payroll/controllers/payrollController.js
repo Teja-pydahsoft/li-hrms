@@ -11,6 +11,8 @@ const PayRegisterSummary = require('../../pay-register/model/PayRegisterSummary'
 const MonthlyAttendanceSummary = require('../../attendance/model/MonthlyAttendanceSummary');
 const PayrollConfiguration = require('../model/PayrollConfiguration');
 const outputColumnService = require('../services/outputColumnService');
+const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
 /**
  * Payroll Controller
  * Handles payroll calculation, retrieval, and processing
@@ -577,11 +579,26 @@ exports.exportPayrollExcel = async (req, res) => {
       const payslips = [];
       for (const empId of targetEmployeeIds) {
         try {
+          // Fetch pending arrears and manual deductions so export reflects same values as pay register calculation
+          let arrearsSettlements = [];
+          let deductionSettlements = [];
+          try {
+            const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(empId);
+            if (pendingArrears && pendingArrears.length > 0) {
+              arrearsSettlements = pendingArrears.map((ar) => ({ arrearId: ar.id, amount: ar.remainingAmount || 0 }));
+            }
+            const pendingDeductions = await DeductionPayrollIntegrationService.getPendingDeductionsForPayroll(empId);
+            if (pendingDeductions && pendingDeductions.length > 0) {
+              deductionSettlements = pendingDeductions.map((d) => ({ deductionId: d.id, amount: d.remainingAmount || 0 }));
+            }
+          } catch (fetchErr) {
+            console.error(`Error fetching arrears/deductions for export (employee ${empId}):`, fetchErr.message);
+          }
           const result = await payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
             empId,
             month,
             userId,
-            { source: 'payregister', arrearsSettlements: [] }
+            { source: 'payregister', arrearsSettlements, deductionSettlements }
           );
           if (result?.payslip) {
             const slip = result.payslip;
@@ -893,7 +910,14 @@ function recordToPayslip(record) {
     earnings: record.earnings && typeof record.earnings.toObject === 'function' ? record.earnings.toObject() : (record.earnings || {}),
     deductions: record.deductions && typeof record.deductions.toObject === 'function' ? record.deductions.toObject() : (record.deductions || {}),
     loanAdvance: record.loanAdvance && typeof record.loanAdvance.toObject === 'function' ? record.loanAdvance.toObject() : (record.loanAdvance || {}),
-    arrears: { arrearsAmount: Number(record.arrearsAmount) || 0, arrearsSettlements: [] },
+    arrears: record.arrears && typeof record.arrears === 'object'
+      ? (record.arrears.toObject ? record.arrears.toObject() : { ...record.arrears })
+      : { arrearsAmount: Number(record.arrearsAmount) || 0, arrearsSettlements: record.arrearsSettlements || [] },
+    manualDeductions: record.manualDeductions && typeof record.manualDeductions === 'object'
+      ? (record.manualDeductions.toObject ? record.manualDeductions.toObject() : { ...record.manualDeductions })
+      : { manualDeductionsAmount: Number(record.manualDeductionsAmount) || 0 },
+    manualDeductionsAmount: Number(record.manualDeductionsAmount) || 0,
+    arrearsAmount: Number(record.arrearsAmount) || 0,
     netSalary: Number(record.netSalary) || 0,
     roundOff: Number(record.roundOff) || 0,
   };

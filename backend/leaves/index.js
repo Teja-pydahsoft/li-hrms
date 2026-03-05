@@ -99,7 +99,7 @@ router.put('/od/:id/revoke', authorize('manager', 'hod', 'hr', 'sub_admin', 'sup
 router.put('/od/:id/outcome', odController.updateODOutcome);
 
 // Delete OD
-router.delete('/od/:id', authorize('sub_admin', 'super_admin'), odController.deleteOD);
+router.delete('/od/:id', authorize('employee', 'sub_admin', 'super_admin'), odController.deleteOD);
 
 // ==========================================
 // LEAVE REGISTER ROUTES
@@ -160,6 +160,9 @@ router.get('/pending-approvals', authorize('manager', 'hod', 'hr', 'sub_admin', 
 // Get leave statistics
 router.get('/stats', leaveController.getLeaveStats);
 
+// Dashboard counts (global or filtered) for superadmin
+router.get('/dashboard-stats', authorize('employee', 'manager', 'hod', 'hr', 'sub_admin', 'super_admin'), applyScopeFilter, leaveController.getDashboardStats);
+
 // Get approved records for a date (for conflict checking)
 router.get('/approved-records', leaveController.getApprovedRecordsForDate);
 
@@ -194,7 +197,7 @@ router.put('/:id/action', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_
 router.put('/:id/revoke', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), leaveController.revokeLeaveApproval);
 
 // Delete leave
-router.delete('/:id', authorize('sub_admin', 'super_admin'), leaveController.deleteLeave);
+router.delete('/:id', authorize('employee', 'sub_admin', 'super_admin'), leaveController.deleteLeave);
 
 // ==========================================
 // LEAVE SPLIT ROUTES

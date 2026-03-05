@@ -3,6 +3,10 @@ const PayrollRecord = require('../model/PayrollRecord');
 const Employee = require('../../employees/model/Employee');
 const Department = require('../../departments/model/Department');
 const leaveRegisterService = require('../../leaves/services/leaveRegisterService');
+const ArrearsIntegrationService = require('./arrearsIntegrationService');
+const DeductionIntegrationService = require('./deductionIntegrationService');
+const ArrearsRequest = require('../../arrears/model/ArrearsRequest');
+const DeductionRequest = require('../../manual-deductions/model/DeductionRequest');
 
 /**
  * PayrollBatch Service
@@ -182,13 +186,13 @@ class PayrollBatchService {
 
             await batch.save();
 
-            // When batch is completed: debit EL used in payroll from leave register and zero employee paidLeaves
+            // When batch is completed: debit EL used in payroll, then settle arrears and deductions
             if (newStatus === 'complete') {
-                const records = await PayrollRecord.find({
+                const elRecords = await PayrollRecord.find({
                     payrollBatchId: batch._id,
                     elUsedInPayroll: { $gt: 0 }
                 }).select('employeeId month elUsedInPayroll').lean();
-                for (const rec of records) {
+                for (const rec of elRecords) {
                     try {
                         await leaveRegisterService.addELUsedInPayroll(
                             rec.employeeId,
@@ -198,6 +202,76 @@ class PayrollBatchService {
                         );
                     } catch (err) {
                         console.error(`[PayrollBatch] EL used in payroll debit failed for employee ${rec.employeeId}:`, err.message);
+                    }
+                }
+
+                // Settle arrears and manual deductions for all payrolls in this batch (idempotent: only not-yet-settled)
+                const payrollRecords = await PayrollRecord.find({
+                    payrollBatchId: batch._id
+                }).select('_id employeeId month arrearsSettlements deductionSettlements').lean();
+
+                for (const pr of payrollRecords) {
+                    const payrollIdStr = pr._id.toString();
+                    const employeeIdStr = pr.employeeId?.toString?.() || pr.employeeId;
+                    const month = pr.month;
+                    if (!employeeIdStr || !month) continue;
+
+                    // Arrears: process only settlements not already applied for this payroll
+                    const arrearsList = Array.isArray(pr.arrearsSettlements) ? pr.arrearsSettlements : [];
+                    if (arrearsList.length > 0) {
+                        const toSettle = [];
+                        for (const s of arrearsList) {
+                            const arId = s.arrearId || s.id;
+                            if (!arId || !s.amount) continue;
+                            const ar = await ArrearsRequest.findById(arId).select('settlementHistory').lean();
+                            if (!ar) continue;
+                            const alreadySettled = (ar.settlementHistory || []).some(
+                                (h) => h.payrollId && h.payrollId.toString() === payrollIdStr
+                            );
+                            if (!alreadySettled) toSettle.push({ arrearId: arId, amount: s.amount });
+                        }
+                        if (toSettle.length > 0) {
+                            try {
+                                await ArrearsIntegrationService.processArrearsSettlements(
+                                    employeeIdStr,
+                                    month,
+                                    toSettle,
+                                    userId,
+                                    payrollIdStr
+                                );
+                            } catch (err) {
+                                console.error(`[PayrollBatch] Arrears settlement failed for payroll ${payrollIdStr}:`, err.message);
+                            }
+                        }
+                    }
+
+                    // Deductions: process only settlements not already applied for this payroll
+                    const deductionList = Array.isArray(pr.deductionSettlements) ? pr.deductionSettlements : [];
+                    if (deductionList.length > 0) {
+                        const toSettle = [];
+                        for (const s of deductionList) {
+                            const drId = s.deductionId || s.id;
+                            if (!drId || !s.amount) continue;
+                            const dr = await DeductionRequest.findById(drId).select('settlementHistory').lean();
+                            if (!dr) continue;
+                            const alreadySettled = (dr.settlementHistory || []).some(
+                                (h) => h.payrollId && h.payrollId.toString() === payrollIdStr
+                            );
+                            if (!alreadySettled) toSettle.push({ deductionId: drId, amount: s.amount });
+                        }
+                        if (toSettle.length > 0) {
+                            try {
+                                await DeductionIntegrationService.processDeductionSettlements(
+                                    employeeIdStr,
+                                    month,
+                                    toSettle,
+                                    userId,
+                                    payrollIdStr
+                                );
+                            } catch (err) {
+                                console.error(`[PayrollBatch] Deduction settlement failed for payroll ${payrollIdStr}:`, err.message);
+                            }
+                        }
                     }
                 }
             }

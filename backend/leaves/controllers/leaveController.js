@@ -17,6 +17,7 @@ const {
   checkJurisdiction
 } = require('../../shared/middleware/dataScopeMiddleware');
 const Department = require('../../departments/model/Department');
+const OD = require('../model/OD');
 const leaveRegisterService = require('../services/leaveRegisterService');
 const dateCycleService = require('../services/dateCycleService');
 
@@ -152,7 +153,7 @@ const getWorkflowSettings = async () => {
 // @access  Private
 exports.getLeaves = async (req, res) => {
   try {
-    const { status, employeeId, department, fromDate, toDate, page = 1, limit = 20 } = req.query;
+    const { status, employeeId, department, division, designation, fromDate, toDate, search, page = 1, limit = 20 } = req.query;
 
     // Multi-layered filter: Jurisdiction (Scope) AND Timing (Workflow)
     const scopeFilter = req.scopeFilter || { isActive: true };
@@ -169,8 +170,30 @@ exports.getLeaves = async (req, res) => {
     if (status) filter.status = status;
     if (employeeId) filter.employeeId = employeeId;
     if (department) filter.department = department;
+    if (division) filter.division_id = division;
+    if (designation) filter.designation = designation;
     if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+
+    // Search: by emp_no or employee name (resolve employee ids)
+    if (search && String(search).trim()) {
+      const searchStr = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(searchStr, 'i');
+      const matchedEmployees = await Employee.find({
+        $or: [
+          { emp_no: regex },
+          { employee_name: regex },
+          { first_name: regex },
+          { last_name: regex }
+        ]
+      }).select('_id').lean();
+      const ids = matchedEmployees.map(e => e._id);
+      if (ids.length > 0) {
+        filter.employeeId = { $in: ids };
+      } else {
+        filter.employeeId = { $in: [] };
+      }
+    }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -457,8 +480,11 @@ exports.applyLeave = async (req, res) => {
       if (['manager', 'hod'].includes(req.user.role) && employee) {
         // 1. Allow Self Application
         // Check if the target employee is the manager themselves
-        const isSelf = (req.user.employeeId && req.user.employeeId.toString() === employee._id.toString()) ||
-          (req.user.employeeRef && req.user.employeeRef.toString() === employee._id.toString());
+        // Some deployments store employeeId as the Mongo _id, others as emp_no.
+        const isSelf =
+          (req.user.employeeRef && req.user.employeeRef.toString() === employee._id.toString()) ||
+          (req.user.employeeId && req.user.employeeId.toString() === employee._id.toString()) ||
+          (req.user.employeeId && employee.emp_no && String(req.user.employeeId).trim() === String(employee.emp_no).trim());
 
         if (!isSelf) {
           // For non-employee roles, use User model (ensure full User with divisionMapping)
@@ -490,7 +516,7 @@ exports.applyLeave = async (req, res) => {
               const userStr = req.user._id?.toString();
               const userEmployeeIdStr = (req.user.employeeId || req.user.employeeRef)?.toString();
               if ((userStr && reportingManagerIds.includes(userStr)) ||
-                  (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
+                (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
                 isInScope = true;
                 console.log(`[Apply Leave] ✅ User ${req.user._id} is reporting manager for employee ${empNo}`);
               }
@@ -1149,7 +1175,7 @@ exports.getPendingApprovals = async (req, res) => {
       const roleVariants = [userRole];
       if (userRole === 'hr') roleVariants.push('final_authority');
       filter['$or'] = [
-        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants } } } },
+        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants }, status: 'pending' } } },
         { 'workflow.reportingManagerIds': req.user._id.toString() }
       ];
       const employeeIds = await getEmployeeIdsInScope(req.user);
@@ -1162,7 +1188,7 @@ exports.getPendingApprovals = async (req, res) => {
     }
     else {
       filter['$or'] = [
-        { 'workflow.approvalChain': { $elemMatch: { role: userRole } } },
+        { 'workflow.approvalChain': { $elemMatch: { role: userRole, status: 'pending' } } },
         { 'workflow.reportingManagerIds': req.user._id.toString() }
       ];
       filter.status = { $nin: ['approved', 'rejected', 'cancelled'] };
@@ -1798,11 +1824,15 @@ exports.deleteLeave = async (req, res) => {
       });
     }
 
-    // Only admin can delete
-    if (!['sub_admin', 'super_admin'].includes(req.user.role)) {
+    // Authorization: Admin can delete any, employee can delete their own if pending
+    const isAdmin = ['sub_admin', 'super_admin'].includes(req.user.role);
+    const isOwner = leave.appliedBy?.toString() === req.user._id.toString() ||
+      (req.user.employeeRef && leave.employeeId?.toString() === req.user.employeeRef.toString());
+
+    if (!isAdmin && !isOwner) {
       return res.status(403).json({
         success: false,
-        error: 'Not authorized to delete leave applications',
+        error: 'Not authorized to delete this leave application',
       });
     }
 
@@ -1906,6 +1936,98 @@ exports.getLeaveStats = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch leave statistics',
+    });
+  }
+};
+
+// @desc    Get dashboard counts for superadmin (all or filtered)
+// @route   GET /api/leaves/dashboard-stats
+// @access  Private (same as getLeaves - applyScopeFilter)
+// Query: search, division, department, designation. When absent = global counts; when present = filtered counts.
+exports.getDashboardStats = async (req, res) => {
+  try {
+    const { search, division, department, designation } = req.query;
+
+    const scopeFilter = req.scopeFilter || { isActive: true };
+    const workflowFilter = buildWorkflowVisibilityFilter(req.user);
+
+    const baseFilter = {
+      $and: [
+        scopeFilter,
+        workflowFilter,
+        { isActive: true }
+      ]
+    };
+
+    const leaveFilter = { ...baseFilter };
+    const odFilter = { ...baseFilter };
+
+    if (department) {
+      leaveFilter.department = department;
+      odFilter.department = department;
+    }
+    if (division) {
+      leaveFilter.division_id = division;
+      odFilter.division_id = division;
+    }
+    if (designation) {
+      leaveFilter.designation = designation;
+      odFilter.designation = designation;
+    }
+
+    if (search && String(search).trim()) {
+      const searchStr = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(searchStr, 'i');
+      const matchedEmployees = await Employee.find({
+        $or: [
+          { emp_no: regex },
+          { employee_name: regex },
+          { first_name: regex },
+          { last_name: regex }
+        ]
+      }).select('_id').lean();
+      const ids = matchedEmployees.map(e => e._id);
+      const idFilter = ids.length > 0 ? { $in: ids } : { $in: [] };
+      leaveFilter.employeeId = idFilter;
+      odFilter.employeeId = idFilter;
+    }
+
+    const pendingStatusFilter = { status: { $nin: ['approved', 'rejected', 'cancelled'] } };
+
+    const [
+      totalLeaves,
+      totalApprovedLeaves,
+      totalPendingLeaves,
+      totalODs,
+      totalApprovedODs,
+      totalPendingODs
+    ] = await Promise.all([
+      Leave.countDocuments(leaveFilter),
+      Leave.countDocuments({ ...leaveFilter, status: 'approved' }),
+      Leave.countDocuments({ ...leaveFilter, ...pendingStatusFilter }),
+      OD.countDocuments(odFilter),
+      OD.countDocuments({ ...odFilter, status: 'approved' }),
+      OD.countDocuments({ ...odFilter, ...pendingStatusFilter })
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalLeaves,
+        totalODs,
+        totalPendingLeaves,
+        totalPendingODs,
+        totalApprovedLeaves,
+        totalApprovedODs,
+        totalPending: totalPendingLeaves + totalPendingODs,
+        totalApproved: totalApprovedLeaves + totalApprovedODs
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch dashboard stats'
     });
   }
 };

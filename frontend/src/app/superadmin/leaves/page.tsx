@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { api, Department, Division, Designation } from '@/lib/api';
 import { auth } from '@/lib/auth';
@@ -373,9 +373,22 @@ export default function LeavesPage() {
   const [pendingODsTotal, setPendingODsTotal] = useState(0);
   const [pendingLeavesPage, setPendingLeavesPage] = useState(1);
   const [pendingODsPage, setPendingODsPage] = useState(1);
-  const pendingLimit = 20;
+  const [pendingLimit, setPendingLimit] = useState(20);
   const [loadingPending, setLoadingPending] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Pagination for Leaves and OD tabs (all requests list)
+  const PER_PAGE_OPTIONS = [10, 20, 50, 100];
+  const [leavesLimit, setLeavesLimit] = useState(20);
+  const [odsLimit, setODsLimit] = useState(20);
+  const [leavesPage, setLeavesPage] = useState(1);
+  const [leavesTotal, setLeavesTotal] = useState(0);
+  const [odsPage, setODsPage] = useState(1);
+  const [odsTotal, setODsTotal] = useState(0);
+
+  // Dashboard stats (global when no filter, filtered when filter present)
+  const [dashboardStats, setDashboardStats] = useState({ totalLeaves: 0, totalODs: 0, totalPending: 0, totalApproved: 0 });
+  const [loadingStats, setLoadingStats] = useState(true);
 
   // Dialog states
   const [showApplyDialog, setShowApplyDialog] = useState(false);
@@ -538,7 +551,12 @@ export default function LeavesPage() {
     loadTypes();
     loadEmployees();
     loadFilterData();
+    loadDashboardStats();
   }, []);
+
+  useEffect(() => {
+    loadDashboardStats();
+  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter]);
 
   useEffect(() => {
     if (activeTab !== 'pending') return;
@@ -547,21 +565,105 @@ export default function LeavesPage() {
     loadPendingData(1, 1);
   }, [activeTab, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, searchTerm]);
 
+  // Shared filters for Leaves and OD tabs (used for API calls)
+  const getLeavesODFilters = () => ({
+    search: searchTerm?.trim() || undefined,
+    department: selectedDepartmentFilter || undefined,
+    division: selectedDivisionFilter || undefined,
+    designation: selectedDesignationFilter || undefined,
+  });
+
+  const hasActiveFilter = !!(searchTerm?.trim() || selectedDivisionFilter || selectedDepartmentFilter || selectedDesignationFilter);
+
+  const loadDashboardStats = async () => {
+    setLoadingStats(true);
+    try {
+      const filters = hasActiveFilter ? getLeavesODFilters() : undefined;
+      const res = await api.getLeaveDashboardStats(filters);
+      const data = (res as any)?.data;
+      if ((res as any)?.success && data) {
+        setDashboardStats({
+          totalLeaves: data.totalLeaves ?? 0,
+          totalODs: data.totalODs ?? 0,
+          totalPending: data.totalPending ?? 0,
+          totalApproved: data.totalApproved ?? 0,
+        });
+      }
+    } catch {
+      // non-blocking
+    } finally {
+      setLoadingStats(false);
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
+    const filters = getLeavesODFilters();
     try {
       const [leavesRes, odsRes] = await Promise.all([
-        api.getLeaves({ limit: 50 }),
-        api.getODs({ limit: 50 }),
+        api.getLeaves({ ...filters, page: 1, limit: leavesLimit }),
+        api.getODs({ ...filters, page: 1, limit: odsLimit }),
       ]);
-      if (leavesRes.success) setLeaves(leavesRes.data || []);
-      if (odsRes.success) setODs(odsRes.data || []);
+      if (leavesRes.success) {
+        setLeaves(leavesRes.data || []);
+        setLeavesTotal((leavesRes as any).total ?? 0);
+        setLeavesPage(1);
+      }
+      if (odsRes.success) {
+        setODs(odsRes.data || []);
+        setODsTotal((odsRes as any).total ?? 0);
+        setODsPage(1);
+      }
     } catch (err: any) {
       toast.error(err.message || 'Failed to load data');
     } finally {
       setLoading(false);
     }
   };
+
+  const loadLeavesData = async (page: number, limitOverride?: number) => {
+    const limit = limitOverride ?? leavesLimit;
+    setLoading(true);
+    try {
+      const res = await api.getLeaves({ ...getLeavesODFilters(), page, limit });
+      if (res.success) {
+        setLeaves(res.data || []);
+        setLeavesTotal((res as any).total ?? 0);
+        setLeavesPage(page);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to load leaves');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadODsData = async (page: number, limitOverride?: number) => {
+    const limit = limitOverride ?? odsLimit;
+    setLoading(true);
+    try {
+      const res = await api.getODs({ ...getLeavesODFilters(), page, limit });
+      if (res.success) {
+        setODs(res.data || []);
+        setODsTotal((res as any).total ?? 0);
+        setODsPage(page);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to load OD requests');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // When filters/search change, refetch leaves and OD with page 1 (skip initial mount to avoid double fetch)
+  const filtersLoadedOnce = useRef(false);
+  useEffect(() => {
+    if (!filtersLoadedOnce.current) {
+      filtersLoadedOnce.current = true;
+      return;
+    }
+    loadData();
+  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter]);
 
   const getPendingFilters = () => ({
     search: searchTerm?.trim() || undefined,
@@ -570,14 +672,16 @@ export default function LeavesPage() {
     designation: selectedDesignationFilter || undefined,
   });
 
-  const loadPendingData = async (leavePage = pendingLeavesPage, odPage = pendingODsPage) => {
+  const loadPendingData = async (leavePage = pendingLeavesPage, odPage = pendingODsPage, limitOverride?: number) => {
     if (activeTab !== 'pending') return;
+    const limit = limitOverride ?? pendingLimit;
+    if (limitOverride != null) setPendingLimit(limitOverride);
     setLoadingPending(true);
     const filters = getPendingFilters();
     try {
       const [leavesRes, odsRes] = await Promise.all([
-        api.getPendingLeaveApprovals({ ...filters, page: leavePage, limit: pendingLimit }),
-        api.getPendingODApprovals({ ...filters, page: odPage, limit: pendingLimit }),
+        api.getPendingLeaveApprovals({ ...filters, page: leavePage, limit }),
+        api.getPendingODApprovals({ ...filters, page: odPage, limit }),
       ]);
       if (leavesRes.success) {
         setPendingLeaves(leavesRes.data || []);
@@ -903,6 +1007,7 @@ export default function LeavesPage() {
           showConfirmButton: false,
         });
         loadData();
+        loadDashboardStats();
         if (activeTab === 'pending') loadPendingData(pendingLeavesPage, pendingODsPage);
       } else {
         Swal.fire({
@@ -1405,13 +1510,20 @@ export default function LeavesPage() {
     return false;
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <Spinner />
-      </div>
-    );
-  }
+  // Skeleton for table rows (used when loading)
+  const TableSkeletonRows = ({ rows = 8, cols = 7 }: { rows?: number; cols?: number }) => (
+    <>
+      {Array.from({ length: rows }).map((_, i) => (
+        <tr key={i} className="animate-pulse">
+          {Array.from({ length: cols }).map((_, j) => (
+            <td key={j} className="px-4 py-3">
+              <div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-full max-w-[120px]" style={{ width: j === 0 ? '80%' : j === cols - 1 ? '60%' : undefined }} />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
 
   return (
     <div className="max-w-[1920px] mx-auto">
@@ -1456,7 +1568,7 @@ export default function LeavesPage() {
               <CalendarIcon />
             </div>
             <div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white">{leaves.length}</div>
+              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-slate-900 dark:text-white">{dashboardStats.totalLeaves}</div>}
               <div className="text-sm text-slate-500">Total Leaves</div>
             </div>
           </div>
@@ -1467,7 +1579,7 @@ export default function LeavesPage() {
               <BriefcaseIcon />
             </div>
             <div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white">{ods.length}</div>
+              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-slate-900 dark:text-white">{dashboardStats.totalODs}</div>}
               <div className="text-sm text-slate-500">Total ODs</div>
             </div>
           </div>
@@ -1479,7 +1591,7 @@ export default function LeavesPage() {
             </div>
             <div>
               <div className="text-2xl font-bold text-yellow-600">{totalPending}</div>
-              <div className="text-sm text-slate-500">Pending Approvals</div>
+              <div className="text-sm text-slate-500">Actions Required</div>
             </div>
           </div>
         </div>
@@ -1489,9 +1601,7 @@ export default function LeavesPage() {
               <CheckIcon />
             </div>
             <div>
-              <div className="text-2xl font-bold text-green-600">
-                {leaves.filter(l => l.status === 'approved').length + ods.filter(o => o.status === 'approved').length}
-              </div>
+              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-green-600">{dashboardStats.totalApproved}</div>}
               <div className="text-sm text-slate-500">Approved</div>
             </div>
           </div>
@@ -1510,7 +1620,7 @@ export default function LeavesPage() {
           >
             <span className="flex items-center gap-2">
               <CalendarIcon />
-              Leaves ({leaves.length})
+              Leaves ({loadingStats ? '…' : dashboardStats.totalLeaves})
             </span>
           </button>
           <button
@@ -1522,7 +1632,7 @@ export default function LeavesPage() {
           >
             <span className="flex items-center gap-2">
               <BriefcaseIcon />
-              On Duty ({ods.length})
+              On Duty ({loadingStats ? '…' : dashboardStats.totalODs})
             </span>
           </button>
           <button
@@ -1534,7 +1644,7 @@ export default function LeavesPage() {
           >
             <span className="flex items-center gap-2">
               <ClockIcon />
-              Pending Approvals ({totalPending})
+              Actions Required ({totalPending})
             </span>
           </button>
         </div>
@@ -1595,7 +1705,52 @@ export default function LeavesPage() {
       {/* Content */}
       <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         {activeTab === 'leaves' && (
-          <div className="overflow-x-auto">
+          <>
+            {/* Pagination at top for Leaves */}
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                {!loading && leavesTotal > 0 ? `${leavesTotal} total` : loading ? 'Loading…' : 'No records'}
+                {!loading && leavesTotal > 0 && ` · Page ${leavesPage} of ${Math.ceil(leavesTotal / leavesLimit) || 1}`}
+              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Per page</span>
+                <select
+                  value={leavesLimit}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setLeavesLimit(val);
+                    loadLeavesData(1, val);
+                  }}
+                  disabled={loading}
+                  className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm text-slate-700 dark:text-slate-300 disabled:opacity-50"
+                >
+                  {PER_PAGE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                {leavesTotal > leavesLimit && (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={leavesPage <= 1 || loading}
+                      onClick={() => loadLeavesData(leavesPage - 1)}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={leavesPage >= Math.ceil(leavesTotal / leavesLimit) || loading}
+                      onClick={() => loadLeavesData(leavesPage + 1)}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-slate-50 dark:bg-slate-900">
                 <tr>
@@ -1609,7 +1764,7 @@ export default function LeavesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {leaves.filter(applyFilters).map((leave) => (
+                {loading ? <TableSkeletonRows rows={10} cols={7} /> : leaves.map((leave) => (
                   <tr
                     key={leave._id}
                     className="hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors"
@@ -1643,7 +1798,7 @@ export default function LeavesPage() {
                     </td>
                   </tr>
                 ))}
-                {leaves.length === 0 && (
+                {!loading && leaves.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                       No leave applications found
@@ -1653,10 +1808,56 @@ export default function LeavesPage() {
               </tbody>
             </table>
           </div>
+        </>
         )}
 
         {activeTab === 'od' && (
-          <div className="overflow-x-auto">
+          <>
+            {/* Pagination at top for OD */}
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                {!loading && odsTotal > 0 ? `${odsTotal} total` : loading ? 'Loading…' : 'No records'}
+                {!loading && odsTotal > 0 && ` · Page ${odsPage} of ${Math.ceil(odsTotal / odsLimit) || 1}`}
+              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Per page</span>
+                <select
+                  value={odsLimit}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setODsLimit(val);
+                    loadODsData(1, val);
+                  }}
+                  disabled={loading}
+                  className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm text-slate-700 dark:text-slate-300 disabled:opacity-50"
+                >
+                  {PER_PAGE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                {odsTotal > odsLimit && (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={odsPage <= 1 || loading}
+                      onClick={() => loadODsData(odsPage - 1)}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={odsPage >= Math.ceil(odsTotal / odsLimit) || loading}
+                      onClick={() => loadODsData(odsPage + 1)}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-slate-50 dark:bg-slate-900">
                 <tr>
@@ -1670,7 +1871,7 @@ export default function LeavesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {ods.filter(applyFilters).map((od) => (
+                {loading ? <TableSkeletonRows rows={10} cols={7} /> : ods.map((od) => (
                   <tr
                     key={od._id}
                     className="hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors"
@@ -1704,7 +1905,7 @@ export default function LeavesPage() {
                     </td>
                   </tr>
                 ))}
-                {ods.length === 0 && (
+                {!loading && ods.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                       No OD applications found
@@ -1714,21 +1915,42 @@ export default function LeavesPage() {
               </tbody>
             </table>
           </div>
+        </>
         )}
 
         {activeTab === 'pending' && (
           <div className="p-4 space-y-6">
-            {loadingPending && (
-              <div className="flex justify-center py-8">
-                <Spinner />
+            {/* Pending: Per page & summary */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                {!loadingPending ? `${pendingLeavesTotal + pendingODsTotal} total pending` : 'Loading…'}
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Per page</span>
+                <select
+                  value={pendingLimit}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setPendingLimit(val);
+                    setPendingLeavesPage(1);
+                    setPendingODsPage(1);
+                    loadPendingData(1, 1, val);
+                  }}
+                  disabled={loadingPending}
+                  className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm disabled:opacity-50"
+                >
+                  {PER_PAGE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
               </div>
-            )}
+            </div>
 
             {/* Pending Leaves */}
             <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-blue-700 dark:bg-blue-400/20 dark:text-blue-300 mb-3 border border-blue-200/60 dark:border-blue-500/30">
                 <CalendarIcon />
-                Pending Leaves ({pendingLeavesTotal})
+                Pending Leaves ({loadingPending ? '…' : pendingLeavesTotal})
               </h3>
 
               {/* Desktop: Table */}
@@ -1745,7 +1967,9 @@ export default function LeavesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {!loadingPending && pendingLeaves.length === 0 && (
+                    {loadingPending ? <TableSkeletonRows rows={6} cols={6} /> : (
+                      <>
+                    {pendingLeaves.length === 0 && (
                       <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No pending leaves</td></tr>
                     )}
                     {pendingLeaves.map((leave) => (
@@ -1764,6 +1988,8 @@ export default function LeavesPage() {
                         </td>
                       </tr>
                     ))}
+                      </>
+                    )}
                   </tbody>
                 </table>
                 {pendingLeavesTotal > pendingLimit && (
@@ -1779,8 +2005,19 @@ export default function LeavesPage() {
 
               {/* Mobile: Cards */}
               <div className="md:hidden space-y-3">
+                {loadingPending && (
+                  <>
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-700 dark:bg-slate-900/50 animate-pulse">
+                        <div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-3/4 mb-2" />
+                        <div className="h-3 bg-slate-200 dark:bg-slate-600 rounded w-1/2 mb-2" />
+                        <div className="h-3 bg-slate-200 dark:bg-slate-600 rounded w-1/3" />
+                      </div>
+                    ))}
+                  </>
+                )}
                 {!loadingPending && pendingLeaves.length === 0 && <div className="text-center py-6 text-slate-500 text-sm">No pending leaves</div>}
-                {pendingLeaves.map((leave) => (
+                {!loadingPending && pendingLeaves.map((leave) => (
                   <div key={leave._id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
@@ -1796,7 +2033,7 @@ export default function LeavesPage() {
                     </div>
                   </div>
                 ))}
-                {pendingLeavesTotal > pendingLimit && (
+                {!loadingPending && pendingLeavesTotal > pendingLimit && (
                   <div className="flex items-center justify-between pt-2">
                     <span className="text-xs text-slate-500">Page {pendingLeavesPage} of {Math.ceil(pendingLeavesTotal / pendingLimit) || 1}</span>
                     <div className="flex gap-2">
@@ -1812,7 +2049,7 @@ export default function LeavesPage() {
             <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-purple-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-purple-700 dark:bg-purple-400/20 dark:text-purple-300 mb-3 border border-purple-200/60 dark:border-purple-500/30">
                 <BriefcaseIcon />
-                Pending ODs ({pendingODsTotal})
+                Pending ODs ({loadingPending ? '…' : pendingODsTotal})
               </h3>
 
               {/* Desktop: Table */}
@@ -1830,7 +2067,9 @@ export default function LeavesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {!loadingPending && pendingODs.length === 0 && (
+                    {loadingPending ? <TableSkeletonRows rows={6} cols={7} /> : (
+                      <>
+                    {pendingODs.length === 0 && (
                       <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">No pending ODs</td></tr>
                     )}
                     {pendingODs.map((od) => (
@@ -1850,6 +2089,8 @@ export default function LeavesPage() {
                         </td>
                       </tr>
                     ))}
+                      </>
+                    )}
                   </tbody>
                 </table>
                 {pendingODsTotal > pendingLimit && (

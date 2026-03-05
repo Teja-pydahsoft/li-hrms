@@ -17,6 +17,7 @@ router.post('/', authorize('hr', 'sub_admin', 'super_admin'), deductionControlle
 
 router.put('/:id/edit', authorize('sub_admin', 'super_admin'), deductionController.editDeduction);
 router.put('/:id/transition', authorize('sub_admin', 'super_admin'), deductionController.transitionDeduction);
+router.put('/:id/submit', authorize('hr', 'sub_admin', 'super_admin'), deductionController.submitForHodApproval);
 router.put('/:id/cancel', deductionController.cancelDeduction);
 router.put('/:id/action', authorize('hod', 'hr', 'sub_admin', 'super_admin'), deductionController.processDeductionAction);
 router.post('/:id/settle', authorize('hr', 'sub_admin', 'super_admin'), deductionController.processSettlement);

@@ -15,7 +15,7 @@ const ALLOWED_FORMULA_VARS = new Set([
   'allowancesCumulative', 'deductionsCumulative', 'statutoryCumulative',
   'emp_no', 'name', 'designation', 'department', 'division',
   'attendanceDeduction', 'permissionDeduction', 'leaveDeduction', 'otherDeductions',
-  'arrearsAmount', 'manualDeductionsAmount', 'manual_deductions_amount',
+  'arrearsAmount', 'arrears', 'manualDeductionsAmount', 'manual_deductions_amount', 'manual_deductions',
   'extraDays', 'paidLeaveDays', 'odDays', 'absentDays', 'weeklyOffs', 'holidays',
   'perDayBasicPay', 'basic_pay', 'lopDays', 'elUsedInPayroll', 'attendanceDeductionDays',
 ]);
@@ -60,8 +60,10 @@ function getContextFromPayslip(payslip) {
     permissionDeduction: num(ded.permissionDeduction),
     leaveDeduction: num(ded.leaveDeduction),
     arrearsAmount: num(arrears.arrearsAmount ?? payslip.arrearsAmount),
+    arrears: num(arrears.arrearsAmount ?? payslip.arrearsAmount),
     manualDeductionsAmount: num(payslip.manualDeductions?.manualDeductionsAmount ?? payslip.manualDeductionsAmount ?? 0),
     manual_deductions_amount: num(payslip.manualDeductions?.manualDeductionsAmount ?? payslip.manualDeductionsAmount ?? 0),
+    manual_deductions: num(payslip.manualDeductions?.manualDeductionsAmount ?? payslip.manualDeductionsAmount ?? 0),
     extraDays: num(att.extraDays),
     paidLeaveDays: num(att.paidLeaveDays),
     odDays: num(att.odDays),
@@ -184,7 +186,20 @@ function getValueByPath(obj, path) {
     if (val == null) return '';
     val = val[p];
   }
-  if (val === undefined || val === null) return '';
+  if (val === undefined || val === null) {
+    // Fallbacks so field columns work when payslip has top-level only (e.g. from DB)
+    if (trimmed === 'manualDeductions.manualDeductionsAmount') {
+      const fallback = obj?.manualDeductionsAmount ?? obj?.manualDeductions?.manualDeductionsAmount;
+      const n = Number(fallback);
+      return Number.isFinite(n) ? n : 0;
+    }
+    if (trimmed === 'arrears.arrearsAmount') {
+      const fallback = obj?.arrearsAmount ?? obj?.arrears?.arrearsAmount;
+      const n = Number(fallback);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return '';
+  }
   if (typeof val === 'number') return val;
   if (typeof val === 'object' && val !== null && !Array.isArray(val)) return '';
   return val;
@@ -196,7 +211,8 @@ function getValueByPath(obj, path) {
  * - FIELD: value is provided by the service and controller — getValueByPath(payslip, col.field).
  *   The payslip is built by the controller from PayrollRecord (DB), which is filled by the payroll calculation steps.
  * - FORMULA: value uses before columns (earlier columns in this list) plus context from the payslip.
- *   columnContext starts as getContextFromPayslip(payslip); after each column we add that column's value by header key so the next formula can reference it (e.g. "Basic Pay" -> basic_pay).
+ *   Dynamically, every column header becomes a formula variable: after each column we set
+ *   columnContext[headerToKey(header)] = value, so later formulas can reference it (e.g. "DD Manual" -> dd_manual, "Basic Pay" -> basic_pay).
  */
 function buildRowFromOutputColumns(payslip, outputColumns, serialNo = null) {
   const row = {};

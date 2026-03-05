@@ -28,7 +28,7 @@ class DeductionService {
           remainingAmount: amount,
           reason,
           createdBy: userId,
-          status: 'draft',
+          status: 'pending_hod',
         });
         await deduction.save();
         return deduction.populate('employee createdBy');
@@ -57,7 +57,7 @@ class DeductionService {
         type: 'incremental',
         createdBy: userId,
         remainingAmount: data.totalAmount,
-        status: 'draft',
+        status: 'pending_hod',
       });
 
       await deduction.save();

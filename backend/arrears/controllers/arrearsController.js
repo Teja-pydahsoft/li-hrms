@@ -870,7 +870,7 @@ exports.getArrearsForPayroll = async (req, res) => {
     // All approved/partially_settled arrears with remaining amount should be shown
 
     const arrears = await ArrearsRequest.find(query)
-      .populate('employee', 'emp_no employee_name first_name last_name department_id')
+      .populate('employee', 'emp_no employee_name first_name last_name department_id division_id')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 

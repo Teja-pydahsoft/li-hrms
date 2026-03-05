@@ -356,27 +356,27 @@ exports.transitionDeduction = async (req, res) => {
 exports.processDeductionAction = async (req, res) => {
   try {
     const { action, approved, modifiedAmount, comments } = req.body;
-    const User = require('../../users/model/User');
-    const user = await User.findById(uid(req));
-    if (!user) return res.status(400).json({ success: false, message: 'User not found' });
     const deduction = await DeductionRequest.findById(req.params.id);
     if (!deduction) return res.status(404).json({ success: false, message: 'Deduction not found' });
+    // Any authorized user (hod, hr, sub_admin, super_admin) can approve at any level; deduction moves one step per action
     let approvalLevel = null;
-    if (deduction.status === 'pending_hod' && (user.role === 'hod' || user.roles?.includes('hod'))) approvalLevel = 'hod';
-    else if (deduction.status === 'pending_hr' && (user.role === 'hr' || user.roles?.includes('hr'))) approvalLevel = 'hr';
-    else if (deduction.status === 'pending_admin' && ['super_admin', 'sub_admin'].includes(user.role)) approvalLevel = 'admin';
-    else return res.status(403).json({ success: false, message: 'You do not have permission to approve this deduction at current status' });
+    if (deduction.status === 'pending_hod') approvalLevel = 'hod';
+    else if (deduction.status === 'pending_hr') approvalLevel = 'hr';
+    else if (deduction.status === 'pending_admin') approvalLevel = 'admin';
+    else return res.status(403).json({ success: false, message: 'Deduction is not in a pending approval state' });
+    const userId = uid(req);
+    const commentStr = (comments != null && comments !== '') ? String(comments).trim() : '';
     if (approvalLevel === 'hod') {
-      const result = await DeductionService.hodApprove(req.params.id, approved, comments || '', req.user.id);
-      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} by HOD`, data: result });
+      const result = await DeductionService.hodApprove(req.params.id, approved, commentStr, userId);
+      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} (→ ${approved ? 'Pending HR' : 'Rejected'})`, data: result });
     }
     if (approvalLevel === 'hr') {
-      const result = await DeductionService.hrApprove(req.params.id, approved, comments || '', req.user.id);
-      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} by HR`, data: result });
+      const result = await DeductionService.hrApprove(req.params.id, approved, commentStr, userId);
+      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} (→ ${approved ? 'Pending Admin' : 'Rejected'})`, data: result });
     }
     if (approvalLevel === 'admin') {
-      const result = await DeductionService.adminApprove(req.params.id, approved, modifiedAmount, comments || '', req.user.id);
-      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} by Admin`, data: result });
+      const result = await DeductionService.adminApprove(req.params.id, approved, modifiedAmount, commentStr, userId);
+      return res.status(200).json({ success: true, message: `Deduction ${approved ? 'approved' : 'rejected'} (→ ${approved ? 'Approved' : 'Rejected'})`, data: result });
     }
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -433,7 +433,7 @@ exports.getDeductionsForPayroll = async (req, res) => {
     const query = { status: { $in: ['approved', 'partially_settled'] }, remainingAmount: { $gt: 0 } };
     if (employeeId) query.employee = employeeId;
     const deductions = await DeductionRequest.find(query)
-      .populate('employee', 'emp_no employee_name first_name last_name department_id')
+      .populate('employee', 'emp_no employee_name first_name last_name department_id division_id')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
     res.status(200).json({ success: true, count: deductions.length, data: deductions });

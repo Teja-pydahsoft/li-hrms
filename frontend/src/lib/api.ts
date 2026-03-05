@@ -1914,16 +1914,32 @@ export const api = {
     return apiRequest<any>(`/leaves/my${query}`, { method: 'GET' });
   },
 
-  // Get all leaves (admin)
-  getLeaves: async (filters?: { status?: string; employeeId?: string; department?: string; page?: number; limit?: number }) => {
+  // Get all leaves (admin) - supports pagination, search, division, designation
+  getLeaves: async (filters?: { status?: string; employeeId?: string; department?: string; division?: string; designation?: string; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.status) params.append('status', filters.status);
     if (filters?.employeeId) params.append('employeeId', filters.employeeId);
     if (filters?.department) params.append('department', filters.department);
-    if (filters?.page) params.append('page', String(filters.page));
-    if (filters?.limit) params.append('limit', String(filters.limit));
+    if (filters?.division) params.append('division', filters.division);
+    if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.search) params.append('search', filters.search);
+    if (filters?.fromDate) params.append('fromDate', filters.fromDate);
+    if (filters?.toDate) params.append('toDate', filters.toDate);
+    if (filters?.page != null) params.append('page', String(filters.page));
+    if (filters?.limit != null) params.append('limit', String(filters.limit));
     const query = params.toString() ? `?${params.toString()}` : '';
     return apiRequest<any>(`/leaves${query}`, { method: 'GET' });
+  },
+
+  // Dashboard stats (global or filtered) for superadmin cards
+  getLeaveDashboardStats: async (filters?: { search?: string; division?: string; department?: string; designation?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.search) params.append('search', filters.search);
+    if (filters?.division) params.append('division', filters.division);
+    if (filters?.department) params.append('department', filters.department);
+    if (filters?.designation) params.append('designation', filters.designation);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return apiRequest<{ data: { totalLeaves: number; totalODs: number; totalPending: number; totalApproved: number } }>(`/leaves/dashboard-stats${query}`, { method: 'GET' });
   },
 
   // Get single leave
@@ -2176,14 +2192,19 @@ export const api = {
     return apiRequest<any>(`/leaves/od/my${query}`, { method: 'GET' });
   },
 
-  // Get all ODs (admin)
-  getODs: async (filters?: { status?: string; employeeId?: string; department?: string; page?: number; limit?: number }) => {
+  // Get all ODs (admin) - supports pagination, search, division, designation
+  getODs: async (filters?: { status?: string; employeeId?: string; department?: string; division?: string; designation?: string; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.status) params.append('status', filters.status);
     if (filters?.employeeId) params.append('employeeId', filters.employeeId);
     if (filters?.department) params.append('department', filters.department);
-    if (filters?.page) params.append('page', String(filters.page));
-    if (filters?.limit) params.append('limit', String(filters.limit));
+    if (filters?.division) params.append('division', filters.division);
+    if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.search) params.append('search', filters.search);
+    if (filters?.fromDate) params.append('fromDate', filters.fromDate);
+    if (filters?.toDate) params.append('toDate', filters.toDate);
+    if (filters?.page != null) params.append('page', String(filters.page));
+    if (filters?.limit != null) params.append('limit', String(filters.limit));
     const query = params.toString() ? `?${params.toString()}` : '';
     return apiRequest<any>(`/leaves/od${query}`, { method: 'GET' });
   },
@@ -3507,6 +3528,8 @@ export const api = {
     method: 'PUT',
     body: JSON.stringify({ approved, comments, modifiedAmount }),
   }),
+  submitDeductionForApproval: async (id: string) => apiRequest<any>(`/manual-deductions/${id}/submit`, { method: 'PUT' }),
+  cancelDeduction: async (id: string) => apiRequest<any>(`/manual-deductions/${id}/cancel`, { method: 'PUT' }),
   revokeDeductionApproval: async (id: string, reason?: string) => apiRequest<any>(`/manual-deductions/${id}/revoke`, { method: 'PUT', body: JSON.stringify({ reason }) }),
   getDeductionStats: async () => apiRequest<any>('/manual-deductions/stats/summary', { method: 'GET' }),
   editDeduction: async (id: string, data: { startMonth?: string; endMonth?: string; monthlyAmount?: number; totalAmount?: number; reason?: string }) =>

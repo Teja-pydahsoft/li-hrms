@@ -63,6 +63,7 @@ export function ManualDeductionsContent() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [bulkRejecting, setBulkRejecting] = useState(false);
 
   // Bulk create
   const [divisions, setDivisions] = useState<any[]>([]);
@@ -182,7 +183,8 @@ export function ManualDeductionsContent() {
   const getEmployeeName = (emp: any) => emp?.employee_name || (emp?.first_name && emp?.last_name ? `${emp.first_name} ${emp.last_name}` : emp?.first_name) || emp?.emp_no || '—';
 
   const pendingStatuses = ['pending_hod', 'pending_hr', 'pending_admin'];
-  const selectableFiltered = filtered.filter((d) => pendingStatuses.includes(d.status));
+  const actionableStatuses = ['draft', ...pendingStatuses];
+  const selectableFiltered = filtered.filter((d) => actionableStatuses.includes(d.status));
   const selectedSelectable = selectableFiltered.filter((d) => selectedIds.has(d._id));
   const toggleSelection = (id: string) => {
     setSelectedIds((prev) => {
@@ -206,21 +208,34 @@ export function ManualDeductionsContent() {
     el.indeterminate = some && !all;
   }, [selectedSelectable.length, selectableFiltered.length]);
   const handleBulkApprove = async () => {
-    const ids = Array.from(selectedIds).filter((id) => {
-      const d = deductions.find((x) => x._id === id);
-      return d && pendingStatuses.includes(d.status);
-    });
-    if (ids.length === 0) {
-      toast.warn('Select at least one pending request to approve');
+    const selected = Array.from(selectedIds)
+      .map((id) => deductions.find((x) => x._id === id))
+      .filter((d): d is Deduction => !!d && actionableStatuses.includes(d.status));
+    if (selected.length === 0) {
+      toast.warn('Select at least one draft or pending request to approve to next level');
       return;
     }
     setBulkApproving(true);
     try {
-      const res = await api.bulkApproveDeductions(ids) as { approved?: number; failed?: number };
-      const approved = res?.approved ?? 0;
-      const failed = res?.failed ?? 0;
+      const draftIds = selected.filter((d) => d.status === 'draft').map((d) => d._id);
+      const pendingIds = selected.filter((d) => pendingStatuses.includes(d.status)).map((d) => d._id);
+      let approved = 0;
+      let failed = 0;
+      for (const id of draftIds) {
+        try {
+          await api.submitDeductionForApproval(id);
+          approved += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (pendingIds.length > 0) {
+        const res = await api.bulkApproveDeductions(pendingIds) as { approved?: number; failed?: number };
+        approved += res?.approved ?? 0;
+        failed += res?.failed ?? 0;
+      }
       if (approved) {
-        toast.success(`${approved} request(s) approved`);
+        toast.success(`${approved} request(s) approved / submitted to next level`);
         setSelectedIds(new Set());
         loadData();
       }
@@ -229,6 +244,43 @@ export function ManualDeductionsContent() {
       toast.error(e?.message || 'Bulk approve failed');
     } finally {
       setBulkApproving(false);
+    }
+  };
+
+  const handleBulkReject = async () => {
+    const selected = Array.from(selectedIds)
+      .map((id) => deductions.find((x) => x._id === id))
+      .filter((d): d is Deduction => !!d && actionableStatuses.includes(d.status));
+    if (selected.length === 0) {
+      toast.warn('Select at least one draft or pending request to reject');
+      return;
+    }
+    setBulkRejecting(true);
+    try {
+      let done = 0;
+      let failed = 0;
+      for (const d of selected) {
+        try {
+          if (d.status === 'draft') {
+            await api.cancelDeduction(d._id);
+          } else {
+            await api.processDeductionAction(d._id, false);
+          }
+          done += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (done) {
+        toast.success(`${done} request(s) rejected / cancelled`);
+        setSelectedIds(new Set());
+        loadData();
+      }
+      if (failed) toast.error(`${failed} failed`);
+    } catch (e: any) {
+      toast.error(e?.message || 'Bulk reject failed');
+    } finally {
+      setBulkRejecting(false);
     }
   };
 
@@ -406,15 +458,25 @@ export function ManualDeductionsContent() {
                 <button
                   type="button"
                   onClick={handleBulkApprove}
-                  disabled={bulkApproving || selectedSelectable.length === 0}
+                  disabled={bulkApproving || bulkRejecting || selectedSelectable.length === 0}
                   className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold uppercase disabled:opacity-50 disabled:pointer-events-none"
-                  title={selectedSelectable.length === 0 ? 'Select one or more pending rows below' : `Approve ${selectedSelectable.length} selected`}
+                  title={selectedSelectable.length === 0 ? 'Select one or more rows below' : `Approve ${selectedSelectable.length} to next level`}
                 >
                   {bulkApproving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                  Bulk approve ({selectedSelectable.length} selected)
+                  Approve to next level ({selectedSelectable.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkReject}
+                  disabled={bulkApproving || bulkRejecting || selectedSelectable.length === 0}
+                  className="inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 text-xs font-bold uppercase disabled:opacity-50 disabled:pointer-events-none"
+                  title={selectedSelectable.length === 0 ? 'Select one or more rows below' : `Reject ${selectedSelectable.length} selected`}
+                >
+                  {bulkRejecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                  Reject selected ({selectedSelectable.length})
                 </button>
                 {selectedSelectable.length === 0 && (
-                  <span className="text-xs text-slate-500 dark:text-slate-400">Select pending row(s) above, then click Bulk approve</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Select draft or pending row(s), then use Approve / Reject</span>
                 )}
               </>
             )}
@@ -452,7 +514,7 @@ export function ManualDeductionsContent() {
                         checked={selectedSelectable.length === selectableFiltered.length && selectableFiltered.length > 0}
                         onChange={toggleSelectAll}
                         className="rounded border-slate-300"
-                        title={selectedSelectable.length === 0 ? 'Select all pending' : selectedSelectable.length === selectableFiltered.length ? 'Deselect all' : 'Select all pending'}
+                        title={selectedSelectable.length === 0 ? 'Select all (draft/pending)' : selectedSelectable.length === selectableFiltered.length ? 'Deselect all' : 'Select all'}
                       />
                     )}
                   </th>
@@ -468,12 +530,13 @@ export function ManualDeductionsContent() {
                 {filtered.map((d) => (
                   <tr key={d._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <td className="px-4 py-4">
-                      {pendingStatuses.includes(d.status) && (
+                      {actionableStatuses.includes(d.status) && (
                         <input
                           type="checkbox"
                           checked={selectedIds.has(d._id)}
                           onChange={() => toggleSelection(d._id)}
                           className="rounded border-slate-300"
+                          title={d.status === 'draft' ? 'Select to submit or cancel' : 'Select to approve or reject'}
                         />
                       )}
                     </td>
@@ -541,19 +604,31 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
   }, [deductionId]);
 
   const pendingStatuses = ['pending_hod', 'pending_hr', 'pending_admin'];
-  const canAct = deduction && pendingStatuses.includes(deduction.status);
+  const actionableStatuses = ['draft', ...pendingStatuses];
+  const canAct = deduction && actionableStatuses.includes(deduction.status);
+  const isDraft = deduction?.status === 'draft';
 
   const handleAction = async (approved: boolean) => {
     if (!deductionId || actionLoading) return;
     const comments = actionComment.trim() || undefined;
     setActionLoading(true);
     try {
-      await api.processDeductionAction(deductionId, approved, comments);
-      toast.success(approved ? 'Deduction approved' : 'Deduction rejected');
+      if (isDraft) {
+        if (approved) {
+          await api.submitDeductionForApproval(deductionId);
+          toast.success('Submitted for HOD approval');
+        } else {
+          await api.cancelDeduction(deductionId);
+          toast.success('Deduction cancelled');
+        }
+      } else {
+        await api.processDeductionAction(deductionId, approved, comments);
+        toast.success(approved ? 'Approved — moved to next level' : 'Deduction rejected');
+      }
       onUpdate();
       onClose();
     } catch (e: any) {
-      toast.error(e?.message || (approved ? 'Approve failed' : 'Reject failed'));
+      toast.error(e?.message || (approved ? 'Action failed' : 'Reject failed'));
     } finally {
       setActionLoading(false);
     }
@@ -584,16 +659,49 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Status:</span> {getStatusLabel(deduction.status)}</p>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Reason:</span> {deduction.reason || '—'}</p>
 
+              {/* Approval history: HOD → HR → Admin with comments */}
+              {(deduction.hodApproval?.approved != null || deduction.hrApproval?.approved != null || deduction.adminApproval?.approved != null) && (
+                <div className="pt-4 mt-4 border-t border-slate-200 dark:border-slate-700 space-y-3">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Approval history</h3>
+                  {deduction.hodApproval?.approved != null && (
+                    <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3 text-xs">
+                      <p className="font-semibold text-slate-700 dark:text-slate-300">HOD</p>
+                      <p className="text-slate-600 dark:text-slate-400">{deduction.hodApproval.approved ? 'Approved' : 'Rejected'}{deduction.hodApproval.approvedAt ? ` · ${format(new Date(deduction.hodApproval.approvedAt), 'dd MMM yyyy, HH:mm')}` : ''}</p>
+                      {(deduction.hodApproval as any).approvedBy?.name && <p className="text-slate-500 dark:text-slate-400">By: {(deduction.hodApproval as any).approvedBy.name}</p>}
+                      {(deduction.hodApproval as any).comments && <p className="mt-1 text-slate-600 dark:text-slate-300 italic">{(deduction.hodApproval as any).comments}</p>}
+                    </div>
+                  )}
+                  {deduction.hrApproval?.approved != null && (
+                    <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3 text-xs">
+                      <p className="font-semibold text-slate-700 dark:text-slate-300">HR</p>
+                      <p className="text-slate-600 dark:text-slate-400">{deduction.hrApproval.approved ? 'Approved' : 'Rejected'}{deduction.hrApproval.approvedAt ? ` · ${format(new Date(deduction.hrApproval.approvedAt), 'dd MMM yyyy, HH:mm')}` : ''}</p>
+                      {(deduction.hrApproval as any).approvedBy?.name && <p className="text-slate-500 dark:text-slate-400">By: {(deduction.hrApproval as any).approvedBy.name}</p>}
+                      {(deduction.hrApproval as any).comments && <p className="mt-1 text-slate-600 dark:text-slate-300 italic">{(deduction.hrApproval as any).comments}</p>}
+                    </div>
+                  )}
+                  {deduction.adminApproval?.approved != null && (
+                    <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3 text-xs">
+                      <p className="font-semibold text-slate-700 dark:text-slate-300">Admin</p>
+                      <p className="text-slate-600 dark:text-slate-400">{deduction.adminApproval.approved ? 'Approved' : 'Rejected'}{deduction.adminApproval.approvedAt ? ` · ${format(new Date(deduction.adminApproval.approvedAt), 'dd MMM yyyy, HH:mm')}` : ''}</p>
+                      {(deduction.adminApproval as any).approvedBy?.name && <p className="text-slate-500 dark:text-slate-400">By: {(deduction.adminApproval as any).approvedBy.name}</p>}
+                      {(deduction.adminApproval as any).comments && <p className="mt-1 text-slate-600 dark:text-slate-300 italic">{(deduction.adminApproval as any).comments}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {canAct && (
                 <div className="pt-4 mt-4 border-t border-slate-200 dark:border-slate-700 space-y-3">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</h3>
-                  <textarea
-                    value={actionComment}
-                    onChange={(e) => setActionComment(e.target.value)}
-                    placeholder="Comment (optional) — e.g. rejection reason"
-                    rows={2}
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-3 py-2 text-sm resize-none"
-                  />
+                  {!isDraft && (
+                    <textarea
+                      value={actionComment}
+                      onChange={(e) => setActionComment(e.target.value)}
+                      placeholder="Comment (optional) — e.g. rejection reason"
+                      rows={2}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-3 py-2 text-sm resize-none"
+                    />
+                  )}
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
@@ -602,7 +710,7 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
                       className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 text-sm font-semibold disabled:opacity-50"
                     >
                       {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                      Approve
+                      {isDraft ? 'Submit for approval' : 'Approve (next level)'}
                     </button>
                     <button
                       type="button"
@@ -611,7 +719,7 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
                       className="inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-5 py-2.5 text-sm font-semibold disabled:opacity-50"
                     >
                       <XCircle className="h-4 w-4" />
-                      Reject
+                      {isDraft ? 'Cancel' : 'Reject'}
                     </button>
                   </div>
                 </div>

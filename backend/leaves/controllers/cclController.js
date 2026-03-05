@@ -619,7 +619,7 @@ exports.getPendingApprovals = async (req, res) => {
       if (userRole === 'hr') roleVariants.push('final_authority');
 
       filter['$or'] = [
-        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants } } } },
+        { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants }, status: 'pending' } } },
         { 'workflow.reportingManagerIds': req.user._id.toString() }
       ];
 
@@ -627,7 +627,10 @@ exports.getPendingApprovals = async (req, res) => {
       filter.employeeId = employeeIds.length > 0 ? { $in: employeeIds } : { $in: [] };
     } else {
       // Check if user is a reporting manager even if they don't have an admin role
-      filter['workflow.reportingManagerIds'] = req.user._id.toString();
+      filter['$or'] = [
+        { 'workflow.approvalChain': { $elemMatch: { role: userRole, status: 'pending' } } },
+        { 'workflow.reportingManagerIds': req.user._id.toString() }
+      ];
     }
 
     const ccls = await CCLRequest.find(filter)

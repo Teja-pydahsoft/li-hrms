@@ -27,6 +27,7 @@ const { createISTDate, getPayrollDateRange } = require('../../shared/utils/dateU
 const outputColumnService = require('./outputColumnService');
 const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
 const DeductionIntegrationService = require('./deductionIntegrationService');
+const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
 
 /** Extract identifier-like variable names from a formula string (for demand-driven service resolution). */
 function extractFormulaVariableNames(formula) {
@@ -463,6 +464,47 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     return v;
   }
 
+  // arrears.* — always from service (or options.arrearsSettlements when provided)
+  if (path.startsWith('arrears.')) {
+    const arrearsSettlements = options.arrearsSettlements;
+    let arrearsAmount = 0;
+    if (arrearsSettlements && arrearsSettlements.length > 0) {
+      arrearsAmount = arrearsSettlements.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    } else {
+      try {
+        const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
+        arrearsAmount = (pendingArrears || []).reduce((sum, ar) => sum + (ar.remainingAmount || 0), 0);
+      } catch (e) {
+        arrearsAmount = 0;
+      }
+    }
+    arrearsAmount = Math.round(arrearsAmount * 100) / 100;
+    if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
+    record.arrears.arrearsAmount = arrearsAmount;
+    if (arrearsSettlements && arrearsSettlements.length > 0) record.arrears.arrearsSettlements = arrearsSettlements;
+    return path === 'arrears.arrearsAmount' ? arrearsAmount : arrearsAmount;
+  }
+
+  // manualDeductions.* / manualDeductionsAmount — always from service (or options.deductionSettlements when provided)
+  if (path.startsWith('manualDeductions.') || path === 'manualDeductionsAmount') {
+    const deductionSettlements = options.deductionSettlements;
+    let manualDeductionsAmount = 0;
+    if (deductionSettlements && deductionSettlements.length > 0) {
+      manualDeductionsAmount = deductionSettlements.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    } else {
+      try {
+        const pending = await DeductionPayrollIntegrationService.getPendingDeductionsForPayroll(employeeId);
+        manualDeductionsAmount = (pending || []).reduce((sum, d) => sum + (d.remainingAmount || 0), 0);
+      } catch (e) {
+        manualDeductionsAmount = 0;
+      }
+    }
+    if (!record.manualDeductions) record.manualDeductions = { manualDeductionsAmount: 0 };
+    record.manualDeductions.manualDeductionsAmount = manualDeductionsAmount;
+    record.manualDeductionsAmount = manualDeductionsAmount;
+    return manualDeductionsAmount;
+  }
+
   // Already in record (from a previous step)? Coerce only numeric paths.
   const existing = getValueByPath(record, path);
   if (existing !== '' && existing !== undefined && existing !== null) {
@@ -680,30 +722,6 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     return record.loanAdvance.totalEMI || 0;
   }
 
-  // manualDeductions.manualDeductionsAmount — from record (set after applying options.deductionSettlements)
-  if (path.startsWith('manualDeductions.') || path === 'manualDeductionsAmount') {
-    const amt = Number(record.manualDeductionsAmount ?? record.manualDeductions?.manualDeductionsAmount) || 0;
-    if (!record.manualDeductions) record.manualDeductions = { manualDeductionsAmount: 0 };
-    record.manualDeductions.manualDeductionsAmount = amt;
-    return amt;
-  }
-
-  // arrears.arrearsAmount — from arrears service (pending approved/partially_settled with remainingAmount > 0)
-  if (path.startsWith('arrears.')) {
-    try {
-      const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
-      const arrearsAmount = (pendingArrears || []).reduce((sum, ar) => sum + (ar.remainingAmount || 0), 0);
-      if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
-      record.arrears.arrearsAmount = Math.round(arrearsAmount * 100) / 100;
-      if (path === 'arrears.arrearsAmount') return record.arrears.arrearsAmount;
-      return record.arrears.arrearsAmount;
-    } catch (e) {
-      if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
-      record.arrears.arrearsAmount = 0;
-      return 0;
-    }
-  }
-
   // deductions.deductionsCumulative (dynamic: only "other deductions" from allowances-deductions; excludes attendance, statutory, loan, advance, manual)
   // deductions.totalDeductions (full total for net salary: att + otherOnly + statutory + loanEMI + advance + manualDed)
   if (path === 'deductions.deductionsCumulative' || path === 'deductions.totalDeductions') {
@@ -810,6 +828,15 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   const required = getRequiredServices(sorted);
   await runRequiredServices(required, record, employee, employeeId, month, payRegisterSummary, attendanceSummary, departmentId, divisionId, config);
 
+  // When pay register passes selected arrears, use that sum so config/formulas see the correct amount
+  const arrearsSettlements = options.arrearsSettlements || [];
+  if (arrearsSettlements.length > 0) {
+    const arrearsSum = arrearsSettlements.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
+    record.arrears.arrearsAmount = Math.round(arrearsSum * 100) / 100;
+    record.arrears.arrearsSettlements = arrearsSettlements;
+  }
+
   // Apply manual deduction settlements before column loop so outcome vars (manualDeductionsAmount) are available in config/formulas
   const deductionSettlements = options.deductionSettlements || [];
   if (deductionSettlements.length > 0) {
@@ -833,17 +860,19 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       val = outputColumnService.safeEvalFormula(col.formula, context) ?? 0;
     } else {
       const fieldPath = (col.field || '').trim();
-      const fromRecord = fieldPath ? getValueByPath(record, fieldPath) : undefined;
-      const hasFromRecord = fromRecord !== '' && fromRecord !== undefined && fromRecord !== null;
-      if (hasFromRecord) {
-        val = fromRecord;
-      } else {
-        val = await resolveFieldValue(
-          fieldPath, employee, employeeId, month, payRegisterSummary,
-          record, attendanceSummary, departmentId, divisionId,
-          { context, config }
-        );
-      }
+      // Always resolve from services (and options when provided), not from the in-memory payslip/record
+      val = fieldPath
+        ? await resolveFieldValue(
+            fieldPath, employee, employeeId, month, payRegisterSummary,
+            record, attendanceSummary, departmentId, divisionId,
+            {
+              context,
+              config,
+              arrearsSettlements: options.arrearsSettlements,
+              deductionSettlements: options.deductionSettlements,
+            }
+          )
+        : 0;
       if (fieldPath) setValueByPath(record, fieldPath, val);
     }
     row[header] = val;
@@ -901,7 +930,16 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   payrollRecord.set('status', 'calculated');
   payrollRecord.set('netSalary', Number(record.netSalary) || 0);
   payrollRecord.set('roundOff', Number(record.roundOff) || 0);
+  payrollRecord.set('arrearsAmount', Number(record.arrears?.arrearsAmount) || 0);
   payrollRecord.set('manualDeductionsAmount', Number(record.manualDeductionsAmount) || 0);
+  if (options.arrearsSettlements && options.arrearsSettlements.length > 0) {
+    payrollRecord.set('arrearsSettlements', options.arrearsSettlements);
+    payrollRecord.markModified('arrearsSettlements');
+  }
+  if (record.deductionSettlements && record.deductionSettlements.length > 0) {
+    payrollRecord.set('deductionSettlements', record.deductionSettlements);
+    payrollRecord.markModified('deductionSettlements');
+  }
   payrollRecord.set('attendance', record.attendance || {});
   payrollRecord.set('earnings', record.earnings || {});
   payrollRecord.set('deductions', record.deductions || {});

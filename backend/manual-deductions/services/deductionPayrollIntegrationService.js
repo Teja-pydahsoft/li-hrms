@@ -47,7 +47,9 @@ class DeductionPayrollIntegrationService {
           errors.push(`Deduction ${settlement.deductionId} not found`);
           continue;
         }
-        if (deduction.employee.toString() !== employeeId) {
+        const empIdStr = employeeId != null ? String(employeeId) : '';
+        const deductionEmpStr = deduction.employee != null ? String(deduction.employee) : '';
+        if (deductionEmpStr !== empIdStr) {
           errors.push(`Deduction ${settlement.deductionId} does not belong to employee`);
           continue;
         }
