@@ -3999,7 +3999,7 @@ export default function LeavesPage() {
                   )}
 
                   {/* Interactive Split Editor (For Approvers) */}
-                  {detailType === 'leave' && !['approved', 'rejected', 'cancelled'].includes(selectedItem.status) && (
+                  {detailType === 'leave' && !['rejected', 'cancelled'].includes(selectedItem.status) && (
                     <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/50 p-6 border border-slate-200 dark:border-slate-700 space-y-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
@@ -4100,8 +4100,8 @@ export default function LeavesPage() {
                                     value={split.status}
                                     onChange={(e) => updateSplitDraft(idx, { status: e.target.value as 'approved' | 'rejected' })}
                                     className={`text-[10px] font-black h-8 rounded-lg border px-2 outline-none uppercase tracking-wider ${split.status === 'approved'
-                                        ? 'border-green-200 bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
-                                        : 'border-red-200 bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
+                                      ? 'border-green-200 bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
+                                      : 'border-red-200 bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
                                       }`}
                                   >
                                     <option value="approved">Approve</option>
