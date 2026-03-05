@@ -480,8 +480,11 @@ exports.applyLeave = async (req, res) => {
       if (['manager', 'hod'].includes(req.user.role) && employee) {
         // 1. Allow Self Application
         // Check if the target employee is the manager themselves
-        const isSelf = (req.user.employeeId && req.user.employeeId.toString() === employee._id.toString()) ||
-          (req.user.employeeRef && req.user.employeeRef.toString() === employee._id.toString());
+        // Some deployments store employeeId as the Mongo _id, others as emp_no.
+        const isSelf =
+          (req.user.employeeRef && req.user.employeeRef.toString() === employee._id.toString()) ||
+          (req.user.employeeId && req.user.employeeId.toString() === employee._id.toString()) ||
+          (req.user.employeeId && employee.emp_no && String(req.user.employeeId).trim() === String(employee.emp_no).trim());
 
         if (!isSelf) {
           // For non-employee roles, use User model (ensure full User with divisionMapping)

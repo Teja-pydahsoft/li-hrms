@@ -447,7 +447,14 @@ exports.applyOD = async (req, res) => {
         const scopeUser = await User.findById(req.user._id).select('role divisionMapping').lean();
         const userForScope = scopeUser || req.user;
         let scopedEmployeeIds = await getEmployeeIdsInScope(userForScope);
-        let isInScope = scopedEmployeeIds.some(id => id.toString() === targetEmployee._id.toString());
+
+        // Self-application safety: some deployments store employeeId as emp_no instead of ObjectId
+        const isSelfScoped =
+          (req.user.employeeRef && req.user.employeeRef.toString() === targetEmployee._id.toString()) ||
+          (req.user.employeeId && req.user.employeeId.toString() === targetEmployee._id.toString()) ||
+          (req.user.employeeId && targetEmployee.emp_no && String(req.user.employeeId).trim() === String(targetEmployee.emp_no).trim());
+
+        let isInScope = isSelfScoped || scopedEmployeeIds.some(id => id.toString() === targetEmployee._id.toString());
 
         if (!isInScope && req.user.role === 'hod') {
           const empDeptId = (targetEmployee.department_id?._id || targetEmployee.department_id)?.toString();
