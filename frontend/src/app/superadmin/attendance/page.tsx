@@ -1773,7 +1773,7 @@ export default function AttendancePage() {
                 </>
               ) : filteredMonthlyData.length === 0 ? (
                 <tr>
-                  <td colSpan={daysArray.length + 8} className="p-8 text-center text-slate-500 min-h-[400px]">
+                  <td colSpan={daysArray.length + (tableType === 'complete' ? 11 : 8)} className="p-8 text-center text-slate-500 min-h-[400px]">
                     No employees found matching the selected filters.
                   </td>
                 </tr>
@@ -1977,6 +1977,15 @@ export default function AttendancePage() {
                         <>
                           <td className="border-r border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:border-slate-700 dark:bg-blue-900/20 dark:text-blue-300 w-[60px] min-w-[60px]">
                             {daysPresent}
+                          </td>
+                          <td className="border-r border-slate-200 bg-amber-50 px-2 py-2 text-center text-[11px] font-bold text-amber-700 dark:border-slate-700 dark:bg-amber-900/20 dark:text-amber-300 w-[60px] min-w-[60px]">
+                            {totalLeaves}
+                          </td>
+                          <td className="border-r border-slate-200 bg-orange-100 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px]">
+                            {weekOffsCount}
+                          </td>
+                          <td className="border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300 w-[60px] min-w-[60px]">
+                            {holidaysCount}
                           </td>
                           <td className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px]">
                             {dailyValues.reduce((sum, record: any) => sum + (record?.otHours || 0), 0).toFixed(1)}
