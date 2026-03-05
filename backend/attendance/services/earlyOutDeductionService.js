@@ -183,8 +183,13 @@ async function calculateMonthlyEarlyOutDeductions(employeeNumber, year, monthNum
       if (settings) await cacheService.set(settingsCacheKey, settings, 600);
     }
 
-    // Calculate deductions for each day using all shifts (sum early-out minutes per day)
+    // Only count early-out and apply deduction on PRESENT (full) days. Half-days are already deducted (0.5 pay); do not double-count.
+    const isPresentDay = (record) => record.status === 'PRESENT';
+
+    // Calculate deductions for each day using all shifts (sum early-out minutes per day) — only for PRESENT days
     for (const record of attendanceRecords) {
+      if (!isPresentDay(record)) continue;
+
       const shifts = Array.isArray(record.shifts) ? record.shifts : [];
       let dayEarlyOut = 0;
       if (shifts.length > 0) {
@@ -216,9 +221,10 @@ async function calculateMonthlyEarlyOutDeductions(employeeNumber, year, monthNum
       }
     }
 
-    // earlyOutCount = number of days with at least one early-out (from any shift)
+    // earlyOutCount = number of PRESENT days with at least one early-out (half-days excluded — already deducted as half-day)
     const earlyOutCount = totalEarlyOutMinutes > 0
       ? attendanceRecords.reduce((count, record) => {
+          if (!isPresentDay(record)) return count;
           const shifts = Array.isArray(record.shifts) ? record.shifts : [];
           let dayEarlyOut = 0;
           if (shifts.length > 0) {

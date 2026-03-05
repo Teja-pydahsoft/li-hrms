@@ -255,50 +255,37 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     summary.totalPermissionHours = Math.round(totalPermissionHours * 100) / 100; // Round to 2 decimals
     summary.totalPermissionCount = totalPermissionCount;
 
-    // 10. Calculate late-in and combined late/early from ALL shifts per day (one late + one early per day)
-    // For each day: sum lateInMinutes and earlyOutMinutes across all shifts; count day once if it has any late or early out
+    // 10. Calculate late-in — only on PRESENT days (same as early-out: exclude HALF_DAY, PARTIAL)
     let totalLateInMinutes = 0;
     let lateInCount = 0;
-    let totalLateOrEarlyMinutes = 0;
-    let lateOrEarlyCount = 0;
+    const isPresentDay = (record) => record.status === 'PRESENT';
 
     for (const record of attendanceRecords) {
+      if (!isPresentDay(record)) continue;
+
       const shifts = Array.isArray(record.shifts) ? record.shifts : [];
       let dayLateMinutes = 0;
-      let dayEarlyMinutes = 0;
 
       if (shifts.length > 0) {
         for (const s of shifts) {
           if (s.lateInMinutes != null && s.lateInMinutes > 0) {
             dayLateMinutes += Number(s.lateInMinutes);
           }
-          if (s.earlyOutMinutes != null && s.earlyOutMinutes > 0) {
-            dayEarlyMinutes += Number(s.earlyOutMinutes);
-          }
         }
       } else {
         dayLateMinutes = Number(record.totalLateInMinutes) || 0;
-        dayEarlyMinutes = Number(record.totalEarlyOutMinutes) || 0;
       }
 
       if (dayLateMinutes > 0) {
         totalLateInMinutes += dayLateMinutes;
         lateInCount += 1;
       }
-
-      const combinedMinutes = dayLateMinutes + dayEarlyMinutes;
-      if (combinedMinutes > 0) {
-        totalLateOrEarlyMinutes += combinedMinutes;
-        lateOrEarlyCount += 1; // count day once if it has any late and/or early out
-      }
     }
 
     summary.totalLateInMinutes = Math.round(totalLateInMinutes * 100) / 100;
     summary.lateInCount = lateInCount;
-    summary.totalLateOrEarlyMinutes = Math.round(totalLateOrEarlyMinutes * 100) / 100;
-    summary.lateOrEarlyCount = lateOrEarlyCount;
 
-    // 11. Calculate early-out deductions (NEW)
+    // 11. Calculate early-out deductions (PRESENT days only)
     const { calculateMonthlyEarlyOutDeductions } = require('./earlyOutDeductionService');
     const earlyOutDeductions = await calculateMonthlyEarlyOutDeductions(emp_no, year, monthNumber);
     summary.totalEarlyOutMinutes = earlyOutDeductions.totalEarlyOutMinutes;
@@ -311,6 +298,10 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       custom_amount: earlyOutDeductions.deductionBreakdown.custom_amount,
     };
     summary.earlyOutCount = earlyOutDeductions.earlyOutCount;
+
+    // Late-or-early = sum of late-in + early-out (clear, no double-meaning)
+    summary.totalLateOrEarlyMinutes = Math.round((summary.totalLateInMinutes + summary.totalEarlyOutMinutes) * 100) / 100;
+    summary.lateOrEarlyCount = summary.lateInCount + summary.earlyOutCount;
 
     // 12. Update last calculated timestamp
     summary.lastCalculatedAt = new Date();
