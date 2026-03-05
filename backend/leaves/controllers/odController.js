@@ -824,7 +824,7 @@ exports.updateOD = async (req, res) => {
     const isSuperAdmin = req.user.role === 'super_admin';
     const isFinalApproved = od.status === 'approved';
 
-    if (isFinalApproved && !isSuperAdmin) {
+    if (isFinalApproved && !['super_admin', 'manager', 'hod'].includes(req.user.role)) {
       return res.status(400).json({
         success: false,
         error: 'Final approved OD cannot be edited',
@@ -834,7 +834,7 @@ exports.updateOD = async (req, res) => {
     // Check ownership or admin permission
     const isOwner = od.appliedBy.toString() === req.user._id.toString();
     const isAssigner = od.assignedBy?.toString() === req.user._id.toString();
-    const isAdmin = ['hr', 'sub_admin', 'super_admin'].includes(req.user.role);
+    const isAdmin = ['hr', 'sub_admin', 'super_admin', 'manager', 'hod'].includes(req.user.role);
 
     if (!isOwner && !isAssigner && !isAdmin) {
       return res.status(403).json({
@@ -1119,7 +1119,7 @@ exports.cancelOD = async (req, res) => {
 
     const isOwner = od.appliedBy.toString() === req.user._id.toString();
     const isAssigner = od.assignedBy?.toString() === req.user._id.toString();
-    const isAdmin = ['hr', 'sub_admin', 'super_admin'].includes(req.user.role);
+    const isAdmin = ['hr', 'sub_admin', 'super_admin', 'manager', 'hod'].includes(req.user.role);
 
     if (!isOwner && !isAssigner && !isAdmin) {
       return res.status(403).json({
@@ -1649,97 +1649,134 @@ exports.revokeODApproval = async (req, res) => {
       });
     }
 
-    // Check if OD is approved
-    if (od.status !== 'approved' && od.status !== 'hod_approved' && od.status !== 'hr_approved') {
+    const allowedStatuses = [
+      'approved', 'rejected',
+      'hod_approved', 'manager_approved', 'hr_approved',
+      'hod_rejected', 'manager_rejected', 'hr_rejected'
+    ];
+    if (!allowedStatuses.includes(od.status)) {
       return res.status(400).json({
         success: false,
-        error: 'Only approved or partially approved ODs can be revoked',
+        error: 'Only approved or rejected ODs can be revoked',
       });
     }
 
-    // Check revocation window (2-3 hours)
-    const approvalTime = od.approvals.hr?.approvedAt || od.approvals.hod?.approvedAt;
-    if (!approvalTime) {
+    const chain = od.workflow?.approvalChain || [];
+    if (chain.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No approval timestamp found',
+        error: 'No approval chain found',
       });
     }
 
-    const hoursSinceApproval = (new Date() - new Date(approvalTime)) / (1000 * 60 * 60);
-    const revocationWindow = 3; // 3 hours window
+    // Find the last action taken (either approval or rejection)
+    const actionSteps = chain
+      .map((s, i) => ({ step: s, index: i }))
+      .filter(({ step }) => step.status === 'approved' || step.status === 'rejected');
 
-    if (hoursSinceApproval > revocationWindow) {
+    const lastAction = actionSteps[actionSteps.length - 1];
+    if (!lastAction) {
       return res.status(400).json({
         success: false,
-        error: `Approval can only be revoked within ${revocationWindow} hours.${hoursSinceApproval.toFixed(1)} hours have passed.`,
+        error: 'No action found to revoke',
       });
     }
 
-    // Check authorization
+    const lastStep = lastAction.step;
+    const stepIndex = lastAction.index;
+    const updatedAt = lastStep.updatedAt || od.approvals?.[lastStep.role]?.approvedAt || od.approvals?.[lastStep.stepRole]?.approvedAt;
+
+    if (!updatedAt) {
+      return res.status(400).json({
+        success: false,
+        error: 'No timestamp found for the last action',
+      });
+    }
+
+    const hoursSinceAction = (new Date() - new Date(updatedAt)) / (1000 * 60 * 60);
+    const revocationWindow = 48; // Extended to 48 hours
+    if (hoursSinceAction > revocationWindow) {
+      return res.status(400).json({
+        success: false,
+        error: `Action can only be revoked within ${revocationWindow} hours. ${hoursSinceAction.toFixed(1)} hours have passed.`,
+      });
+    }
+
+    const approverId = (lastStep.actionBy?._id || lastStep.actionBy)?.toString();
+    const userId = (req.user._id || req.user.userId)?.toString();
     const userRole = req.user.role;
-    const isApprover =
-      (od.approvals.hod?.approvedBy?.toString() === req.user._id.toString()) ||
-      (od.approvals.hr?.approvedBy?.toString() === req.user._id.toString());
-    const isAdmin = ['hr', 'sub_admin', 'super_admin'].includes(userRole);
 
-    if (!isApprover && !isAdmin) {
+    // Authorization: Original actor OR Super Admin OR HR
+    const isOriginalActor = approverId === userId;
+    const isHigherAuthority = ['super_admin', 'hr'].includes(userRole);
+
+    if (!isOriginalActor && !isHigherAuthority) {
       return res.status(403).json({
         success: false,
-        error: 'Not authorized to revoke this approval',
+        error: 'Only the person who performed the action or a higher authority can revoke it',
       });
     }
 
-    // Revoke approval - revert to previous status
-    if (od.status === 'approved') {
-      // If fully approved, revert to hr_approved or hod_approved
-      if (od.approvals.hr?.status === 'approved') {
-        od.status = 'hr_approved';
-        od.approvals.hr.status = null;
-        od.approvals.hr.approvedBy = null;
-        od.approvals.hr.approvedAt = null;
-        od.workflow.currentStep = 'hr';
-        od.workflow.nextApprover = 'hr';
-      }
-    } else if (od.status === 'hr_approved') {
-      od.status = 'hod_approved';
-      od.approvals.hr.status = null;
-      od.approvals.hr.approvedBy = null;
-      od.approvals.hr.approvedAt = null;
-      od.workflow.currentStep = 'hr';
-      od.workflow.nextApprover = 'hr';
-    } else if (od.status === 'hod_approved') {
-      od.status = 'pending';
-      od.approvals.hod.status = null;
-      od.approvals.hod.approvedBy = null;
-      od.approvals.hod.approvedAt = null;
-      od.workflow.currentStep = 'hod';
-      od.workflow.nextApprover = 'hod';
+    const stepRole = lastStep.role || lastStep.stepRole;
+    const originalStatus = lastStep.status;
+
+    // Reset the step to pending
+    lastStep.status = 'pending';
+    lastStep.actionBy = undefined;
+    lastStep.actionByName = undefined;
+    lastStep.actionByRole = undefined;
+    lastStep.comments = undefined;
+    lastStep.updatedAt = undefined;
+    lastStep.isCurrent = true;
+
+    // Also reset any subsequent steps (safety)
+    for (let i = stepIndex + 1; i < chain.length; i++) {
+      chain[i].isCurrent = false;
+      chain[i].status = 'pending';
     }
 
-    // Add to timeline (only once)
+    if (od.approvals && od.approvals[stepRole]) {
+      od.approvals[stepRole] = { status: null, approvedBy: null, approvedAt: null, comments: null };
+    }
+
+    od.workflow.currentStepRole = stepRole;
+    od.workflow.nextApprover = stepRole;
+    od.workflow.nextApproverRole = stepRole;
+    od.workflow.currentStep = stepRole;
+    od.workflow.isCompleted = false;
+
+    // Recalculate status
+    if (stepIndex === 0) {
+      od.status = 'pending';
+    } else {
+      const prevRole = chain[stepIndex - 1]?.role || chain[stepIndex - 1]?.stepRole;
+      od.status = prevRole ? `${prevRole}_approved` : 'pending';
+    }
+
     od.workflow.history.push({
-      step: userRole,
+      step: stepRole,
       action: 'revoked',
       actionBy: req.user._id,
       actionByName: req.user.name,
       actionByRole: userRole,
-      comments: reason || `Approval revoked by ${req.user.name} `,
+      comments: reason || `Action (${originalStatus}) revoked by ${req.user.name}`,
       timestamp: new Date(),
     });
 
+    od.markModified('workflow');
+    od.markModified('approvals');
     await od.save();
 
     res.status(200).json({
       success: true,
-      message: 'OD approval revoked successfully',
+      message: `OD ${originalStatus} revoked successfully`,
       data: od,
     });
   } catch (error) {
-    console.error('Error revoking OD approval:', error);
+    console.error('Error revoking OD action:', error);
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to revoke OD approval',
+      error: error.message || 'Failed to revoke OD action',
     });
   }
 };
