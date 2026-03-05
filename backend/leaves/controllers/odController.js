@@ -440,6 +440,21 @@ exports.applyOD = async (req, res) => {
           }
         }
 
+        // Allow if current user is the reporting manager of this employee (apply on behalf of reportee)
+        if (!isInScope && targetEmployee) {
+          const reportingManagers = targetEmployee.dynamicFields?.reporting_to || targetEmployee.dynamicFields?.reporting_to_ || [];
+          if (Array.isArray(reportingManagers) && reportingManagers.length > 0) {
+            const reportingManagerIds = reportingManagers.map(m => (m._id || m).toString());
+            const userStr = req.user._id?.toString();
+            const userEmployeeIdStr = (req.user.employeeId || req.user.employeeRef)?.toString();
+            if ((userStr && reportingManagerIds.includes(userStr)) ||
+                (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
+              isInScope = true;
+              console.log(`[Apply OD] ✅ User ${req.user._id} is reporting manager for employee ${empNo}`);
+            }
+          }
+        }
+
         if (!isInScope) {
           console.log(`[Apply OD] ❌ ${req.user.role} blocked from applying for employee ${empNo} outside scope.`);
           return res.status(403).json({

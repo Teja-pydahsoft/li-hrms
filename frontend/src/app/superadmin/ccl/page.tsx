@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useMemo } from 'react';
 import { api, Department, Division, Designation } from '@/lib/api';
+import { auth } from '@/lib/auth';
 import Spinner from '@/components/Spinner';
 import { PlusIcon, Check, X } from 'lucide-react';
 import WorkflowTimeline from '@/components/WorkflowTimeline';
@@ -108,6 +109,10 @@ export default function SuperadminCCLPage() {
   const [employees, setEmployees] = useState<{ _id: string; emp_no: string; employee_name: string }[]>([]);
   const [dateValid, setDateValid] = useState<boolean | null>(null);
   const [dateValidationMessage, setDateValidationMessage] = useState<string>('');
+  const [cclWorkflowAllowHigherAuthority, setCclWorkflowAllowHigherAuthority] = useState(false);
+  const [cclWorkflowRoleOrder, setCclWorkflowRoleOrder] = useState<string[]>([]);
+
+  const currentUser = auth.getUser();
 
   const loadData = async () => {
     setLoading(true);
@@ -132,6 +137,18 @@ export default function SuperadminCCLPage() {
 
   useEffect(() => { loadData(); }, [activeTab]);
   useEffect(() => { if (activeTab === 'all') loadData(); }, [filters.status, filters.fromDate, filters.toDate]);
+
+  useEffect(() => {
+    api.getLeaveSettings('ccl').then((res) => {
+      if (res.success && res.data?.workflow) {
+        const wf = res.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setCclWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = wf.steps || [];
+        const order = steps.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999)).map(s => String(s.approverRole || '').toLowerCase()).filter(Boolean);
+        setCclWorkflowRoleOrder(order);
+      }
+    }).catch(() => {});
+  }, []);
 
   const loadFilterData = async () => {
     try {
@@ -272,8 +289,44 @@ export default function SuperadminCCLPage() {
     }
   };
 
+  const getRoleOrderFromCCL = (ccl: CCLRequest): string[] => {
+    const chain = (ccl as any).workflow?.approvalChain;
+    if (!chain || !Array.isArray(chain) || chain.length === 0) return [];
+    const sorted = chain.slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+    return sorted.map((s: any) => String(s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+  };
+
+  const canPerformAction = (ccl: CCLRequest) => {
+    if (!currentUser?.role) return false;
+    if (['approved', 'rejected', 'cancelled'].includes(ccl.status)) return false;
+    if (['super_admin', 'sub_admin'].includes(currentUser.role)) return true;
+    const next = (ccl.workflow?.nextApproverRole || '').toLowerCase().trim();
+    if (!next) return false;
+    const userRole = String(currentUser.role || '').toLowerCase().trim();
+    if (next === userRole || (next === 'final_authority' && userRole === 'hr')) return true;
+    if (next === 'reporting_manager') {
+      if (['manager', 'hod'].includes(userRole)) return true;
+      const reportingManagerIds = (ccl as any).workflow?.reportingManagerIds as string[] | undefined;
+      const userId = String((currentUser as any).id ?? (currentUser as any)._id ?? '').trim();
+      if (reportingManagerIds?.length && userId && reportingManagerIds.some((id: string) => String(id).trim() === userId)) return true;
+    }
+    if (cclWorkflowAllowHigherAuthority && cclWorkflowRoleOrder.length > 0) {
+      const itemRoleOrder = getRoleOrderFromCCL(ccl);
+      const roleOrder = itemRoleOrder.length > 0 ? itemRoleOrder : cclWorkflowRoleOrder;
+      const nextIdx = roleOrder.indexOf(next);
+      let userIdx = roleOrder.indexOf(userRole);
+      if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+      if (userIdx === -1 && userRole === 'manager') {
+        const reportingIdx = roleOrder.indexOf('reporting_manager');
+        const hrIdx = roleOrder.indexOf('hr');
+        userIdx = reportingIdx >= 0 ? reportingIdx : (hrIdx >= 0 ? hrIdx : roleOrder.length);
+      }
+      if (nextIdx >= 0 && userIdx >= 0 && userIdx >= nextIdx) return true;
+    }
+    return false;
+  };
+
   const list = activeTab === 'all' ? allCCLs : pendingCCLs;
-  const superadminCanAct = true;
 
   return (
     <>
@@ -449,7 +502,7 @@ export default function SuperadminCCLPage() {
                       <td className="max-w-[200px] truncate px-3 py-4 text-sm text-gray-600 dark:text-gray-300">{ccl.purpose}</td>
                       <td className="whitespace-nowrap px-3 py-4"><StatusBadge status={ccl.status} /></td>
                       <td className="whitespace-nowrap py-4 pl-3 pr-4 text-right sm:pr-6">
-                        {superadminCanAct && ccl.status !== 'approved' && ccl.status !== 'rejected' && (
+                        {canPerformAction(ccl) && (
                           <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
                             <button onClick={() => openActionModal(ccl._id, 'approve')} className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700">
                               <Check className="h-3.5 w-3.5" /> Approve
@@ -578,7 +631,7 @@ export default function SuperadminCCLPage() {
             </div>
             {selectedCCL.workflow?.approvalChain?.length ? <div className="border-t border-gray-200 px-6 py-4 dark:border-gray-700"><WorkflowTimeline workflow={selectedCCL.workflow as any} /></div> : null}
             <div className="flex flex-wrap gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
-              {superadminCanAct && selectedCCL.status !== 'approved' && selectedCCL.status !== 'rejected' && (
+              {selectedCCL && canPerformAction(selectedCCL) && (
                 <>
                   <button onClick={() => { setSelectedCCL(null); openActionModal(selectedCCL._id, 'approve'); }} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"><Check className="h-4 w-4" /> Approve</button>
                   <button onClick={() => { setSelectedCCL(null); openActionModal(selectedCCL._id, 'reject'); }} className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"><X className="h-4 w-4" /> Reject</button>

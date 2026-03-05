@@ -82,6 +82,7 @@ export const PAGE_PERMISSIONS: Record<string, UserRole[]> = {
     '/holidays': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/resignations': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/superadmin/holidays': ['sub_admin', 'hr', 'manager'],
+    '/superadmin/manual-deductions': ['sub_admin', 'hr', 'super_admin'],
 };
 
 export function canAccessPage(user: User, pagePath: string): boolean {

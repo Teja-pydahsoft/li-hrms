@@ -15,7 +15,8 @@ const ALLOWED_FORMULA_VARS = new Set([
   'allowancesCumulative', 'deductionsCumulative', 'statutoryCumulative',
   'emp_no', 'name', 'designation', 'department', 'division',
   'attendanceDeduction', 'permissionDeduction', 'leaveDeduction', 'otherDeductions',
-  'arrearsAmount', 'extraDays', 'paidLeaveDays', 'odDays', 'absentDays', 'weeklyOffs', 'holidays',
+  'arrearsAmount', 'manualDeductionsAmount', 'manual_deductions_amount',
+  'extraDays', 'paidLeaveDays', 'odDays', 'absentDays', 'weeklyOffs', 'holidays',
   'perDayBasicPay', 'basic_pay', 'lopDays', 'elUsedInPayroll', 'attendanceDeductionDays',
 ]);
 
@@ -59,6 +60,8 @@ function getContextFromPayslip(payslip) {
     permissionDeduction: num(ded.permissionDeduction),
     leaveDeduction: num(ded.leaveDeduction),
     arrearsAmount: num(arrears.arrearsAmount ?? payslip.arrearsAmount),
+    manualDeductionsAmount: num(payslip.manualDeductions?.manualDeductionsAmount ?? payslip.manualDeductionsAmount ?? 0),
+    manual_deductions_amount: num(payslip.manualDeductions?.manualDeductionsAmount ?? payslip.manualDeductionsAmount ?? 0),
     extraDays: num(att.extraDays),
     paidLeaveDays: num(att.paidLeaveDays),
     odDays: num(att.odDays),

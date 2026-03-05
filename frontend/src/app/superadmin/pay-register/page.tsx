@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { api, apiRequest, Employee, Division } from '@/lib/api';
 import ArrearsPayrollSection from '@/components/Arrears/ArrearsPayrollSection';
+import DeductionsPayrollSection from '@/components/ManualDeductions/DeductionsPayrollSection';
 import * as XLSX from 'xlsx';
 import Swal from 'sweetalert2';
 import { Search } from 'lucide-react';
@@ -139,6 +140,7 @@ export default function PayRegisterPage() {
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [selectedArrears, setSelectedArrears] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
+  const [selectedDeductions, setSelectedDeductions] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
   const [payrollStartDate, setPayrollStartDate] = useState<string | null>(null);
   const [payrollEndDate, setPayrollEndDate] = useState<string | null>(null);
   const [cycleStartDay, setCycleStartDay] = useState<number | null>(null);
@@ -820,12 +822,10 @@ export default function PayRegisterPage() {
       // Filter arrears for this specific employee
       // Note: ArrearsPayrollSection component stores arrears with employee info
       // We need to filter selectedArrears to only include those for this employee
-      const employeeArrears = selectedArrears.filter((arrear) => {
-        // Filter arrears strictly for this employee
-        return arrear.employeeId === employeeId;
-      });
+      const employeeArrears = selectedArrears.filter((arrear) => arrear.employeeId === employeeId);
+      const employeeDeductions = selectedDeductions.filter((d) => d.employeeId === employeeId);
 
-      const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears);
+      const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears, employeeDeductions);
 
       if (response && response.data && response.data.batchId) {
         Swal.fire({
@@ -1115,6 +1115,10 @@ export default function PayRegisterPage() {
 
   const handleArrearsSelected = (arrears: Array<{ id: string, amount: number, employeeId?: string }>) => {
     setSelectedArrears(arrears);
+  };
+
+  const handleDeductionsSelected = (deductions: Array<{ id: string, amount: number, employeeId?: string }>) => {
+    setSelectedDeductions(deductions);
   };
 
   const processPayroll = async () => {
@@ -2718,6 +2722,20 @@ export default function PayRegisterPage() {
           year={year}
           departmentId={selectedDepartment}
           onArrearsSelected={handleArrearsSelected}
+        />
+      </div>
+
+      {/* Manual Deductions Section */}
+      <div className="mt-6 bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4 text-slate-900 dark:text-white">Manual Deductions for Payroll</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+          Approved manual deductions that will be deducted from net pay. Select amount per deduction to include in this month.
+        </p>
+        <DeductionsPayrollSection
+          month={monthStr}
+          year={year}
+          departmentId={selectedDepartment}
+          onDeductionsSelected={handleDeductionsSelected}
         />
       </div>
     </div>

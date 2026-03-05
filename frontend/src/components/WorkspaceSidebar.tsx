@@ -37,7 +37,8 @@ import {
     Calculator,
     ArrowRightLeft,
     ScrollText,
-    BadgeDollarSign
+    BadgeDollarSign,
+    TrendingDown
 } from 'lucide-react';
 
 // Module code to icon mapping
@@ -69,6 +70,7 @@ const moduleIcons: Record<string, any> = {
     PAYSLIPS: Receipt,
     PAYROLL: BadgeDollarSign,
     LOANS_SALARY_ADVANCE: HandCoins,
+    MANUAL_DEDUCTIONS: TrendingDown,
     HOLIDAY_CALENDAR: CalendarHeart,
     RESIGNATION: LogOut,
 };

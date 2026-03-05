@@ -26,6 +26,7 @@ const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const { createISTDate, getPayrollDateRange } = require('../../shared/utils/dateUtils');
 const outputColumnService = require('./outputColumnService');
 const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+const DeductionIntegrationService = require('./deductionIntegrationService');
 
 /** Extract identifier-like variable names from a formula string (for demand-driven service resolution). */
 function extractFormulaVariableNames(formula) {
@@ -58,6 +59,7 @@ function getRequiredServices(outputColumns) {
     needsOtherDeductions: false,
     needsLoanAdvance: false,
     needsArrears: false,
+    needsManualDeductions: false,
   };
   if (!Array.isArray(outputColumns)) return required;
 
@@ -69,6 +71,7 @@ function getRequiredServices(outputColumns) {
   const formulaVarsNeedingOtherDeductions = new Set(['otherDeductions', 'deductionsCumulative', 'totalDeductions']);
   const formulaVarsNeedingLoan = new Set(['advanceDeduction', 'loanEMI', 'salary_advance', 'loan_recovery', 'remaining_balance']);
   const formulaVarsNeedingArrears = new Set(['arrearsAmount']);
+  const formulaVarsNeedingManualDeductions = new Set(['manualDeductionsAmount', 'manual_deductions_amount']);
 
   for (const col of outputColumns) {
     const field = (col.field || '').trim();
@@ -86,6 +89,7 @@ function getRequiredServices(outputColumns) {
         if (formulaVarsNeedingOtherDeductions.has(v)) required.needsOtherDeductions = true;
         if (formulaVarsNeedingLoan.has(v)) required.needsLoanAdvance = true;
         if (formulaVarsNeedingArrears.has(v)) required.needsArrears = true;
+        if (formulaVarsNeedingManualDeductions.has(v)) required.needsManualDeductions = true;
       }
     } else if (field) {
       if (field.startsWith('earnings.basicPay') || field.startsWith('earnings.perDayBasicPay') || field === 'earnings.payableAmount' || field === 'earnings.earnedSalary' || field === 'earnings.incentive') required.needsBasicPay = true;
@@ -102,6 +106,7 @@ function getRequiredServices(outputColumns) {
       }
       if (field.startsWith('loanAdvance.')) required.needsLoanAdvance = true;
       if (field.startsWith('arrears.')) required.needsArrears = true;
+      if (field.startsWith('manualDeductions.') || field === 'manualDeductionsAmount') required.needsManualDeductions = true;
     }
   }
   if (required.needsAllowances || required.needsStatutory || required.needsOtherDeductions) required.needsBasicPay = true;
@@ -235,14 +240,13 @@ async function runRequiredServices(required, record, employee, employeeId, month
 
   if (required.needsAttendanceDeduction || required.needsStatutory || required.needsOtherDeductions || required.needsLoanAdvance) {
     const att = num(record.deductions?.attendanceDeduction);
-    const other = num(record.deductions?.totalOtherDeductions);
+    const other = num(record.deductions?.totalOtherDeductions); // before manual: only allowances-deductions
     const statutory = num(record.deductions?.statutoryCumulative); // may be 0 if prorateByColumn (filled in column loop)
     const loanEMI = num(record.loanAdvance?.totalEMI);
     const advance = num(record.loanAdvance?.advanceDeduction);
-    const total = att + other + statutory + loanEMI + advance;
     if (!record.deductions) record.deductions = {};
-    record.deductions.deductionsCumulative = total;
-    record.deductions.totalDeductions = total;
+    record.deductions.deductionsCumulative = other; // dynamic: only "other deductions" (allowances-deductions)
+    record.deductions.totalDeductions = att + other + statutory + loanEMI + advance;
   }
 }
 
@@ -676,6 +680,14 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     return record.loanAdvance.totalEMI || 0;
   }
 
+  // manualDeductions.manualDeductionsAmount — from record (set after applying options.deductionSettlements)
+  if (path.startsWith('manualDeductions.') || path === 'manualDeductionsAmount') {
+    const amt = Number(record.manualDeductionsAmount ?? record.manualDeductions?.manualDeductionsAmount) || 0;
+    if (!record.manualDeductions) record.manualDeductions = { manualDeductionsAmount: 0 };
+    record.manualDeductions.manualDeductionsAmount = amt;
+    return amt;
+  }
+
   // arrears.arrearsAmount — from arrears service (pending approved/partially_settled with remainingAmount > 0)
   if (path.startsWith('arrears.')) {
     try {
@@ -692,18 +704,23 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     }
   }
 
-  // deductions.deductionsCumulative, totalDeductions (sum of all)
+  // deductions.deductionsCumulative (dynamic: only "other deductions" from allowances-deductions; excludes attendance, statutory, loan, advance, manual)
+  // deductions.totalDeductions (full total for net salary: att + otherOnly + statutory + loanEMI + advance + manualDed)
   if (path === 'deductions.deductionsCumulative' || path === 'deductions.totalDeductions') {
     const att = Number(record.deductions?.attendanceDeduction) || 0;
-    const other = Number(record.deductions?.totalOtherDeductions) || 0;
     const statutory = Number(record.deductions?.statutoryCumulative) || 0;
     const loanEMI = Number(record.loanAdvance?.totalEMI) || 0;
     const advance = Number(record.loanAdvance?.advanceDeduction) || 0;
-    const total = att + other + statutory + loanEMI + advance;
+    const manualDed = Number(record.manualDeductionsAmount) || 0;
+    // Other deductions from allowances-deductions config only (exclude "Manual Deduction" which is shown separately)
+    const otherDeductionsOnly = (record.deductions?.otherDeductions || [])
+      .filter((d) => d && String(d.name || '').trim() !== 'Manual Deduction')
+      .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+    const fullTotal = att + otherDeductionsOnly + statutory + loanEMI + advance + manualDed;
     if (!record.deductions) record.deductions = {};
-    record.deductions.deductionsCumulative = total;
-    record.deductions.totalDeductions = total;
-    return total;
+    record.deductions.deductionsCumulative = otherDeductionsOnly;
+    record.deductions.totalDeductions = fullTotal;
+    return path === 'deductions.deductionsCumulative' ? otherDeductionsOnly : fullTotal;
   }
 
   // netSalary, roundOff (derive at end if needed)
@@ -711,15 +728,18 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
     const gross = Number(record.earnings?.grossSalary) || 0;
     let totalDed = Number(record.deductions?.totalDeductions) || 0;
     if (totalDed === 0) {
-      totalDed =
-        (Number(record.deductions?.attendanceDeduction) || 0)
-        + (Number(record.deductions?.totalOtherDeductions) || 0)
-        + (Number(record.deductions?.statutoryCumulative) || 0)
-        + (Number(record.loanAdvance?.totalEMI) || 0)
-        + (Number(record.loanAdvance?.advanceDeduction) || 0);
+      const att = Number(record.deductions?.attendanceDeduction) || 0;
+      const statutory = Number(record.deductions?.statutoryCumulative) || 0;
+      const loanEMI = Number(record.loanAdvance?.totalEMI) || 0;
+      const advance = Number(record.loanAdvance?.advanceDeduction) || 0;
+      const manualDed = Number(record.manualDeductionsAmount) || 0;
+      const otherOnly = (record.deductions?.otherDeductions || [])
+        .filter((d) => d && String(d.name || '').trim() !== 'Manual Deduction')
+        .reduce((s, d) => s + (Number(d.amount) || 0), 0);
+      totalDed = att + otherOnly + statutory + loanEMI + advance + manualDed;
       if (!record.deductions) record.deductions = {};
+      record.deductions.deductionsCumulative = otherOnly;
       record.deductions.totalDeductions = totalDed;
-      record.deductions.deductionsCumulative = totalDed;
     }
     const exactNet = Math.max(0, gross - totalDed);
     const roundedNet = Math.ceil(exactNet);
@@ -775,6 +795,8 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
     deductions: {},
     loanAdvance: {},
     arrears: { arrearsAmount: 0, arrearsSettlements: [] },
+    manualDeductions: { manualDeductionsAmount: 0 },
+    manualDeductionsAmount: 0,
     netSalary: 0,
     roundOff: 0,
     status: 'calculated',
@@ -787,6 +809,18 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
 
   const required = getRequiredServices(sorted);
   await runRequiredServices(required, record, employee, employeeId, month, payRegisterSummary, attendanceSummary, departmentId, divisionId, config);
+
+  // Apply manual deduction settlements before column loop so outcome vars (manualDeductionsAmount) are available in config/formulas
+  const deductionSettlements = options.deductionSettlements || [];
+  if (deductionSettlements.length > 0) {
+    try {
+      await DeductionIntegrationService.addDeductionsToPayroll(record, deductionSettlements, employeeId);
+      record.manualDeductions = record.manualDeductions || {};
+      record.manualDeductions.manualDeductionsAmount = record.manualDeductionsAmount || 0;
+    } catch (e) {
+      console.error('[PayrollFromOutputColumns] Manual deductions apply error:', e.message);
+    }
+  }
 
   const context = { ...outputColumnService.getContextFromPayslip(record) };
   const row = {};
@@ -817,15 +851,18 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
     for (const k of getContextKeysAndAliases(header)) context[k] = numForContext;
   }
 
-  // Recompute total deductions from record (statutory may have been set in column loop when prorate-by-column is used)
+  // Recompute: deductionsCumulative = only "other deductions" (allowances-deductions); totalDeductions = full total for net
   if (record.deductions) {
     const att = Number(record.deductions.attendanceDeduction) || 0;
-    const other = Number(record.deductions.totalOtherDeductions) || 0;
     const statutory = Number(record.deductions.statutoryCumulative) || 0;
     const loanEMI = Number(record.loanAdvance?.totalEMI) || 0;
     const advance = Number(record.loanAdvance?.advanceDeduction) || 0;
-    record.deductions.deductionsCumulative = att + other + statutory + loanEMI + advance;
-    record.deductions.totalDeductions = record.deductions.deductionsCumulative;
+    const manualDed = Number(record.manualDeductionsAmount) || 0;
+    const otherDeductionsOnly = (record.deductions.otherDeductions || [])
+      .filter((d) => d && String(d.name || '').trim() !== 'Manual Deduction')
+      .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+    record.deductions.deductionsCumulative = otherDeductionsOnly;
+    record.deductions.totalDeductions = att + otherDeductionsOnly + statutory + loanEMI + advance + manualDed;
   }
 
   // Ensure net and roundOff
@@ -864,6 +901,7 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   payrollRecord.set('status', 'calculated');
   payrollRecord.set('netSalary', Number(record.netSalary) || 0);
   payrollRecord.set('roundOff', Number(record.roundOff) || 0);
+  payrollRecord.set('manualDeductionsAmount', Number(record.manualDeductionsAmount) || 0);
   payrollRecord.set('attendance', record.attendance || {});
   payrollRecord.set('earnings', record.earnings || {});
   payrollRecord.set('deductions', record.deductions || {});
@@ -873,6 +911,21 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   payrollRecord.markModified('deductions');
   payrollRecord.markModified('loanAdvance');
   await payrollRecord.save();
+
+  // Process manual deduction settlement records (update DeductionRequest remainingAmount / status)
+  if (deductionSettlements.length > 0) {
+    try {
+      await DeductionIntegrationService.processDeductionSettlements(
+        employeeId,
+        month,
+        deductionSettlements,
+        userId,
+        payrollRecord._id.toString()
+      );
+    } catch (e) {
+      console.error('[PayrollFromOutputColumns] processDeductionSettlements error:', e.message);
+    }
+  }
 
   // Create or find batch and add this payroll record (same as legacy flow — batches created right after record save)
   let batchId = null;

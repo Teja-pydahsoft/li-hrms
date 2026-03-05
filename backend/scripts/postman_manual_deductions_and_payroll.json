@@ -1,0 +1,124 @@
+{
+  "info": { "name": "Manual Deductions & Payroll", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "admin_email", "value": "admin@hrms.com" },
+    { "key": "admin_password", "value": "Admin@123" },
+    { "key": "token", "value": "" },
+    { "key": "employeeId", "value": "" },
+    { "key": "deductionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Login",
+      "event": [{ "listen": "test", "script": { "exec": ["var j = pm.response.json(); if (j.success && j.data && j.data.token) { pm.collectionVariables.set('token', j.data.token); }"], "type": "text/javascript" }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"identifier\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}" },
+        "url": "{{baseUrl}}/api/auth/login"
+      }
+    },
+    {
+      "name": "2. Get first employee",
+      "event": [{ "listen": "test", "script": { "exec": ["var j = pm.response.json(); if (j.success && j.data && j.data[0]) { pm.collectionVariables.set('employeeId', j.data[0]._id); }"], "type": "text/javascript" }],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/employees?limit=1&is_active=true"
+      }
+    },
+    {
+      "name": "3. Create direct deduction",
+      "event": [{ "listen": "test", "script": { "exec": ["var j = pm.response.json(); if (j.success && j.data && (j.data._id || j.data.id)) { pm.collectionVariables.set('deductionId', j.data._id || j.data.id); }"], "type": "text/javascript" }],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"type\": \"direct\",\n  \"employee\": \"{{employeeId}}\",\n  \"totalAmount\": 500,\n  \"reason\": \"Postman test direct deduction\"\n}" },
+        "url": "{{baseUrl}}/api/manual-deductions"
+      }
+    },
+    {
+      "name": "4. Get deduction by ID",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/manual-deductions/{{deductionId}}"
+      }
+    },
+    {
+      "name": "5. Get deductions list",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/manual-deductions"
+      }
+    },
+    {
+      "name": "6. Get employee pending deductions",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/manual-deductions/employee/{{employeeId}}/pending"
+      }
+    },
+    {
+      "name": "7. Get deductions for payroll",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/manual-deductions/for-payroll?employeeId={{employeeId}}"
+      }
+    },
+    {
+      "name": "8a. Transition deduction pending_hod",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\"nextStatus\": \"pending_hod\"}" },
+        "url": "{{baseUrl}}/api/manual-deductions/{{deductionId}}/transition"
+      }
+    },
+    {
+      "name": "8b. Transition deduction pending_hr",
+      "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"nextStatus\": \"pending_hr\"}" }, "url": "{{baseUrl}}/api/manual-deductions/{{deductionId}}/transition" }
+    },
+    {
+      "name": "8c. Transition deduction pending_admin",
+      "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"nextStatus\": \"pending_admin\"}" }, "url": "{{baseUrl}}/api/manual-deductions/{{deductionId}}/transition" }
+    },
+    {
+      "name": "8d. Transition deduction approved",
+      "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"nextStatus\": \"approved\"}" }, "url": "{{baseUrl}}/api/manual-deductions/{{deductionId}}/transition" }
+    },
+    {
+      "name": "9. Calculate payroll (with deductions)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"month\": \"2025-03\",\n  \"arrears\": [],\n  \"deductions\": [{ \"deductionId\": \"{{deductionId}}\", \"amount\": 100 }]\n}"
+        },
+        "url": "{{baseUrl}}/api/payroll/calculate?strategy=new"
+      }
+    },
+    {
+      "name": "10. Get deduction stats",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/api/manual-deductions/stats/summary"
+      }
+    }
+  ]
+}

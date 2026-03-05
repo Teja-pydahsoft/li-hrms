@@ -482,6 +482,21 @@ exports.applyLeave = async (req, res) => {
             }
           }
 
+          // Allow if current user is the reporting manager of this employee (apply on behalf of reportee)
+          if (!isInScope && employee) {
+            const reportingManagers = employee.dynamicFields?.reporting_to || employee.dynamicFields?.reporting_to_ || [];
+            if (Array.isArray(reportingManagers) && reportingManagers.length > 0) {
+              const reportingManagerIds = reportingManagers.map(m => (m._id || m).toString());
+              const userStr = req.user._id?.toString();
+              const userEmployeeIdStr = (req.user.employeeId || req.user.employeeRef)?.toString();
+              if ((userStr && reportingManagerIds.includes(userStr)) ||
+                  (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr))) {
+                isInScope = true;
+                console.log(`[Apply Leave] ✅ User ${req.user._id} is reporting manager for employee ${empNo}`);
+              }
+            }
+          }
+
           if (!isInScope) {
             console.log(`[Apply Leave] ❌ ${req.user.role} ${req.user._id} blocked - employee ${empNo} not in scope.`);
             return res.status(403).json({

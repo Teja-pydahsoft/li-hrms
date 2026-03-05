@@ -406,7 +406,17 @@ exports.applyCCL = async (req, res) => {
             }).select('_id');
             hodScope = !!dept;
           }
-          if (!hodScope) {
+          // Allow if current user is the reporting manager of this employee (apply on behalf of reportee)
+          let isReportingManager = false;
+          const reportingManagers = employee.dynamicFields?.reporting_to || employee.dynamicFields?.reporting_to_ || [];
+          if (Array.isArray(reportingManagers) && reportingManagers.length > 0) {
+            const reportingManagerIds = reportingManagers.map(m => (m._id || m).toString());
+            const userStr = req.user._id?.toString();
+            const userEmployeeIdStr = (req.user.employeeId || req.user.employeeRef)?.toString();
+            isReportingManager = (userStr && reportingManagerIds.includes(userStr)) ||
+              (userEmployeeIdStr && reportingManagerIds.includes(userEmployeeIdStr));
+          }
+          if (!hodScope && !isReportingManager) {
             return res.status(403).json({
               success: false,
               error: 'Not authorized to apply CCL for this employee',
@@ -692,6 +702,25 @@ exports.processCCLAction = async (req, res) => {
       }
     } else if (isRoleMatch) {
       canProcess = checkJurisdiction(fullUser, ccl);
+    }
+
+    // 4. Setting: Allow higher authority to approve lower levels (same as Leave/OD)
+    if (!canProcess && ccl.workflow?.approvalChain?.length > 0) {
+      const workflowSettings = await getWorkflowSettings();
+      const allowHigher = workflowSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+      if (allowHigher) {
+        const chain = ccl.workflow.approvalChain.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+        const roleOrder = chain.map(s => (s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+        const requiredIdx = roleOrder.indexOf(requiredRole.toLowerCase());
+        let userIdx = roleOrder.indexOf(userRole.toLowerCase());
+        if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+        if (requiredIdx >= 0 && userIdx >= 0 && userIdx >= requiredIdx) {
+          canProcess = true;
+          if (['manager', 'hr'].includes(userRole)) {
+            canProcess = checkJurisdiction(fullUser, ccl);
+          }
+        }
+      }
     }
 
     if (!canProcess) {

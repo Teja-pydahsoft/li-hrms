@@ -164,6 +164,8 @@ export default function CCLPage() {
   const [assignedByUsers, setAssignedByUsers] = useState<User[]>([]);
   const [dateValid, setDateValid] = useState<boolean | null>(null);
   const [dateValidationMessage, setDateValidationMessage] = useState<string>('');
+  const [cclWorkflowAllowHigherAuthority, setCclWorkflowAllowHigherAuthority] = useState(false);
+  const [cclWorkflowRoleOrder, setCclWorkflowRoleOrder] = useState<string[]>([]);
 
   const filterData = (data: CCLRequest[]) => {
     return data.filter(item => {
@@ -271,6 +273,19 @@ export default function CCLPage() {
   useEffect(() => { loadData(); }, []);
 
   useEffect(() => {
+    if (!currentUser || currentUser.role === 'employee') return;
+    api.getLeaveSettings('ccl').then((res) => {
+      if (res.success && res.data?.workflow) {
+        const wf = res.data.workflow as { allowHigherAuthorityToApproveLowerLevels?: boolean; steps?: { stepOrder: number; approverRole: string }[] };
+        setCclWorkflowAllowHigherAuthority(Boolean(wf.allowHigherAuthorityToApproveLowerLevels));
+        const steps = wf.steps || [];
+        const order = steps.slice().sort((a, b) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999)).map(s => String(s.approverRole || '').toLowerCase()).filter(Boolean);
+        setCclWorkflowRoleOrder(order);
+      }
+    }).catch(() => {});
+  }, [currentUser]);
+
+  useEffect(() => {
     if (currentUser && showForm) loadEmployees();
   }, [currentUser, showForm]);
 
@@ -344,6 +359,13 @@ export default function CCLPage() {
     }
   };
 
+  const getRoleOrderFromCCL = (ccl: CCLRequest): string[] => {
+    const chain = (ccl as any).workflow?.approvalChain;
+    if (!chain || !Array.isArray(chain) || chain.length === 0) return [];
+    const sorted = chain.slice().sort((a: any, b: any) => (a.stepOrder ?? 999) - (b.stepOrder ?? 999));
+    return sorted.map((s: any) => String(s.role || s.stepRole || '').toLowerCase()).filter(Boolean);
+  };
+
   const canPerformAction = (ccl: CCLRequest) => {
     const u = user as any;
     if (!u?.role) return false;
@@ -358,6 +380,20 @@ export default function CCLPage() {
       const reportingManagerIds = (ccl as any).workflow?.reportingManagerIds as string[] | undefined;
       const userId = String(u.id ?? u._id ?? '').trim();
       if (reportingManagerIds?.length && userId && reportingManagerIds.some((id: string) => String(id).trim() === userId)) return true;
+    }
+    // Allow higher authority to approve lower levels (from CCL workflow settings)
+    if (cclWorkflowAllowHigherAuthority && cclWorkflowRoleOrder.length > 0) {
+      const itemRoleOrder = getRoleOrderFromCCL(ccl);
+      const roleOrder = itemRoleOrder.length > 0 ? itemRoleOrder : cclWorkflowRoleOrder;
+      const nextIdx = roleOrder.indexOf(next);
+      let userIdx = roleOrder.indexOf(userRole);
+      if (userIdx === -1 && (userRole === 'hr' || userRole === 'super_admin')) userIdx = roleOrder.length;
+      if (userIdx === -1 && userRole === 'manager') {
+        const reportingIdx = roleOrder.indexOf('reporting_manager');
+        const hrIdx = roleOrder.indexOf('hr');
+        userIdx = reportingIdx >= 0 ? reportingIdx : (hrIdx >= 0 ? hrIdx : roleOrder.length);
+      }
+      if (nextIdx >= 0 && userIdx >= 0 && userIdx >= nextIdx) return true;
     }
     return false;
   };

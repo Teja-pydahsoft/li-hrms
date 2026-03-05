@@ -51,7 +51,8 @@ export const MODULE_CATEGORIES = [
             { code: 'PAY_REGISTER', label: 'Pay Register', href: '/pay-register' },
             { code: 'PAYSLIPS', label: 'Payslips', href: '/payslips' },
             { code: 'ALLOWANCES_DEDUCTIONS', label: 'Allowances & Deductions', href: '/allowances-deductions' },
-            { code: 'LOANS', label: 'Loans & Salary Advance', href: '/loans' }
+            { code: 'LOANS', label: 'Loans & Salary Advance', href: '/loans' },
+            { code: 'MANUAL_DEDUCTIONS', label: 'Manual Deductions', href: '/manual-deductions' }
         ]
     },
     {
