@@ -545,6 +545,17 @@ attendanceDailySchema.pre('save', async function () {
         this.status = hasPunches ? 'PARTIAL' : 'ABSENT';
       }
     }
+    // Roster overrides: if roster has HOL or WO, day is holiday/week-off only; keep punches and shift details but do not count toward present/payable
+    if (rosterStatus === 'HOL' || rosterStatus === 'WO') {
+      this.status = rosterStatus === 'HOL' ? 'HOLIDAY' : 'WEEK_OFF';
+      this.payableShifts = 0;
+      if (this.totalWorkingHours > 0) {
+        const dayLabel = rosterStatus === 'HOL' ? 'Holiday' : 'Week Off';
+        const remark = `Worked on ${dayLabel}`;
+        if (!this.notes) this.notes = remark;
+        else if (!this.notes.includes(remark)) this.notes = `${this.notes} | ${remark}`;
+      }
+    }
   } else {
     // No shifts (OD-only or no punches): use OD contribution; half-day OD -> HALF_DAY, full-day OD -> PRESENT
     if (odPayableContribution > 0 || odHoursContribution > 0) {
@@ -565,16 +576,17 @@ attendanceDailySchema.pre('save', async function () {
       else if (rosterStatus === 'WO') this.status = 'WEEK_OFF';
       else this.status = 'ABSENT';
     }
+    // Roster overrides: holiday/week-off take precedence; do not count toward present/payable
+    if (rosterStatus === 'HOL' || rosterStatus === 'WO') {
+      this.status = rosterStatus === 'HOL' ? 'HOLIDAY' : 'WEEK_OFF';
+      this.payableShifts = 0;
+    }
     // Special Requirement: If worked on Holiday/Week-Off (have punches on HOL/WO day), add remark
-    // Checked via totalWorkingHours now
     if ((rosterStatus === 'HOL' || rosterStatus === 'WO') && (this.totalWorkingHours > 0)) {
       const dayLabel = rosterStatus === 'HOL' ? 'Holiday' : 'Week Off';
       const remark = `Worked on ${dayLabel}`;
-      if (!this.notes) {
-        this.notes = remark;
-      } else if (!this.notes.includes(remark)) {
-        this.notes = `${this.notes} | ${remark}`;
-      }
+      if (!this.notes) this.notes = remark;
+      else if (!this.notes.includes(remark)) this.notes = `${this.notes} | ${remark}`;
     }
   }
 

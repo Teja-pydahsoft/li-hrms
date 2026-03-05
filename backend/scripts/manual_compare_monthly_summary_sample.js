@@ -146,26 +146,39 @@ async function manualTotals(employeeId, empNo, startDateStr, endDateStr, year, m
     }
   }
 
-  let totalLeaves = 0;
+  // Leave days: only in period; each calendar day counted once (overlapping leaves not double-counted)
+  const leaveDaysInPeriod = new Map();
   for (const leave of leaves) {
     let d = createISTDate(extractISTComponents(leave.fromDate).dateStr, '00:00');
     const to = createISTDate(extractISTComponents(leave.toDate).dateStr, '23:59');
+    const contrib = leave.isHalfDay ? 0.5 : 1;
     while (d <= to) {
-      if (d >= payrollStart && d <= payrollEnd) totalLeaves += leave.isHalfDay ? 0.5 : 1;
+      const dayStr = toDateStr(d);
+      if (dayStr >= startDateStr && dayStr <= endDateStr) {
+        const existing = leaveDaysInPeriod.get(dayStr) || 0;
+        leaveDaysInPeriod.set(dayStr, Math.max(existing, contrib));
+      }
       d.setDate(d.getDate() + 1);
     }
   }
+  let totalLeaves = Array.from(leaveDaysInPeriod.values()).reduce((s, c) => s + c, 0);
 
-  let totalODs = 0;
+  const odDaysInPeriod = new Map();
   for (const od of ods) {
     if (od.odType_extended === 'hours') continue;
     let d = createISTDate(extractISTComponents(od.fromDate).dateStr, '00:00');
     const to = createISTDate(extractISTComponents(od.toDate).dateStr, '23:59');
+    const contrib = od.isHalfDay ? 0.5 : 1;
     while (d <= to) {
-      if (d >= payrollStart && d <= payrollEnd) totalODs += od.isHalfDay ? 0.5 : 1;
+      const dayStr = toDateStr(d);
+      if (dayStr >= startDateStr && dayStr <= endDateStr) {
+        const existing = odDaysInPeriod.get(dayStr) || 0;
+        odDaysInPeriod.set(dayStr, Math.max(existing, contrib));
+      }
       d.setDate(d.getDate() + 1);
     }
   }
+  let totalODs = Array.from(odDaysInPeriod.values()).reduce((s, c) => s + c, 0);
 
   const datesWithAttendance = new Set((dailies || []).map((r) => toDateStr(r.date)));
   let odOnlyPresentDays = 0;

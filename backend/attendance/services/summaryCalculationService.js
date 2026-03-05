@@ -148,21 +148,24 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       isActive: true,
     }).select('fromDate toDate isHalfDay').lean();
 
-    // Calculate total leave days in this month - count each day individually
-    let totalLeaveDays = 0;
+    // Total leave days: only days in this period; each calendar day counted once (overlapping leaves must not double-count)
+    const leaveDaysInPeriod = new Map(); // dateStr -> contribution (0.5 or 1)
     for (const leave of approvedLeaves) {
       const leaveStart = createISTDate(extractISTComponents(leave.fromDate).dateStr, '00:00');
       const leaveEnd = createISTDate(extractISTComponents(leave.toDate).dateStr, '23:59');
+      const contrib = leave.isHalfDay ? 0.5 : 1;
 
-      // Count each day in the leave range that falls within the month
       let currentDate = new Date(leaveStart);
       while (currentDate <= leaveEnd) {
-        if (currentDate >= payrollStart && currentDate <= payrollEnd) {
-          totalLeaveDays += leave.isHalfDay ? 0.5 : 1;
+        const dayStr = toNormalizedDateStr(currentDate);
+        if (dayStr >= startDateStr && dayStr <= endDateStr) {
+          const existing = leaveDaysInPeriod.get(dayStr) || 0;
+          leaveDaysInPeriod.set(dayStr, Math.max(existing, contrib));
         }
         currentDate.setDate(currentDate.getDate() + 1);
       }
     }
+    const totalLeaveDays = Array.from(leaveDaysInPeriod.values()).reduce((s, c) => s + c, 0);
     summary.totalLeaves = Math.round(totalLeaveDays * 10) / 10; // Round to 1 decimal
 
     // 5. Get approved ODs for this month (Using .lean() and projections)
@@ -178,27 +181,26 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       isActive: true,
     }).select('fromDate toDate isHalfDay odType_extended').lean();
 
-    // Calculate total OD days in this month
-    // IMPORTANT: Exclude hour-based ODs (they're stored as hours, not days)
-    let totalODDays = 0;
+    // Total OD days: only days in this period; each calendar day counted once (overlapping ODs must not double-count)
+    const odDaysInPeriod = new Map(); // dateStr -> contribution (0.5 or 1)
     for (const od of approvedODs) {
-      // Skip hour-based ODs - they don't count as days
-      if (od.odType_extended === 'hours') {
-        continue;
-      }
+      if (od.odType_extended === 'hours') continue;
 
       const odStart = createISTDate(extractISTComponents(od.fromDate).dateStr, '00:00');
       const odEnd = createISTDate(extractISTComponents(od.toDate).dateStr, '23:59');
+      const contrib = od.isHalfDay ? 0.5 : 1;
 
-      // Count each day in the OD range that falls within the month
       let currentDate = new Date(odStart);
       while (currentDate <= odEnd) {
-        if (currentDate >= payrollStart && currentDate <= payrollEnd) {
-          totalODDays += od.isHalfDay ? 0.5 : 1;
+        const dayStr = toNormalizedDateStr(currentDate);
+        if (dayStr >= startDateStr && dayStr <= endDateStr) {
+          const existing = odDaysInPeriod.get(dayStr) || 0;
+          odDaysInPeriod.set(dayStr, Math.max(existing, contrib));
         }
         currentDate.setDate(currentDate.getDate() + 1);
       }
     }
+    const totalODDays = Array.from(odDaysInPeriod.values()).reduce((s, c) => s + c, 0);
     summary.totalODs = Math.round(totalODDays * 10) / 10; // Round to 1 decimal
 
     // 6. Total payable shifts: add half-day (0.5) / full-day (1) OD for days with no attendance record
