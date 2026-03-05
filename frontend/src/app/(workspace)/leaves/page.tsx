@@ -431,6 +431,7 @@ export default function LeavesPage() {
   const [applyType, setApplyType] = useState<'leave' | 'od'>('leave');
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [isChangeHistoryExpanded, setIsChangeHistoryExpanded] = useState(false);
+  const [isBreakdownExpanded, setIsBreakdownExpanded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<LeaveApplication | ODApplication | null>(null);
   const [detailType, setDetailType] = useState<'leave' | 'od'>('leave');
   const [actionComment, setActionComment] = useState('');
@@ -1425,7 +1426,7 @@ export default function LeavesPage() {
       setSplitSaving(false);
       setActionComment('');
 
-      let enrichedItem: LeaveApplication | ODApplication = item;
+      let enrichedItem = item;
       if (type === 'leave') {
         const response = await api.getLeave(item._id);
         if (response?.success && response.data) {
@@ -1435,23 +1436,41 @@ export default function LeavesPage() {
         setSplitDrafts(initialSplits);
         const leaveItem = enrichedItem as LeaveApplication;
         setSplitMode((leaveItem.splits && leaveItem.splits.length > 0) || false);
+      } else {
+        const response = await api.getOD(item._id);
+        if (response?.success && response.data) {
+          enrichedItem = response.data;
+        }
       }
 
       setSelectedItem(enrichedItem);
       setDetailType(type);
       setShowDetailDialog(true);
+      setIsChangeHistoryExpanded(false);
+      setIsBreakdownExpanded(false);
 
-      // Check if revocation is possible: only by the approver of the last step, within 3 hours
+      // Check if revocation is possible: 
+      // 1. By the original actor who performed the last step
+      // 2. By Super Admin or HR
+      // 3. Within 48 hours window
+      const authUser = auth.getUser() as any;
       const wf = (enrichedItem as any).workflow;
       const chain = wf?.approvalChain || [];
-      const approvedSteps = chain.filter((s: any) => s.status === 'approved');
-      const lastApproved = approvedSteps[approvedSteps.length - 1];
-      const userId = (auth.getUser() as any)?._id;
-      if (lastApproved && userId) {
-        const approverId = (lastApproved.actionBy?._id || lastApproved.actionBy)?.toString?.() || String(lastApproved.actionBy);
-        const approvedAt = lastApproved.updatedAt || (enrichedItem as any).approvals?.[lastApproved.role || lastApproved.stepRole]?.approvedAt;
-        const hoursSince = approvedAt ? (Date.now() - new Date(approvedAt).getTime()) / (1000 * 60 * 60) : 999;
-        setCanRevoke(approverId === userId && hoursSince <= 3);
+      const actionSteps = chain.filter((s: any) => s.status === 'approved' || s.status === 'rejected');
+      const lastAction = actionSteps[actionSteps.length - 1];
+      const userId = authUser?._id || authUser?.id;
+      const userRole = authUser?.role;
+
+      if (lastAction && userId) {
+        const actorId = (lastAction.actionBy?._id || lastAction.actionBy)?.toString?.() || String(lastAction.actionBy);
+        const performedAt = lastAction.updatedAt || (enrichedItem as any).approvals?.[lastAction.role || lastAction.stepRole]?.approvedAt;
+        const hoursSince = performedAt ? (Date.now() - new Date(performedAt).getTime()) / (1000 * 60 * 60) : 999;
+
+        const isOriginalActor = actorId === userId;
+        const isHigherAuthority = ['super_admin', 'hr'].includes(userRole || '');
+        const isWithinWindow = hoursSince <= 48; // Extended window
+
+        setCanRevoke((isOriginalActor || isHigherAuthority) && isWithinWindow);
       } else {
         setCanRevoke(false);
       }
@@ -3438,7 +3457,7 @@ export default function LeavesPage() {
 
                   {/* Approval Steps - Timeline / Progress */}
                   {((selectedItem as any).workflow?.approvalChain?.length > 0) && (
-                    <div className="bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-6 rounded-xl">
+                    <div className="bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-6 rounded-xl overflow-hidden scrollbar-hide">
                       <p className="text-xs uppercase font-bold text-slate-400 mb-4 tracking-wider">Approval Timeline</p>
                       {/* Progress bar */}
                       <div className="mb-6">
@@ -3491,22 +3510,114 @@ export default function LeavesPage() {
                     </div>
                   )}
 
-                  {/* Split Breakdown (Spacious) */}
-                  {detailType === 'leave' && (selectedItem as LeaveApplication)?.splits && (selectedItem as LeaveApplication).splits!.length > 0 && (
-                    <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                  {/* Change History Section */}
+                  {selectedItem.changeHistory && selectedItem.changeHistory.length > 0 && (
+                    <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden shadow-sm">
                       <button
                         onClick={() => setIsChangeHistoryExpanded(!isChangeHistoryExpanded)}
-                        className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 dark:bg-slate-700/30 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider"
+                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
                       >
-                        <span>Breakdown ({((selectedItem as LeaveApplication).splitSummary as LeaveSplitSummary)?.approvedDays ?? 0}/{(selectedItem as LeaveApplication).numberOfDays} Approved)</span>
-                        <span>{isChangeHistoryExpanded ? 'Hide' : 'Show'}</span>
+                        <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-widest">
+                          Edit History ({selectedItem.changeHistory.length})
+                        </span>
+                        <svg
+                          className={`w-4 h-4 text-slate-500 transition-transform duration-300 ${isChangeHistoryExpanded ? 'rotate-180' : ''}`}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
                       </button>
                       {isChangeHistoryExpanded && (
+                        <div className="p-4 space-y-4 bg-white dark:bg-slate-900 max-h-[300px] overflow-y-auto">
+                          {selectedItem.changeHistory.map((change: any, idx: number) => {
+                            const formatValue = (value: any) => {
+                              if (value === null || value === undefined) return 'N/A';
+                              const str = String(value);
+                              if (str.includes('T') || (str.includes('-') && str.length > 10)) {
+                                try {
+                                  const date = new Date(str);
+                                  if (!isNaN(date.getTime())) {
+                                    return date.toLocaleDateString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                    });
+                                  }
+                                } catch (e) { }
+                              }
+                              return str;
+                            };
+
+                            const fieldName = change.field.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
+                            const oldValue = formatValue(change.originalValue);
+                            const newValue = formatValue(change.newValue);
+
+                            return (
+                              <div key={idx} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 hover:shadow-sm transition-shadow">
+                                <div className="flex items-start justify-between mb-2">
+                                  <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                                    {fieldName}
+                                  </span>
+                                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                                    {new Date(change.modifiedAt).toLocaleString('en-IN', {
+                                      day: '2-digit',
+                                      month: '2-digit',
+                                      year: '2-digit',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-xs mb-2">
+                                  <span className="text-slate-400 line-through truncate max-w-[120px]">{oldValue}</span>
+                                  <svg className="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                                  <span className="text-green-600 dark:text-green-400 font-bold truncate max-w-[120px]">{newValue}</span>
+                                </div>
+                                {change.modifiedByName && (
+                                  <div className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                                    <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                                    <span>By {change.modifiedByName}</span>
+                                    {change.modifiedByRole && <span className="px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[9px] uppercase font-bold">{change.modifiedByRole}</span>}
+                                  </div>
+                                )}
+                                {change.reason && (
+                                  <p className="mt-2 text-[10px] text-slate-500 italic leading-relaxed border-t border-slate-100 dark:border-slate-700 pt-2">
+                                    Reason: {change.reason}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Split Breakdown (Spacious) */}
+                  {detailType === 'leave' && (selectedItem as LeaveApplication)?.splits && (selectedItem as LeaveApplication).splits!.length > 0 && (
+                    <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden shadow-sm">
+                      <button
+                        onClick={() => setIsBreakdownExpanded(!isBreakdownExpanded)}
+                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-700/30 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-widest"
+                      >
+                        <span>Breakdown ({((selectedItem as LeaveApplication).splitSummary as LeaveSplitSummary)?.approvedDays ?? 0}/{(selectedItem as LeaveApplication).numberOfDays} Approved)</span>
+                        <svg
+                          className={`w-4 h-4 text-slate-500 transition-transform duration-300 ${isBreakdownExpanded ? 'rotate-180' : ''}`}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {isBreakdownExpanded && (
                         <div className="divide-y divide-slate-100 dark:divide-slate-700 max-h-40 overflow-y-auto">
                           {(selectedItem as LeaveApplication).splits!.map((split, idx) => (
-                            <div key={idx} className="flex justify-between px-4 py-2.5 text-xs font-medium">
-                              <span>{formatDate(split.date)} {split.isHalfDay && '(Half)'}</span>
-                              <span className={split.status === 'approved' ? 'text-green-600' : 'text-red-600'}>{split.status}</span>
+                            <div key={idx} className="flex justify-between px-4 py-2.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                              <span className="text-slate-700 dark:text-slate-300">{formatDate(split.date)} {split.isHalfDay && '(Half)'}</span>
+                              <span className={`capitalize font-bold ${split.status === 'approved' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{split.status}</span>
                             </div>
                           ))}
                         </div>
@@ -3516,27 +3627,42 @@ export default function LeavesPage() {
 
                   {/* Revoke / Edit Actions */}
                   <div className="flex flex-col gap-3">
-                    {/* Revoke - only visible to approver of last step, within 3hr */}
-                    {canRevoke && currentUser?.role !== 'employee' && (selectedItem.status === 'approved' || selectedItem.status === 'hod_approved' || selectedItem.status === 'manager_approved' || selectedItem.status === 'hr_approved') && (
-                      <div className="flex gap-3">
-                        <input
-                          value={revokeReason}
-                          onChange={(e) => setRevokeReason(e.target.value)}
-                          className="flex-1 text-xs border border-orange-200 rounded-lg px-3 py-2 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-                          placeholder="Reason for revoking this approved request..."
-                        />
-                        <button
-                          onClick={async () => {
-                            if (!revokeReason) return toast.error('Reason required');
-                            try {
-                              const res = detailType === 'leave' ? await api.revokeLeaveApproval(selectedItem._id, revokeReason) : await api.revokeODApproval(selectedItem._id, revokeReason);
-                              if (res.success) { setShowDetailDialog(false); loadData(); toast.success('Revoked'); }
-                            } catch (e) { toast.error('Failed to revoke'); }
-                          }}
-                          className="px-4 py-2 bg-orange-500 text-white text-xs font-bold rounded-lg hover:bg-orange-600 transition-colors shadow-sm"
-                        >
-                          Revoke
-                        </button>
+                    {/* Revoke - visible if canRevoke is true (actor or admin, within 48hr) */}
+                    {canRevoke && currentUser?.role !== 'employee' && (
+                      <div className="flex flex-col gap-3 p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-800/50 rounded-xl">
+                        <div className="flex items-center gap-2 mb-1">
+                          <RotateCw className="w-4 h-4 text-orange-500" />
+                          <span className="text-xs font-bold text-orange-700 dark:text-orange-400 uppercase tracking-wider">Revoke Action</span>
+                        </div>
+                        <p className="text-[10px] text-orange-600 dark:text-orange-500 leading-relaxed mb-1">
+                          You can revert the last approval or rejection. This will return the request to its previous state.
+                        </p>
+                        <div className="flex gap-2">
+                          <input
+                            value={revokeReason}
+                            onChange={(e) => setRevokeReason(e.target.value)}
+                            className="flex-1 text-xs border border-orange-200 dark:border-orange-800 rounded-lg px-3 py-2 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:bg-slate-900 dark:text-white"
+                            placeholder="Reason for revoking..."
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!revokeReason) return toast.error('Reason required');
+                              try {
+                                const res = detailType === 'leave' ? await api.revokeLeaveApproval(selectedItem._id, revokeReason) : await api.revokeODApproval(selectedItem._id, revokeReason);
+                                if (res.success) {
+                                  setShowDetailDialog(false);
+                                  loadData();
+                                  toast.success('Action revoked and status reverted');
+                                } else {
+                                  toast.error(res.error || 'Failed to revoke');
+                                }
+                              } catch (e) { toast.error('An error occurred during revocation'); }
+                            }}
+                            className="px-4 py-2 bg-orange-500 text-white text-xs font-bold rounded-lg hover:bg-orange-600 transition-colors shadow-sm"
+                          >
+                            Revoke
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3561,6 +3687,22 @@ export default function LeavesPage() {
                         </div>
                       )}
                     </>
+                  )}
+
+                  {['manager', 'hod', 'hr', 'super_admin', 'sub_admin'].includes(currentUser?.role || '') && !['rejected', 'cancelled'].includes(selectedItem.status) && (
+                    <button
+                      onClick={() => {
+                        setEditFormData({
+                          ...selectedItem,
+                          fromDate: formatDateForInput(selectedItem.fromDate),
+                          toDate: formatDateForInput(selectedItem.toDate),
+                        });
+                        setShowEditDialog(true);
+                      }}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+                    >
+                      Edit
+                    </button>
                   )}
 
                   <button
@@ -3657,8 +3799,7 @@ export default function LeavesPage() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     {detailType === 'leave' ? 'Leave Type' : 'OD Type'} *
                   </label>
-                  <input
-                    type="text"
+                  <select
                     value={detailType === 'leave' ? editFormData.leaveType : editFormData.odType}
                     onChange={(e) => setEditFormData({
                       ...editFormData,
@@ -3666,7 +3807,12 @@ export default function LeavesPage() {
                     })}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
+                  >
+                    <option value="">Select {detailType === 'leave' ? 'Leave' : 'OD'} Type</option>
+                    {(detailType === 'leave' ? leaveTypes : odTypes).map((t: any) => (
+                      <option key={t.code} value={t.code}>{t.name}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Dates */}

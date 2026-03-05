@@ -909,7 +909,7 @@ exports.updateLeave = async (req, res) => {
     const isSuperAdmin = req.user.role === 'super_admin';
     const isFinalApproved = leave.status === 'approved';
 
-    if (isFinalApproved && !isSuperAdmin) {
+    if (isFinalApproved && !['super_admin', 'manager', 'hod'].includes(req.user.role)) {
       return res.status(400).json({
         success: false,
         error: 'Final approved leave cannot be edited',
@@ -918,7 +918,7 @@ exports.updateLeave = async (req, res) => {
 
     // Check ownership or admin permission
     const isOwner = leave.appliedBy.toString() === req.user._id.toString();
-    const isAdmin = ['hr', 'sub_admin', 'super_admin'].includes(req.user.role);
+    const isAdmin = ['hr', 'sub_admin', 'super_admin', 'manager', 'hod'].includes(req.user.role);
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({
@@ -1078,7 +1078,7 @@ exports.cancelLeave = async (req, res) => {
 
     // Check ownership or admin permission
     const isOwner = leave.appliedBy.toString() === req.user._id.toString();
-    const isAdmin = ['hr', 'sub_admin', 'super_admin'].includes(req.user.role);
+    const isAdmin = ['hr', 'sub_admin', 'super_admin', 'manager', 'hod'].includes(req.user.role);
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({
@@ -1641,11 +1641,15 @@ exports.revokeLeaveApproval = async (req, res) => {
       });
     }
 
-    const allowedStatuses = ['approved', 'hod_approved', 'manager_approved', 'hr_approved'];
+    const allowedStatuses = [
+      'approved', 'rejected',
+      'hod_approved', 'manager_approved', 'hr_approved',
+      'hod_rejected', 'manager_rejected', 'hr_rejected'
+    ];
     if (!allowedStatuses.includes(leave.status)) {
       return res.status(400).json({
         success: false,
-        error: 'Only approved or partially approved leaves can be revoked',
+        error: 'Only approved or rejected leaves can be revoked',
       });
     }
 
@@ -1657,46 +1661,69 @@ exports.revokeLeaveApproval = async (req, res) => {
       });
     }
 
-    const approvedSteps = chain
+    // Find the last action taken (either approval or rejection)
+    const actionSteps = chain
       .map((s, i) => ({ step: s, index: i }))
-      .filter(({ step }) => step.status === 'approved');
-    const lastApproved = approvedSteps[approvedSteps.length - 1];
-    if (!lastApproved) {
+      .filter(({ step }) => step.status === 'approved' || step.status === 'rejected');
+
+    const lastAction = actionSteps[actionSteps.length - 1];
+    if (!lastAction) {
       return res.status(400).json({
         success: false,
-        error: 'No approved step found to revoke',
+        error: 'No action found to revoke',
       });
     }
 
-    const lastStep = lastApproved.step;
-    const stepIndex = lastApproved.index;
-    const approvedAt = lastStep.updatedAt || leave.approvals?.[lastStep.role]?.approvedAt || leave.approvals?.[lastStep.stepRole]?.approvedAt;
-    if (!approvedAt) {
+    const lastStep = lastAction.step;
+    const stepIndex = lastAction.index;
+    const updatedAt = lastStep.updatedAt || leave.approvals?.[lastStep.role]?.approvedAt || leave.approvals?.[lastStep.stepRole]?.approvedAt;
+
+    if (!updatedAt) {
       return res.status(400).json({
         success: false,
-        error: 'No approval timestamp found for this step',
+        error: 'No timestamp found for the last action',
       });
     }
 
-    const hoursSinceApproval = (new Date() - new Date(approvedAt)) / (1000 * 60 * 60);
-    const revocationWindow = 3;
-    if (hoursSinceApproval > revocationWindow) {
+    const hoursSinceAction = (new Date() - new Date(updatedAt)) / (1000 * 60 * 60);
+    const revocationWindow = 48; // Extended to 48 hours as per plan
+    if (hoursSinceAction > revocationWindow) {
       return res.status(400).json({
         success: false,
-        error: `Approval can only be revoked within ${revocationWindow} hours. ${hoursSinceApproval.toFixed(1)} hours have passed.`,
+        error: `Action can only be revoked within ${revocationWindow} hours. ${hoursSinceAction.toFixed(1)} hours have passed.`,
       });
     }
 
     const approverId = (lastStep.actionBy?._id || lastStep.actionBy)?.toString();
     const userId = (req.user._id || req.user.userId)?.toString();
-    if (approverId !== userId) {
+    const userRole = req.user.role;
+
+    // Authorization: Original actor OR Super Admin OR HR
+    const isOriginalActor = approverId === userId;
+    const isHigherAuthority = ['super_admin', 'hr'].includes(userRole);
+
+    if (!isOriginalActor && !isHigherAuthority) {
       return res.status(403).json({
         success: false,
-        error: 'Only the person who approved this step can revoke it',
+        error: 'Only the person who performed the action or a higher authority can revoke it',
       });
     }
 
+    // If revoking a final approval, reverse the leave register debit
+    if (lastStep.status === 'approved' && leave.status === 'approved') {
+      try {
+        const leaveRegisterService = require('../services/leaveRegisterService');
+        await leaveRegisterService.reverseLeaveDebit(leave, req.user._id);
+      } catch (err) {
+        console.error('Failed to reverse leave register debit during revocation:', err);
+        // We continue anyway, but log the error
+      }
+    }
+
     const stepRole = lastStep.role || lastStep.stepRole;
+    const originalStatus = lastStep.status;
+
+    // Reset the step to pending
     lastStep.status = 'pending';
     lastStep.actionBy = undefined;
     lastStep.actionByName = undefined;
@@ -1704,6 +1731,12 @@ exports.revokeLeaveApproval = async (req, res) => {
     lastStep.comments = undefined;
     lastStep.updatedAt = undefined;
     lastStep.isCurrent = true;
+
+    // Also reset if there were any following steps marked as current or pending (safety)
+    for (let i = stepIndex + 1; i < chain.length; i++) {
+      chain[i].isCurrent = false;
+      chain[i].status = 'pending';
+    }
 
     if (leave.approvals && leave.approvals[stepRole]) {
       leave.approvals[stepRole] = { status: null, approvedBy: null, approvedAt: null, comments: null };
@@ -1715,6 +1748,7 @@ exports.revokeLeaveApproval = async (req, res) => {
     leave.workflow.currentStep = stepRole;
     leave.workflow.isCompleted = false;
 
+    // Recalculate overall status based on previous step
     if (stepIndex === 0) {
       leave.status = 'pending';
     } else {
@@ -1727,8 +1761,8 @@ exports.revokeLeaveApproval = async (req, res) => {
       action: 'revoked',
       actionBy: req.user._id,
       actionByName: req.user.name,
-      actionByRole: req.user.role,
-      comments: reason || `Approval revoked by ${req.user.name}`,
+      actionByRole: userRole,
+      comments: reason || `Action (${originalStatus}) revoked by ${req.user.name}`,
       timestamp: new Date(),
     });
 
@@ -1738,14 +1772,14 @@ exports.revokeLeaveApproval = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Leave approval revoked successfully',
+      message: `Leave ${originalStatus} revoked successfully`,
       data: leave,
     });
   } catch (error) {
-    console.error('Error revoking leave approval:', error);
+    console.error('Error revoking leave action:', error);
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to revoke leave approval',
+      error: error.message || 'Failed to revoke leave action',
     });
   }
 };

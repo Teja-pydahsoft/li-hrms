@@ -1065,10 +1065,20 @@ export default function LeavesPage() {
   const [canRevoke, setCanRevoke] = useState(false);
   const [revokeReason, setRevokeReason] = useState('');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [isSubAdmin, setIsSubAdmin] = useState(false);
+  const [isHR, setIsHR] = useState(false);
+  const [isManager, setIsManager] = useState(false);
+  const [isHOD, setIsHOD] = useState(false);
 
   useEffect(() => {
     const user = auth.getUser();
-    setIsSuperAdmin(user?.role === 'super_admin');
+    if (user) {
+      setIsSuperAdmin(user.role === 'super_admin');
+      setIsSubAdmin(user.role === 'sub_admin');
+      setIsHR(user.role === 'hr');
+      setIsManager(user.role === 'manager');
+      setIsHOD(user.role === 'hod');
+    }
   }, []);
 
   const buildInitialSplits = (leave: LeaveApplication) => {
@@ -2407,25 +2417,25 @@ export default function LeavesPage() {
                   <p className="text-sm font-bold text-slate-900 dark:text-white">
                     {detailType === 'od' && (selectedItem as any).odType_extended === 'hours'
                       ? (() => {
-                          const odItem = selectedItem as any;
-                          const start = odItem.odStartTime || odItem.od_start_time || '';
-                          const end = odItem.odEndTime || odItem.od_end_time || '';
-                          if (start && end && typeof start === 'string' && typeof end === 'string') {
-                            try {
-                              const [sh, sm] = start.split(':').map(Number);
-                              const [eh, em] = end.split(':').map(Number);
-                              const sMin = sh * 60 + sm;
-                              const eMin = eh * 60 + em;
-                              if (!isNaN(sMin) && !isNaN(eMin) && eMin > sMin) {
-                                const durationMin = eMin - sMin;
-                                const hours = Math.floor(durationMin / 60);
-                                const mins = durationMin % 60;
-                                return `${hours}h ${mins}m`;
-                              }
-                            } catch (_) {}
-                          }
-                          return `${selectedItem.numberOfDays}d`;
-                        })()
+                        const odItem = selectedItem as any;
+                        const start = odItem.odStartTime || odItem.od_start_time || '';
+                        const end = odItem.odEndTime || odItem.od_end_time || '';
+                        if (start && end && typeof start === 'string' && typeof end === 'string') {
+                          try {
+                            const [sh, sm] = start.split(':').map(Number);
+                            const [eh, em] = end.split(':').map(Number);
+                            const sMin = sh * 60 + sm;
+                            const eMin = eh * 60 + em;
+                            if (!isNaN(sMin) && !isNaN(eMin) && eMin > sMin) {
+                              const durationMin = eMin - sMin;
+                              const hours = Math.floor(durationMin / 60);
+                              const mins = durationMin % 60;
+                              return `${hours}h ${mins}m`;
+                            }
+                          } catch (_) { }
+                        }
+                        return `${selectedItem.numberOfDays}d`;
+                      })()
                       : `${selectedItem.numberOfDays}d${selectedItem.isHalfDay ? ` (${(selectedItem.halfDayType || 'first half').replace('_', ' ')})` : ''}`}
                   </p>
                 </div>
@@ -2950,8 +2960,8 @@ export default function LeavesPage() {
                   </div>
                 )}
 
-                {/* Edit Button (for Super Admin/HR - not final approved) */}
-                {(selectedItem.status !== 'approved' || isSuperAdmin) && (
+                {/* Edit Button (for Super Admin/HR/Manager/HOD - allow approved edits) */}
+                {(selectedItem.status !== 'approved' || isSuperAdmin || isSubAdmin || isHR || isManager || isHOD) && (
                   <button
                     onClick={() => {
                       const odItem = selectedItem as any;
@@ -3106,8 +3116,7 @@ export default function LeavesPage() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     {detailType === 'leave' ? 'Leave Type' : 'OD Type'} *
                   </label>
-                  <input
-                    type="text"
+                  <select
                     value={detailType === 'leave' ? editFormData.leaveType : editFormData.odType}
                     onChange={(e) => setEditFormData({
                       ...editFormData,
@@ -3115,7 +3124,12 @@ export default function LeavesPage() {
                     })}
                     required
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
+                  >
+                    <option value="">Select {detailType === 'leave' ? 'Leave' : 'OD'} Type</option>
+                    {(detailType === 'leave' ? leaveTypes : odTypes).map((t: any) => (
+                      <option key={t.code} value={t.code}>{t.name}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Dates */}
