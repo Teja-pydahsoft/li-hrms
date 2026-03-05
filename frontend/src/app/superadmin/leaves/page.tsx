@@ -1736,6 +1736,7 @@ export default function LeavesPage() {
                         <div className="font-medium text-slate-900 dark:text-white">{getEmployeeName({ employee_name: leave.employeeId?.employee_name ?? '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: leave.employeeId?.emp_no ?? leave.emp_no ?? '' } as Employee)}</div>
                         <div className="text-xs text-slate-500">({leave.employeeId?.emp_no ?? leave.emp_no}) · {leave.leaveType} · {leave.numberOfDays}d</div>
                         <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">{formatDate(leave.fromDate)} – {formatDate(leave.toDate)}</div>
+                        <span className={`inline-block mt-2 px-2 py-0.5 text-xs font-medium rounded ${getStatusColor(leave.status)}`}>{leave.status?.replace('_', ' ') ?? 'pending'}</span>
                       </div>
                       <div className="flex flex-col gap-1 shrink-0">
                         <button onClick={() => handleAction(leave._id, 'leave', 'approve')} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-100 rounded">Approve</button>
@@ -1773,12 +1774,13 @@ export default function LeavesPage() {
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Place</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Dates</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Days</th>
+                      <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Status</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                     {!loadingPending && pendingODs.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No pending ODs</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">No pending ODs</td></tr>
                     )}
                     {pendingODs.map((od) => (
                       <tr key={od._id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
@@ -1790,6 +1792,7 @@ export default function LeavesPage() {
                         <td className="px-4 py-3 max-w-[120px] truncate" title={od.placeVisited}>{od.placeVisited || '–'}</td>
                         <td className="px-4 py-3">{formatDate(od.fromDate)} – {formatDate(od.toDate)}</td>
                         <td className="px-4 py-3">{od.numberOfDays}</td>
+                        <td className="px-4 py-3"><span className={`px-2 py-0.5 text-xs font-medium rounded ${getStatusColor(od.status)}`}>{od.status?.replace('_', ' ') ?? 'pending'}</span></td>
                         <td className="px-4 py-3 text-right">
                           <button onClick={() => handleAction(od._id, 'od', 'approve')} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-100 rounded hover:bg-green-200 mr-1">Approve</button>
                           <button onClick={() => handleAction(od._id, 'od', 'reject')} className="px-2 py-1 text-xs font-medium text-red-700 bg-red-100 rounded hover:bg-red-200">Reject</button>
@@ -1820,6 +1823,7 @@ export default function LeavesPage() {
                         <div className="text-xs text-slate-500">({od.employeeId?.emp_no ?? od.emp_no}) · {od.odType} · {od.numberOfDays}d</div>
                         <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">{formatDate(od.fromDate)} – {formatDate(od.toDate)}</div>
                         {od.placeVisited && <div className="text-xs text-slate-500 mt-0.5 truncate">{od.placeVisited}</div>}
+                        <span className={`inline-block mt-2 px-2 py-0.5 text-xs font-medium rounded ${getStatusColor(od.status)}`}>{od.status?.replace('_', ' ') ?? 'pending'}</span>
                       </div>
                       <div className="flex flex-col gap-1 shrink-0">
                         <button onClick={() => handleAction(od._id, 'od', 'approve')} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-100 rounded">Approve</button>
