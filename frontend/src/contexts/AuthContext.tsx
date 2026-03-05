@@ -49,6 +49,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             // JUST update local state, do NOT call auth.logout() again as it dispatches the event
             setUser(null);
             localStorage.removeItem('user'); // Ensure local storage user is gone
+
+            // Redirect to login page
+            window.location.href = '/login';
         };
 
         window.addEventListener('auth-logout', handleGlobalLogout);

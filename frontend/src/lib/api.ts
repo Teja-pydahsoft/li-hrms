@@ -428,6 +428,12 @@ export async function apiRequest<T>(
     console.log(`[API Response] ${response.status} ${url}`, data);
 
     if (!response.ok) {
+      // Handle unauthorized (expired token)
+      if (response.status === 401 && !endpoint.includes('/auth/login')) {
+        console.warn(`[API 401] Unauthorized access to ${endpoint}. Triggering logout.`);
+        auth.logout();
+      }
+
       return {
         success: false,
         message: data.message || 'An error occurred',
@@ -3736,8 +3742,8 @@ export const api = {
   },
 
   updateLeavePolicySettings: async (data: any) => {
-    return apiRequest<any>('/settings/leave-policy', { 
-      method: 'PUT', 
+    return apiRequest<any>('/settings/leave-policy', {
+      method: 'PUT',
       body: JSON.stringify(data),
       headers: {
         'Content-Type': 'application/json'
@@ -3746,14 +3752,14 @@ export const api = {
   },
 
   resetLeavePolicySettings: async () => {
-    return apiRequest<any>('/settings/leave-policy/reset', { 
-      method: 'POST' 
+    return apiRequest<any>('/settings/leave-policy/reset', {
+      method: 'POST'
     });
   },
 
   previewELCalculation: async (data: { employeeId: string; month: number; year: number }) => {
-    return apiRequest<any>('/settings/leave-policy/preview', { 
-      method: 'POST', 
+    return apiRequest<any>('/settings/leave-policy/preview', {
+      method: 'POST',
       body: JSON.stringify(data)
     });
   },
@@ -3763,8 +3769,8 @@ export const api = {
   // ==========================================
 
   performAnnualCLReset: async (data: { targetYear?: number; confirmReset?: boolean }) => {
-    return apiRequest<any>('/leaves/annual-reset', { 
-      method: 'POST', 
+    return apiRequest<any>('/leaves/annual-reset', {
+      method: 'POST',
       body: JSON.stringify(data)
     });
   },
@@ -3775,7 +3781,7 @@ export const api = {
     if (filters?.departmentId) params.append('departmentId', filters.departmentId);
     if (filters?.divisionId) params.append('divisionId', filters.divisionId);
     const query = params.toString() ? `?${params.toString()}` : '';
-    
+
     return apiRequest<any>(`/leaves/annual-reset/status${query}`, { method: 'GET' });
   },
 
@@ -3784,8 +3790,8 @@ export const api = {
   },
 
   previewAnnualReset: async (data: { sampleSize?: number }) => {
-    return apiRequest<any>('/leaves/annual-reset/preview', { 
-      method: 'POST', 
+    return apiRequest<any>('/leaves/annual-reset/preview', {
+      method: 'POST',
       body: JSON.stringify(data)
     });
   },
@@ -3799,8 +3805,8 @@ export const api = {
   },
 
   initLeavePolicySettings: async () => {
-    return apiRequest<any>('/settings/leave-policy/init', { 
-      method: 'POST' 
+    return apiRequest<any>('/settings/leave-policy/init', {
+      method: 'POST'
     });
   },
 };
