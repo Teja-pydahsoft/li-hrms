@@ -3492,6 +3492,8 @@ export const api = {
   createDeduction: async (data: any) => apiRequest<any>('/manual-deductions', { method: 'POST', body: JSON.stringify(data) }),
   createDeductionsBulk: async (items: Array<{ employee: string; amount: number; reason?: string; remarks?: string }>) =>
     apiRequest<any>('/manual-deductions/bulk', { method: 'POST', body: JSON.stringify({ items }) }),
+  bulkApproveDeductions: async (ids: string[]) =>
+    apiRequest<any>('/manual-deductions/bulk-approve', { method: 'PUT', body: JSON.stringify({ ids }) }),
   updateDeduction: async (id: string, data: any) => apiRequest<any>(`/manual-deductions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   getPendingDeductions: async (employeeId: string) => apiRequest<any>(`/manual-deductions/employee/${employeeId}/pending`, { method: 'GET' }),
   getPendingDeductionApprovals: async () => apiRequest<any>('/manual-deductions/pending-approvals', { method: 'GET' }),

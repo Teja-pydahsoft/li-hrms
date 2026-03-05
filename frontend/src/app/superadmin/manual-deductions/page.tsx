@@ -53,7 +53,7 @@ interface BulkRow {
   remarks: string;
 }
 
-export default function ManualDeductionsPage() {
+export function ManualDeductionsContent() {
   const [deductions, setDeductions] = useState<Deduction[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
@@ -61,6 +61,8 @@ export default function ManualDeductionsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
 
   // Bulk create
   const [divisions, setDivisions] = useState<any[]>([]);
@@ -178,6 +180,48 @@ export default function ManualDeductionsPage() {
   };
 
   const getEmployeeName = (emp: any) => emp?.employee_name || (emp?.first_name && emp?.last_name ? `${emp.first_name} ${emp.last_name}` : emp?.first_name) || emp?.emp_no || '—';
+
+  const pendingStatuses = ['pending_hod', 'pending_hr', 'pending_admin'];
+  const selectableFiltered = filtered.filter((d) => pendingStatuses.includes(d.status));
+  const selectedSelectable = selectableFiltered.filter((d) => selectedIds.has(d._id));
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (selectedSelectable.length === selectableFiltered.length) setSelectedIds((prev) => { const n = new Set(prev); selectableFiltered.forEach((d) => n.delete(d._id)); return n; });
+    else setSelectedIds((prev) => { const n = new Set(prev); selectableFiltered.forEach((d) => n.add(d._id)); return n; });
+  };
+  const handleBulkApprove = async () => {
+    const ids = Array.from(selectedIds).filter((id) => {
+      const d = deductions.find((x) => x._id === id);
+      return d && pendingStatuses.includes(d.status);
+    });
+    if (ids.length === 0) {
+      toast.warn('Select at least one pending request to approve');
+      return;
+    }
+    setBulkApproving(true);
+    try {
+      const res = await api.bulkApproveDeductions(ids);
+      const approved = res?.approved ?? 0;
+      const failed = res?.failed ?? 0;
+      if (approved) {
+        toast.success(`${approved} request(s) approved`);
+        setSelectedIds(new Set());
+        loadData();
+      }
+      if (failed) toast.error(`${failed} failed`);
+    } catch (e: any) {
+      toast.error(e?.message || 'Bulk approve failed');
+    } finally {
+      setBulkApproving(false);
+    }
+  };
 
   return (
     <div className="md:p-8">
@@ -347,15 +391,28 @@ export default function ManualDeductionsPage() {
               </button>
             ))}
           </div>
-          <div className="relative min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search employee..."
-              className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm dark:bg-slate-800 dark:text-white dark:border-slate-700"
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            {selectableFiltered.length > 0 && (
+              <button
+                type="button"
+                onClick={handleBulkApprove}
+                disabled={bulkApproving || selectedSelectable.length === 0}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold uppercase disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {bulkApproving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                Bulk approve ({selectedSelectable.length} selected)
+              </button>
+            )}
+            <div className="relative min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search employee..."
+                className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm dark:bg-slate-800 dark:text-white dark:border-slate-700"
+              />
+            </div>
           </div>
         </div>
 
@@ -372,6 +429,16 @@ export default function ManualDeductionsPage() {
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-slate-100 dark:bg-slate-900/50 text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                  <th className="px-4 py-4 text-left w-10">
+                    {selectableFiltered.length > 0 && (
+                      <input
+                        type="checkbox"
+                        checked={selectedSelectable.length === selectableFiltered.length && selectableFiltered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-slate-300"
+                      />
+                    )}
+                  </th>
                   <th className="px-6 py-4 text-left">Employee</th>
                   <th className="px-6 py-4 text-left">Period / Type</th>
                   <th className="px-6 py-4 text-right">Total</th>
@@ -383,6 +450,16 @@ export default function ManualDeductionsPage() {
               <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                 {filtered.map((d) => (
                   <tr key={d._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-4 py-4">
+                      {pendingStatuses.includes(d.status) && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(d._id)}
+                          onChange={() => toggleSelection(d._id)}
+                          className="rounded border-slate-300"
+                        />
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-sm font-medium text-slate-950 dark:text-white">{getEmployeeName(d.employee)}</td>
                     <td className="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
                       {d.type === 'direct' ? 'Direct' : (d.startMonth && d.endMonth ? `${d.startMonth} – ${d.endMonth}` : '—')}
@@ -430,16 +507,39 @@ export default function ManualDeductionsPage() {
 function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId: string; onClose: () => void; onUpdate: () => void }) {
   const [deduction, setDeduction] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const refresh = () => {
+    if (!deductionId) return;
+    setLoading(true);
+    api.getDeductionById(deductionId)
+      .then((r: any) => { if (r.success) setDeduction(r.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    if (deductionId) {
-      setLoading(true);
-      api.getDeductionById(deductionId)
-        .then((r: any) => { if (r.success) setDeduction(r.data); })
-        .catch(() => {})
-        .finally(() => setLoading(false));
-    }
+    if (deductionId) refresh();
   }, [deductionId]);
+
+  const pendingStatuses = ['pending_hod', 'pending_hr', 'pending_admin'];
+  const canAct = deduction && pendingStatuses.includes(deduction.status);
+
+  const handleAction = async (approved: boolean, comments?: string) => {
+    if (!deductionId || actionLoading) return;
+    setActionLoading(true);
+    try {
+      await api.processDeductionAction(deductionId, approved, comments);
+      toast.success(approved ? 'Approved' : 'Rejected');
+      onUpdate();
+      refresh();
+      if (approved && deduction?.status === 'pending_admin') onClose();
+    } catch (e: any) {
+      toast.error(e?.message || (approved ? 'Approve failed' : 'Reject failed'));
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   if (!deductionId) return null;
 
@@ -465,6 +565,31 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Remaining:</span> ₹{Number(deduction.remainingAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Status:</span> {getStatusLabel(deduction.status)}</p>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Reason:</span> {deduction.reason || '—'}</p>
+              {canAct && (
+                <div className="flex flex-wrap gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => handleAction(true)}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const comments = window.prompt('Rejection reason (optional):');
+                      if (comments !== null) handleAction(false, comments || undefined);
+                    }}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Reject
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-slate-500">Failed to load deduction.</p>
@@ -473,4 +598,8 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
       </div>
     </div>
   );
+}
+
+export default function ManualDeductionsPage() {
+  return <ManualDeductionsContent />;
 }

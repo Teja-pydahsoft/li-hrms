@@ -50,6 +50,39 @@ exports.createDeductionsBulk = async (req, res) => {
   }
 };
 
+/**
+ * Bulk approve: transition selected deduction IDs to fully approved (only pending_* statuses).
+ * Body: { ids: string[] }
+ */
+exports.bulkApproveDeductions = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'ids array is required and must not be empty' });
+    }
+    const userId = uid(req);
+    const approved = [];
+    const errors = [];
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const deduction = await DeductionService.transitionToApproved(ids[i], userId);
+        approved.push(deduction);
+      } catch (err) {
+        errors.push({ id: ids[i], message: err.message });
+      }
+    }
+    return res.status(200).json({
+      success: true,
+      approved: approved.length,
+      failed: errors.length,
+      data: approved,
+      errors: errors.length ? errors : undefined,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.createDeduction = async (req, res) => {
   try {
     const { type, employee, startMonth, endMonth, monthlyAmount, totalAmount, amount, reason, calculationBreakdown } = req.body;

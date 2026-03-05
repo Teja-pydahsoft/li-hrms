@@ -12,6 +12,7 @@ router.get('/for-payroll', authorize('hr', 'sub_admin', 'super_admin'), deductio
 router.get('/employee/:employeeId/pending', deductionController.getEmployeePendingDeductions);
 router.get('/', authorize('hod', 'hr', 'sub_admin', 'super_admin'), deductionController.getDeductions);
 router.post('/bulk', authorize('hr', 'sub_admin', 'super_admin'), deductionController.createDeductionsBulk);
+router.put('/bulk-approve', authorize('sub_admin', 'super_admin'), deductionController.bulkApproveDeductions);
 router.post('/', authorize('hr', 'sub_admin', 'super_admin'), deductionController.createDeduction);
 
 router.put('/:id/edit', authorize('sub_admin', 'super_admin'), deductionController.editDeduction);

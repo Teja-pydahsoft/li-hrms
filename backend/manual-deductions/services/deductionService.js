@@ -141,6 +141,44 @@ class DeductionService {
     }
   }
 
+  /**
+   * Transition a deduction through approval stages to final 'approved' (for bulk approve by super_admin/sub_admin).
+   * Only applies when status is pending_hod, pending_hr, or pending_admin.
+   */
+  static async transitionToApproved(deductionId, userId) {
+    const deduction = await DeductionRequest.findById(deductionId);
+    if (!deduction) throw new Error('Deduction not found');
+    const validNext = { pending_hod: 'pending_hr', pending_hr: 'pending_admin', pending_admin: 'approved' };
+    if (!validNext[deduction.status]) {
+      throw new Error(`Deduction cannot be bulk-approved from status: ${deduction.status}`);
+    }
+    while (validNext[deduction.status]) {
+      const nextStatus = validNext[deduction.status];
+      const now = new Date();
+      const previousStatus = deduction.status;
+      deduction.status = nextStatus;
+      deduction.updatedBy = userId;
+      if (nextStatus === 'pending_hr') {
+        deduction.hodApproval = { approved: true, approvedBy: userId, approvedAt: now, comments: 'Bulk approved' };
+      } else if (nextStatus === 'pending_admin') {
+        deduction.hrApproval = { approved: true, approvedBy: userId, approvedAt: now, comments: 'Bulk approved' };
+      } else if (nextStatus === 'approved') {
+        deduction.adminApproval = { approved: true, approvedBy: userId, approvedAt: now, comments: 'Bulk approved', modifiedAmount: deduction.totalAmount };
+      }
+      if (!deduction.statusHistory) deduction.statusHistory = [];
+      deduction.statusHistory.push({
+        changedAt: now,
+        changedBy: userId,
+        previousStatus,
+        newStatus: nextStatus,
+        reason: `Bulk approved: ${previousStatus} → ${nextStatus}`,
+        comments: ''
+      });
+      await deduction.save();
+    }
+    return deduction.populate('employee createdBy updatedBy hodApproval.approvedBy hrApproval.approvedBy adminApproval.approvedBy');
+  }
+
   static async processSettlement(employeeId, month, deductionSettlements, userId, payrollId) {
     const session = await mongoose.startSession();
     session.startTransaction();
