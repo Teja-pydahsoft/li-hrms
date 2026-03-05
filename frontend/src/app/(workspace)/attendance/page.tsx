@@ -3046,8 +3046,8 @@ export default function AttendancePage() {
                         )}
                         {tableType === 'present_absent' && <div className="font-bold text-sm">{displayStatus}</div>}
                         {tableType === 'in_out' && (
-                          record?.shifts?.length > 0 ? (
-                            record.shifts.slice(0, 2).map((s: any, idx: number) => (
+                          (record?.shifts?.length ?? 0) > 0 ? (
+                            (record?.shifts ?? []).slice(0, 2).map((s: any, idx: number) => (
                               <div key={idx} className="text-[9px]">
                                 <span className="text-green-600 dark:text-green-400">{s.inTime ? formatTime(s.inTime) : '-'}</span>
                                 <span className="text-slate-400 mx-1">/</span>

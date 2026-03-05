@@ -759,7 +759,7 @@ export default function PayRegisterPage() {
     const q = (searchQuery || '').trim().toLowerCase();
     if (!q) return payRegisters;
     return payRegisters.filter((pr) => {
-      const emp = pr.employeeId && typeof pr.employeeId === 'object' ? (pr.employeeId as Record<string, unknown>) : null;
+      const emp = pr.employeeId && typeof pr.employeeId === 'object' ? (pr.employeeId as unknown as Record<string, unknown>) : null;
       const name = (emp?.employee_name != null ? String(emp.employee_name) : '').toLowerCase();
       const empNo = (emp?.emp_no != null ? String(emp.emp_no) : (pr.emp_no != null ? String(pr.emp_no) : '')).toLowerCase();
       const deptObj = emp?.department_id;
