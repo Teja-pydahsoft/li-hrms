@@ -3192,7 +3192,7 @@ export default function LeavesPage() {
                 >
                   <div className="flex items-center justify-center px-2 gap-1">
                     <Calendar className="w-4 h-4" />
-                    Leave Request
+                    Leave
                   </div>
                 </button>
                 <button
@@ -3210,7 +3210,7 @@ export default function LeavesPage() {
                 </button>
               </div>
 
-              <div className="mb-6 sm:mb-8">
+              <div className="mb-6 sm:mb-8 hidden sm:block">
                 <h2 className="text-lg sm:text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300">
                   New {applyType === 'leave' ? 'Leave' : 'OD'} Application
                 </h2>
@@ -3597,22 +3597,22 @@ export default function LeavesPage() {
                   />
                 </div>
 
-                {/* Actions */}
-                <div className="flex gap-3 pt-2">
+                {/* Actions - Sticky Bottom */}
+                <div className="sticky bottom-0 z-10 -mx-5 -mb-5 p-5 sm:-mx-8 sm:-mb-8 sm:p-8 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-slate-100 dark:border-slate-800 flex gap-3 mt-6">
                   <button
                     type="button"
                     onClick={() => setShowApplyDialog(false)}
-                    className="flex-1 py-2 sm:py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+                    className="flex-1 py-2.5 sm:py-3 text-sm font-bold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 active:scale-95 transition-all"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={loading || !isFormValid()}
-                    className={`flex-1 py-2 sm:py-2.5 text-sm font-bold text-white rounded-xl transition-all ${(loading || !isFormValid())
+                    className={`flex-1 py-2.5 sm:py-3 text-sm font-bold text-white rounded-xl transition-all ${(loading || !isFormValid())
                       ? 'opacity-40 cursor-not-allowed grayscale'
-                      : 'opacity-100 hover:scale-[1.02] active:scale-95'
-                      } ${applyType === 'leave' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'}`}
+                      : 'opacity-100 hover:scale-[1.02] active:scale-95 shadow-lg shadow-blue-500/20'
+                      } ${applyType === 'leave' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700 shadow-purple-500/20'}`}
                   >
                     {loading ? (
                       <div className="flex items-center justify-center gap-2">

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import exifr from 'exifr';
+import { MapPin, XCircle, AlertCircle } from 'lucide-react';
 
 const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
@@ -57,6 +58,10 @@ export default function LocationPhotoCapture({
     const [loadingStep, setLoadingStep] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
+    const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
+    const [permissionDeniedAtFetch, setPermissionDeniedAtFetch] = useState(false);
+    const [locationUnavailableAtFetch, setLocationUnavailableAtFetch] = useState(false);
+    const [pendingFile, setPendingFile] = useState<File | null>(null);
 
     // Separate refs for different capture modes
     const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -131,9 +136,38 @@ export default function LocationPhotoCapture({
         }
     };
 
+    const checkPermissionStatus = async (): Promise<PermissionState> => {
+        if (typeof navigator !== 'undefined' && navigator.permissions) {
+            try {
+                const result = await navigator.permissions.query({ name: 'geolocation' as any });
+                return result.state;
+            } catch (e) {
+                return 'prompt';
+            }
+        }
+        return 'prompt';
+    };
+
     const handleFileProcessing = async (file: File) => {
         if (!file) return;
 
+        const permission = await checkPermissionStatus();
+        if (permission === 'prompt') {
+            setPendingFile(file);
+            setShowPermissionPrompt(true);
+            return;
+        }
+
+        if (permission === 'denied') {
+            setPermissionDeniedAtFetch(true);
+            setShowPermissionPrompt(true);
+            return;
+        }
+
+        await proceedWithProcessing(file);
+    };
+
+    const proceedWithProcessing = async (file: File) => {
         setLoading(true);
         setError(null);
         setLoadingStep('Initializing...');
@@ -153,6 +187,13 @@ export default function LocationPhotoCapture({
                 setAddress(addr);
             } catch (locErr: any) {
                 console.warn('Could not get device location:', locErr);
+                if (locErr.message.includes('permission denied')) {
+                    setPermissionDeniedAtFetch(true);
+                    setShowPermissionPrompt(true);
+                } else if (locErr.message.includes('unavailable')) {
+                    setLocationUnavailableAtFetch(true);
+                    setShowPermissionPrompt(true);
+                }
                 throw new Error(`Location required: ${locErr.message}`);
             }
 
@@ -298,6 +339,8 @@ export default function LocationPhotoCapture({
         setDistance(null);
         setAddress(null);
         setError(null);
+        setPermissionDeniedAtFetch(false);
+        setLocationUnavailableAtFetch(false);
         if (cameraInputRef.current) cameraInputRef.current.value = '';
         if (uploadInputRef.current) uploadInputRef.current.value = '';
         onClear();
@@ -306,7 +349,7 @@ export default function LocationPhotoCapture({
     const isSecure = typeof window !== 'undefined' && (window.isSecureContext || window.location.hostname === 'localhost');
 
     return (
-        <div className="space-y-3">
+        <div className="space-y-3 relative">
             {!isSecure && (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800 flex items-start gap-2">
                     <svg className="h-5 w-5 text-amber-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -368,38 +411,38 @@ export default function LocationPhotoCapture({
                             {/* Primary Upload Area - Large, Dashed Dropzone */}
                             <label
                                 htmlFor="upload-input"
-                                className="group relative cursor-pointer flex flex-col items-center justify-center p-8 rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 hover:border-blue-400 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:bg-slate-800 dark:hover:border-blue-600 transition-all duration-300 min-h-[160px]"
+                                className="group relative cursor-pointer flex flex-col items-center justify-center p-4 sm:p-8 rounded-2xl sm:rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 hover:border-blue-400 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:bg-slate-800 dark:hover:border-blue-600 transition-all duration-300 min-h-[100px] sm:min-h-[160px]"
                             >
-                                <div className="mb-4 p-4 rounded-full bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700 group-hover:scale-110 transition-transform duration-300">
-                                    <svg className="h-8 w-8 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <div className="mb-2 sm:mb-4 p-3 sm:p-4 rounded-full bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700 group-hover:scale-110 transition-transform duration-300">
+                                    <svg className="h-6 w-6 sm:h-8 sm:w-8 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                                     </svg>
                                 </div>
                                 <div className="text-center">
-                                    <span className="block text-base font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                                    <span className="block text-sm sm:text-base font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400">
                                         Click to Upload Photo
                                     </span>
-                                    <span className="mt-1 block text-sm text-slate-500 dark:text-slate-400">
-                                        Supports JPG, PNG (Max 5MB)
+                                    <span className="mt-0.5 sm:mt-1 block text-[10px] sm:text-sm text-slate-500 dark:text-slate-400">
+                                        JPG, PNG (Max 20MB)
                                     </span>
                                 </div>
                             </label>
 
                             {/* Secondary Action - Take Photo Button */}
                             <div className="flex items-center justify-center">
-                                <span className="text-xs text-slate-400 uppercase font-medium px-3">OR</span>
+                                <span className="text-[10px] sm:text-xs text-slate-400 uppercase font-medium px-3">OR</span>
                             </div>
 
                             <button
                                 type="button"
                                 onClick={startCamera}
-                                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 hover:border-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 transition-all active:scale-95"
+                                className="flex items-center justify-center gap-2 p-2.5 sm:p-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 hover:border-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 transition-all active:scale-95"
                             >
-                                <svg className="h-5 w-5 text-slate-600 dark:text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <svg className="h-4 w-4 sm:h-5 sm:w-5 text-slate-600 dark:text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                                 </svg>
-                                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200">
                                     Take Photo with Camera
                                 </span>
                             </button>
@@ -559,6 +602,98 @@ export default function LocationPhotoCapture({
 
                     {/* Hidden Canvas for Capture */}
                     <canvas ref={canvasRef} className="hidden" />
+                </div>
+            )}
+
+            {/* Permission Prompt Overlay (Local) */}
+            {showPermissionPrompt && (
+                <div className="absolute inset-0 z-[60] flex items-start justify-center p-2 bg-white/60 dark:bg-slate-900/60 backdrop-blur-sm rounded-2xl sm:rounded-3xl animate-in fade-in duration-300">
+                    <div className="relative z-[61] w-full max-w-[300px] mt-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl p-4 sm:p-5 animate-in zoom-in-95 duration-300">
+                        <div className="flex flex-col items-center text-center">
+                            {permissionDeniedAtFetch ? (
+                                <>
+                                    <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mb-3">
+                                        <XCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                                    </div>
+                                    <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">Location Denied</h3>
+                                    <p className="text-[12px] text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+                                        Enable location in settings to apply for OD.
+                                    </p>
+                                    <div className="w-full text-left mb-3">
+                                        <div className="p-2 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700">
+                                            <ol className="text-[10px] text-slate-600 dark:text-slate-400 space-y-1 list-decimal ml-4 text-left">
+                                                <li>Click <b>lock icon</b> in URL bar.</li>
+                                                <li>Set <b>Location</b> to <b>Allow</b>.</li>
+                                                <li>Refresh page.</li>
+                                            </ol>
+                                        </div>
+                                    </div>
+                                </>
+                            ) : locationUnavailableAtFetch ? (
+                                <>
+                                    <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-3">
+                                        <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                                    </div>
+                                    <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">GPS Unavailable</h3>
+                                    <p className="text-[12px] text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                                        Enable <b>GPS</b> and ensure you have a signal.
+                                    </p>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mb-3">
+                                        <MapPin className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                                    </div>
+                                    <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">Location Required</h3>
+                                    <p className="text-[12px] text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                                        Location is needed for OD. Allow access when prompted.
+                                    </p>
+                                </>
+                            )}
+
+                            <div className="flex flex-col w-full gap-2">
+                                {(permissionDeniedAtFetch || locationUnavailableAtFetch) ? (
+                                    <button
+                                        onClick={() => {
+                                            setShowPermissionPrompt(false);
+                                            setPermissionDeniedAtFetch(false);
+                                            setLocationUnavailableAtFetch(false);
+                                            setPendingFile(null);
+                                            handleClear();
+                                        }}
+                                        className="w-full py-2 px-4 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold hover:opacity-90 active:scale-[0.98] transition-all"
+                                    >
+                                        Got it
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button
+                                            onClick={async () => {
+                                                setShowPermissionPrompt(false);
+                                                if (pendingFile) {
+                                                    await proceedWithProcessing(pendingFile);
+                                                    setPendingFile(null);
+                                                }
+                                            }}
+                                            className="w-full py-2 px-4 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 active:scale-[0.98] transition-all"
+                                        >
+                                            Allow Access
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowPermissionPrompt(false);
+                                                setPendingFile(null);
+                                                handleClear();
+                                            }}
+                                            className="w-full py-1.5 px-4 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-semibold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
