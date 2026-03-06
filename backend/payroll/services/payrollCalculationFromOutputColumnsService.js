@@ -952,6 +952,8 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       location: employee.location || '',
       bank_account_no: employee.bank_account_no || '',
       bank_name: employee.bank_name || '',
+      bank_place: employee.bank_place || '',
+      ifsc_code: employee.ifsc_code || '',
       payment_mode: employee.salary_mode || '',
       date_of_joining: employee.doj || '',
       pf_number: employee.pf_number || '',
@@ -1012,15 +1014,15 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       // Always resolve from services (and options when provided), not from the in-memory payslip/record
       val = fieldPath
         ? await resolveFieldValue(
-            fieldPath, employee, employeeId, month, payRegisterSummary,
-            record, attendanceSummary, departmentId, divisionId,
-            {
-              context,
-              config,
-              arrearsSettlements: options.arrearsSettlements,
-              deductionSettlements: options.deductionSettlements,
-            }
-          )
+          fieldPath, employee, employeeId, month, payRegisterSummary,
+          record, attendanceSummary, departmentId, divisionId,
+          {
+            context,
+            config,
+            arrearsSettlements: options.arrearsSettlements,
+            deductionSettlements: options.deductionSettlements,
+          }
+        )
         : 0;
       if (fieldPath) setValueByPath(record, fieldPath, val);
     }

@@ -31,7 +31,7 @@ async function buildPayslipData(employeeId, month) {
   }).populate({
     path: 'employeeId',
     select:
-      'employee_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name salary_mode doj pf_number esi_number',
+      'employee_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number',
     populate: [
       { path: 'department_id', select: 'name' },
       { path: 'division_id', select: 'name' },
@@ -135,6 +135,8 @@ async function buildPayslipData(employeeId, month) {
       location: employee?.location || '',
       bank_account_no: employee?.bank_account_no || '',
       bank_name: employee?.bank_name || '',
+      bank_place: employee?.bank_place || '',
+      ifsc_code: employee?.ifsc_code || '',
       payment_mode: employee?.salary_mode || '',
       date_of_joining: employee?.doj || '',
       pf_number: employee?.pf_number || '',
@@ -663,7 +665,7 @@ exports.exportPayrollExcel = async (req, res) => {
       .populate({
         path: 'employeeId',
         select:
-          'employee_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name salary_mode doj pf_number esi_number',
+          'employee_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number',
         populate: [
           { path: 'department_id', select: 'name' },
           { path: 'division_id', select: 'name' },
@@ -761,6 +763,8 @@ exports.exportPayrollExcel = async (req, res) => {
             location: employee?.location || '',
             bank_account_no: employee?.bank_account_no || '',
             bank_name: employee?.bank_name || '',
+            bank_place: employee?.bank_place || '',
+            ifsc_code: employee?.ifsc_code || '',
             payment_mode: employee?.salary_mode || '',
             date_of_joining: employee?.doj || '',
             pf_number: employee?.pf_number || '',
@@ -1066,10 +1070,10 @@ exports.getPaysheetData = async (req, res) => {
         const { startDate: startStr, endDate: endStr } = await getPayrollDateRange(y, m);
         const rangeStart = new Date(startStr + 'T00:00:00.000Z');
         const rangeEnd = new Date(endStr + 'T23:59:59.999Z');
-        const resignationOr = { $or: [ { is_active: true, leftDate: null }, { leftDate: { $gte: rangeStart, $lte: rangeEnd } } ] };
+        const resignationOr = { $or: [{ is_active: true, leftDate: null }, { leftDate: { $gte: rangeStart, $lte: rangeEnd } }] };
         if (search) {
           employeeQuery.$and = [
-            { $or: [ { employee_name: { $regex: search, $options: 'i' } }, { emp_no: { $regex: search, $options: 'i' } } ] },
+            { $or: [{ employee_name: { $regex: search, $options: 'i' } }, { emp_no: { $regex: search, $options: 'i' } }] },
             resignationOr,
           ];
         } else {

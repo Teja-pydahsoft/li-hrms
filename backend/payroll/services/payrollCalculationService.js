@@ -1109,33 +1109,33 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
     const allowanceBreakdown = resolvedAllowances
       .filter(allowance => allowance && allowance.name) // Filter out invalid entries
       .map((allowance) => {
-            try {
-              const allowanceBase = (allowance.base || '').toLowerCase();
-              const baseAmount = (allowanceBase === 'basic' || allowanceBase === 'basic_pay') ? earnedSalary : grossAmountSalary;
-              const amount = allowanceService.calculateAllowanceAmount(allowance, baseAmount, grossAmountSalary, attendanceData);
+        try {
+          const allowanceBase = (allowance.base || '').toLowerCase();
+          const baseAmount = (allowanceBase === 'basic' || allowanceBase === 'basic_pay') ? earnedSalary : grossAmountSalary;
+          const amount = allowanceService.calculateAllowanceAmount(allowance, baseAmount, grossAmountSalary, attendanceData);
 
-              if (isNaN(amount)) {
-                console.error(`[Payroll] Invalid allowance amount for ${allowance.name}:`, allowance);
-                return null;
-              }
+          if (isNaN(amount)) {
+            console.error(`[Payroll] Invalid allowance amount for ${allowance.name}:`, allowance);
+            return null;
+          }
 
-              totalAllowances += amount;
+          totalAllowances += amount;
 
-              return {
-                name: allowance.name,
-                code: allowance.code || allowance.name.replace(/\s+/g, '_').toUpperCase(),
-                amount,
-                base: (allowance.base || '').toLowerCase() === 'gross' ? 'gross' : 'basic',
-                type: allowance.type || 'fixed',
-                source: allowance.source || (allowance.isEmployeeOverride ? 'employee_override' : 'default'),
-                isEmployeeOverride: !!allowance.isEmployeeOverride,
-                basedOnPresentDays: !!allowance.basedOnPresentDays
-              };
-            } catch (error) {
-              console.error(`[Payroll] Error processing allowance ${allowance?.name}:`, error);
-              return null;
-            }
-          })
+          return {
+            name: allowance.name,
+            code: allowance.code || allowance.name.replace(/\s+/g, '_').toUpperCase(),
+            amount,
+            base: (allowance.base || '').toLowerCase() === 'gross' ? 'gross' : 'basic',
+            type: allowance.type || 'fixed',
+            source: allowance.source || (allowance.isEmployeeOverride ? 'employee_override' : 'default'),
+            isEmployeeOverride: !!allowance.isEmployeeOverride,
+            basedOnPresentDays: !!allowance.basedOnPresentDays
+          };
+        } catch (error) {
+          console.error(`[Payroll] Error processing allowance ${allowance?.name}:`, error);
+          return null;
+        }
+      })
       .filter(Boolean); // Remove any null entries from failed processing
 
     // Update gross amount with total allowances
@@ -1184,33 +1184,33 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
     const otherDeductionBreakdown = resolvedDeductions
       .filter(deduction => deduction && deduction.name) // Filter out invalid entries
       .map((deduction) => {
-            try {
-              const deductionBase = (deduction.base || '').toLowerCase();
-              const baseAmount = (deductionBase === 'basic' || deductionBase === 'basic_pay') ? earnedSalary : grossAmountSalary;
-              const amount = deductionService.calculateDeductionAmount(deduction, baseAmount, grossAmountSalary, attendanceData);
+        try {
+          const deductionBase = (deduction.base || '').toLowerCase();
+          const baseAmount = (deductionBase === 'basic' || deductionBase === 'basic_pay') ? earnedSalary : grossAmountSalary;
+          const amount = deductionService.calculateDeductionAmount(deduction, baseAmount, grossAmountSalary, attendanceData);
 
-              if (isNaN(amount)) {
-                console.error(`[Payroll] Invalid deduction amount for ${deduction.name}:`, deduction);
-                return null;
-              }
+          if (isNaN(amount)) {
+            console.error(`[Payroll] Invalid deduction amount for ${deduction.name}:`, deduction);
+            return null;
+          }
 
-              totalDeductions += amount;
+          totalDeductions += amount;
 
-              return {
-                name: deduction.name,
-                code: deduction.code || deduction.name.replace(/\s+/g, '_').toUpperCase(),
-                amount,
-                base: (deduction.base || '').toLowerCase() === 'gross' ? 'gross' : 'basic',
-                type: deduction.type || 'fixed',
-                source: deduction.source || (deduction.isEmployeeOverride ? 'employee_override' : 'default'),
-                isEmployeeOverride: !!deduction.isEmployeeOverride,
-                basedOnPresentDays: !!deduction.basedOnPresentDays
-              };
-            } catch (error) {
-              console.error(`[Payroll] Error processing deduction ${deduction?.name}:`, error);
-              return null;
-            }
-          })
+          return {
+            name: deduction.name,
+            code: deduction.code || deduction.name.replace(/\s+/g, '_').toUpperCase(),
+            amount,
+            base: (deduction.base || '').toLowerCase() === 'gross' ? 'gross' : 'basic',
+            type: deduction.type || 'fixed',
+            source: deduction.source || (deduction.isEmployeeOverride ? 'employee_override' : 'default'),
+            isEmployeeOverride: !!deduction.isEmployeeOverride,
+            basedOnPresentDays: !!deduction.basedOnPresentDays
+          };
+        } catch (error) {
+          console.error(`[Payroll] Error processing deduction ${deduction?.name}:`, error);
+          return null;
+        }
+      })
       .filter(Boolean); // Remove any null entries from failed processing
 
     // Combine breakdowns
@@ -1361,24 +1361,24 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
       'deductions.otherDeductions',
       Array.isArray(deductionBreakdown)
         ? deductionBreakdown
-            .filter((d) => d.source !== 'statutory')
-            .map((d) => ({
-              name: d.name,
-              amount: d.amount,
-              type: d.type || 'fixed',
-              base: d.base === 'basic' ? 'basic' : d.base === 'gross' ? 'gross' : 'fixed',
-            }))
+          .filter((d) => d.source !== 'statutory')
+          .map((d) => ({
+            name: d.name,
+            amount: d.amount,
+            type: d.type || 'fixed',
+            base: d.base === 'basic' ? 'basic' : d.base === 'gross' ? 'gross' : 'fixed',
+          }))
         : []
     );
     payrollRecord.set(
       'deductions.statutoryDeductions',
       Array.isArray(statutoryResult.breakdown)
         ? statutoryResult.breakdown.map((s) => ({
-            name: s.name,
-            code: s.code,
-            employeeAmount: s.employeeAmount,
-            employerAmount: s.employerAmount,
-          }))
+          name: s.name,
+          code: s.code,
+          employeeAmount: s.employeeAmount,
+          employerAmount: s.employerAmount,
+        }))
         : []
     );
     payrollRecord.set('deductions.totalStatutoryEmployee', Number(statutoryResult.totalEmployeeShare) || 0);
@@ -1498,6 +1498,8 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
         location: employee?.location || '',
         bank_account_no: employee?.bank_account_no || '',
         bank_name: employee?.bank_name || '',
+        bank_place: employee?.bank_place || '',
+        ifsc_code: employee?.ifsc_code || '',
         payment_mode: employee?.salary_mode || '',
         date_of_joining: employee?.doj || '',
         pf_number: employee?.pf_number || '',
