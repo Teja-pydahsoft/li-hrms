@@ -3398,6 +3398,44 @@ export const api = {
     });
   },
 
+  exportPayRegisterSummary: async (params: {
+    month: string;
+    departmentId?: string;
+    divisionId?: string;
+  }) => {
+    const query = new URLSearchParams();
+    query.append('month', params.month);
+    if (params.departmentId) query.append('departmentId', params.departmentId);
+    if (params.divisionId) query.append('divisionId', params.divisionId);
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/pay-register/export-summary/${params.month}?${query.toString()}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || 'Failed to export pay register summary');
+    }
+
+    const blob = await response.blob();
+    return blob;
+  },
+
+  uploadPayRegisterSummary: async (month: string, data: any[]) => {
+    return apiRequest<any>(`/pay-register/upload-summary/${month}`, {
+      method: 'POST',
+      body: JSON.stringify({ data }),
+    });
+  },
+
   // Get attendance data for a range of months (NEW)
   getAttendanceDataRange: async (employeeId: string, startMonth: string, endMonth: string) => {
     const query = new URLSearchParams();

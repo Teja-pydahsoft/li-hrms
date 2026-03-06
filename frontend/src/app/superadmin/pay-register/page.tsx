@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from "next/navigation";
 import Link from 'next/link';
+import { parseFile } from '@/lib/bulkUpload';
 import { api, apiRequest, Employee, Division } from '@/lib/api';
 import ArrearsPayrollSection from '@/components/Arrears/ArrearsPayrollSection';
 import DeductionsPayrollSection from '@/components/ManualDeductions/DeductionsPayrollSection';
@@ -526,6 +527,88 @@ export default function PayRegisterPage() {
       });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleDownloadSummary = async () => {
+    try {
+      setLoading(true);
+      const params = {
+        month: monthStr,
+        departmentId: selectedDepartment && selectedDepartment !== '' ? selectedDepartment : undefined,
+        divisionId: selectedDivision && selectedDivision !== '' ? selectedDivision : undefined,
+      };
+      const blob = await api.exportPayRegisterSummary(params);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Pay_Register_Summary_${monthStr}${params.departmentId ? `_${params.departmentId}` : ''}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      Swal.fire({
+        icon: 'success',
+        title: 'Success',
+        text: 'Summary exported successfully',
+        timer: 2000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+      });
+    } catch (err: any) {
+      console.error('Error exporting summary:', err);
+      Swal.fire({
+        icon: 'error',
+        title: 'Export Failed',
+        text: err.message || 'Failed to export summary',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUploadSummaryFile = async (file: File) => {
+    try {
+      setUploadingSummary(true);
+
+      const result = await parseFile(file);
+      if (!result.success) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Parse Error',
+          text: result.errors.join(', ') || 'Failed to parse Excel file',
+        });
+        return;
+      }
+
+      const response = await api.uploadPayRegisterSummary(monthStr, result.data);
+      if (response.success) {
+        setUploadResults(response.data);
+        await loadPayRegisters();
+        Swal.fire({
+          icon: 'success',
+          title: 'Upload Complete',
+          text: `Successfully processed summary data.`,
+        });
+        setShowUploadModal(false);
+      } else {
+        Swal.fire({
+          icon: 'error',
+          title: 'Upload Failed',
+          text: response.message || 'Failed to upload summary',
+        });
+      }
+    } catch (err: any) {
+      console.error('Error uploading summary:', err);
+      Swal.fire({
+        icon: 'error',
+        title: 'Upload Error',
+        text: err.message || 'An error occurred during upload',
+      });
+    } finally {
+      setUploadingSummary(false);
     }
   };
 
@@ -1330,6 +1413,15 @@ export default function PayRegisterPage() {
           </div>
 
           <div className="flex flex-nowrap items-center gap-3 shrink-0">
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="h-9 px-4 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              Upload Summary
+            </button>
             <button
               onClick={handleSyncAll}
               disabled={syncing}
@@ -2762,6 +2854,72 @@ export default function PayRegisterPage() {
           onDeductionsSelected={handleDeductionsSelected}
         />
       </div>
+
+      {/* Summary Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowUploadModal(false)} />
+          <div className="relative z-[1200] w-full max-w-lg overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Bulk Upload Summary</h2>
+              <button onClick={() => setShowUploadModal(false)} className="text-slate-400 hover:text-slate-600">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                You can download the summary Excel file based on your current filters, update the data, and upload it back.
+              </p>
+
+              <div className="grid grid-cols-1 gap-4">
+                {/* Download Button */}
+                <button
+                  onClick={handleDownloadSummary}
+                  className="flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50/50 hover:bg-blue-50 hover:border-blue-400 transition-all group"
+                >
+                  <div className="mb-3 p-3 rounded-full bg-blue-100 text-blue-600 group-hover:scale-110 transition-transform">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                  </div>
+                  <span className="font-semibold text-blue-900 dark:text-blue-300">Download Summary Excel</span>
+                  <span className="text-xs text-blue-600 dark:text-blue-400 mt-1">Based on current filters</span>
+                </button>
+
+                {/* Upload Button */}
+                <label className="flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 hover:border-indigo-400 transition-all group cursor-pointer">
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".xlsx, .xls"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleUploadSummaryFile(file);
+                    }}
+                    disabled={uploadingSummary}
+                  />
+                  <div className="mb-3 p-3 rounded-full bg-indigo-100 text-indigo-600 group-hover:scale-110 transition-transform">
+                    {uploadingSummary ? (
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                    ) : (
+                      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                    )}
+                  </div>
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-300">
+                    {uploadingSummary ? 'Uploading...' : 'Upload Summary Excel'}
+                  </span>
+                  <span className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">Excel file only (.xlsx, .xls)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

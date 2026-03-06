@@ -21,6 +21,9 @@ router.use((req, res, next) => {
 // Bulk upload monthly summary
 router.post('/upload-summary/:month', payRegisterController.uploadSummaryBulk);
 
+// Export monthly summary as Excel
+router.get('/export-summary/:month', payRegisterController.exportSummaryExcel);
+
 // Get all employees with pay registers for a month (must come before /:employeeId routes)
 router.get('/employees/:month', payRegisterController.getEmployeesWithPayRegister);
 
