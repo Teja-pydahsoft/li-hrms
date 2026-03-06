@@ -2330,7 +2330,7 @@ export default function AttendancePage() {
                           >
                             {isHighlighted && highlightInfo && (
                               <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
-                                <div className="bg-blue-600/90 text-white text-[12px] font-black px-1.5 py-0.5 rounded-full shadow-lg border-2 border-white/50 animate-in fade-in zoom-in duration-300">
+                                <div className="bg-blue-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-md border border-white/30 animate-in fade-in zoom-in duration-300 backdrop-blur-[2px]">
                                   {highlightInfo.label && !['P', 'Pay', 'Late', 'Early'].includes(highlightInfo.label) ? highlightInfo.label : highlightInfo.value}
                                 </div>
                               </div>

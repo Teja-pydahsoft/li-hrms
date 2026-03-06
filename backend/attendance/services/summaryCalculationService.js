@@ -228,7 +228,7 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
           contributingDates.leaves.push({
             date: dStr,
             value: leaveContrib,
-            label: firstLeave.leaveType || 'Leave'
+            label: `${firstLeave.leaveType || 'L'} (${leaveContrib})`
           });
         }
         totalLeaveDays += leaveContrib;
@@ -368,7 +368,11 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       totalOTHours += ot.otHours || 0;
       const otDate = toNormalizedDateStr(ot.date);
       if (otDate && !contributingDates.otHours.some(cd => cd.date === otDate)) {
-        contributingDates.otHours.push({ date: otDate, value: ot.otHours, label: 'OT' });
+        contributingDates.otHours.push({
+          date: otDate,
+          value: ot.otHours,
+          label: `OT (${ot.otHours})`
+        });
       }
     }
     summary.totalOTHours = Math.round(totalOTHours * 100) / 100;
@@ -380,7 +384,11 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         totalExtraHours += record.extraHours || 0;
         const recordDate = toNormalizedDateStr(record.date);
         if (!contributingDates.extraHours.some(cd => cd.date === recordDate)) {
-          contributingDates.extraHours.push({ date: recordDate, value: record.extraHours, label: 'Extra' });
+          contributingDates.extraHours.push({
+            date: recordDate,
+            value: record.extraHours,
+            label: `Ex (${record.extraHours})`
+          });
         }
       }
     }
