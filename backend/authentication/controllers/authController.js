@@ -1,5 +1,6 @@
 const User = require('../../users/model/User');
 const Employee = require('../../employees/model/Employee');
+const RoleAssignment = require('../../workspaces/model/RoleAssignment');
 const { generateToken } = require('../../users/controllers/userController');
 
 // @desc    Login user
@@ -233,7 +234,7 @@ exports.ssoLogin = async (req, res) => {
       });
     }
 
-    const verifyUrl = process.env.SSO_VERIFY_URL || process.env.CRM_SSO_VERIFY_URL;
+    let verifyUrl = process.env.SSO_VERIFY_URL || process.env.CRM_SSO_VERIFY_URL;
     if (!verifyUrl) {
       console.warn('[SSOLogin] SSO_VERIFY_URL (or CRM_SSO_VERIFY_URL) is not configured');
       return res.status(503).json({
@@ -242,7 +243,13 @@ exports.ssoLogin = async (req, res) => {
       });
     }
 
+    // Ensure path is correctly appended if missing
+    if (!verifyUrl.endsWith('/auth/verify-token')) {
+      verifyUrl = verifyUrl.replace(/\/$/, '') + '/auth/verify-token';
+    }
+
     // Verify token with external CRM/auth gateway
+    console.log(`[SSOLogin] Calling SSO verify URL: ${verifyUrl}`);
     let verifyResponse;
     try {
       verifyResponse = await fetch(verifyUrl, {
@@ -258,9 +265,20 @@ exports.ssoLogin = async (req, res) => {
       });
     }
 
+    if (!verifyResponse.ok) {
+      console.error(`[SSOLogin] SSO verify endpoint returned status ${verifyResponse.status}`);
+      const errorText = await verifyResponse.text();
+      console.error(`[SSOLogin] Error response: ${errorText}`);
+      return res.status(401).json({
+        success: false,
+        message: `SSO verification failed (Status: ${verifyResponse.status}). Please check your configuration.`,
+      });
+    }
+
     const verifyResult = await verifyResponse.json();
 
     if (!verifyResult.success || !verifyResult.valid) {
+      console.warn(`[SSOLogin] SSO verification failed: ${verifyResult.message || 'Invalid or expired token'}`);
       return res.status(401).json({
         success: false,
         message: verifyResult.message || 'Invalid or expired SSO token',

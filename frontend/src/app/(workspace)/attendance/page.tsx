@@ -2512,12 +2512,12 @@ export default function AttendancePage() {
 
 
 
-  const formatHours = (hours: number | null) => {
-
-    if (hours === null || hours === undefined) return '-';
-
-    return `${hours.toFixed(2)}h`;
-
+  const formatHours = (hours: number | null | undefined) => {
+    if (hours === null || hours === undefined || Number.isNaN(hours)) return '-';
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${h}:${String(m).padStart(2, '0')}`;
   };
 
 
@@ -3066,8 +3066,8 @@ export default function AttendancePage() {
                         {tableType === 'od' && <div className="font-bold text-[11px]">{displayStatus}</div>}
                         {tableType === 'ot' && (
                           <div className="text-[9px]">
-                            <div className="text-orange-600">OT: {record?.otHours ? record.otHours.toFixed(1) : '-'}</div>
-                            <div className="text-purple-600">Ex: {record?.extraHours ? record.extraHours.toFixed(1) : '-'}</div>
+                            <div className="text-orange-600">OT: {record?.otHours ? formatHours(record.otHours) : '-'}</div>
+                            <div className="text-purple-600">Ex: {record?.extraHours ? formatHours(record.extraHours) : '-'}</div>
                           </div>
                         )}
                         {(isLate || isEarlyOut) && (
@@ -3383,8 +3383,8 @@ export default function AttendancePage() {
                                       )}
                                       {tableType === 'ot' && (
                                         <div className="text-[8px] font-medium leading-tight">
-                                          <div className="text-orange-600">{record?.otHours ? record.otHours.toFixed(1) : '-'}</div>
-                                          <div className="text-purple-600">{record?.extraHours ? record.extraHours.toFixed(1) : '-'}</div>
+                                          <div className="text-orange-600">{record?.otHours ? formatHours(record.otHours) : '-'}</div>
+                                          <div className="text-purple-600">{record?.extraHours ? formatHours(record.extraHours) : '-'}</div>
                                         </div>
                                       )}
                                       {(record?.source?.includes('manual') || record?.isEdited) && (
@@ -3417,10 +3417,10 @@ export default function AttendancePage() {
                                   {holidaysCount}
                                 </td>
                                 <td onClick={() => handleViewTypeSummary(item, 'ot')} className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 cursor-pointer hover:bg-orange-100">
-                                  {Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.otHours || 0), 0).toFixed(1)}
+                                  {formatHours(Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.otHours || 0), 0))}
                                 </td>
                                 <td onClick={() => handleViewTypeSummary(item, 'extra')} className="border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:border-slate-700 dark:bg-purple-900/20 dark:text-purple-300 cursor-pointer hover:bg-purple-100">
-                                  {Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.extraHours || 0), 0).toFixed(1)}
+                                  {formatHours(Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.extraHours || 0), 0))}
                                 </td>
                                 <td onClick={() => handleViewTypeSummary(item, 'permission')} className="border-r border-slate-200 bg-cyan-50 px-2 py-2 text-center text-[11px] font-bold text-cyan-700 dark:border-slate-700 dark:bg-cyan-900/20 dark:text-cyan-300 cursor-pointer hover:bg-cyan-100">
                                   {Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.permissionCount || 0), 0)}
@@ -3455,10 +3455,10 @@ export default function AttendancePage() {
                             {tableType === 'ot' && (
                               <>
                                 <td onClick={() => handleViewTypeSummary(item, 'ot')} className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 cursor-pointer hover:bg-orange-100">
-                                  {Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.otHours || 0), 0).toFixed(1)}
+                                  {formatHours(Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.otHours || 0), 0))}
                                 </td>
                                 <td onClick={() => handleViewTypeSummary(item, 'extra')} className="border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 cursor-pointer hover:bg-purple-100">
-                                  {Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.extraHours || 0), 0).toFixed(1)}
+                                  {formatHours(Object.values(item.dailyAttendance).reduce((sum, record) => sum + (record?.extraHours || 0), 0))}
                                 </td>
                               </>
                             )}
@@ -3985,7 +3985,7 @@ export default function AttendancePage() {
                       <div>
                         <label className="text-xs font-medium text-slate-600 dark:text-slate-400">OT Hours</label>
                         <div className="mt-1 text-sm font-semibold text-orange-600 dark:text-orange-400">
-                          {attendanceDetail.otHours.toFixed(2)} hrs
+                          {formatHours(attendanceDetail.otHours)} hrs
                         </div>
                       </div>
                     )}
@@ -3994,7 +3994,7 @@ export default function AttendancePage() {
                         <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Extra Hours</label>
                         <div className="mt-1 flex items-center justify-between">
                           <div className="text-sm font-semibold text-purple-600 dark:text-purple-400">
-                            {attendanceDetail.extraHours.toFixed(2)} hrs
+                            {formatHours(attendanceDetail.extraHours)} hrs
                           </div>
                           {!hasExistingOT && attendanceDetail.shiftId && (
                             <button
@@ -4023,7 +4023,7 @@ export default function AttendancePage() {
                       <div>
                         <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Permission Hours</label>
                         <div className="mt-1 text-sm font-semibold text-cyan-600 dark:text-cyan-400">
-                          {attendanceDetail.permissionHours.toFixed(2)} hrs ({attendanceDetail.permissionCount || 0} permissions)
+                          {formatHours(attendanceDetail.permissionHours)} hrs ({attendanceDetail.permissionCount || 0} permissions)
                         </div>
 
                       </div>

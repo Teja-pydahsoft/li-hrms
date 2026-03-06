@@ -1699,6 +1699,29 @@ export default function PayRegisterPage() {
       )
       }
 
+      {/* Export button below summary table (similar to attendance page) */}
+      {!loading && payRegisters.length > 0 && (
+        <div className="flex justify-end mb-4">
+          <button
+            onClick={async () => {
+              await downloadPayrollExcel();
+            }}
+            disabled={exportingExcel || payRegisters.length === 0}
+            title="Export payroll to Excel"
+            className="h-9 flex items-center px-4 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm active:scale-95 disabled:opacity-50 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-blue-400"
+          >
+            {exportingExcel ? (
+              <div className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+            ) : (
+              <svg className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            )}
+            {exportingExcel ? 'Exporting...' : 'Export'}
+          </button>
+        </div>
+      )}
+
       {/* Table Tabs */}
       <div className="bg-white dark:bg-slate-800 rounded-lg shadow mb-8">
         <div className="border-b border-slate-200 dark:border-slate-700">

@@ -47,6 +47,8 @@ export const auth = {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
       // Clear workspace data on logout
       clearWorkspaceData();
 

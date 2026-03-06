@@ -22,8 +22,22 @@ function LoginContent() {
   const [ssoVerifying, setSsoVerifying] = useState(false);
   const ssoAttempted = useRef(false);
 
-  // Check if already authenticated
+  // Check if already authenticated or if we need to clear session for SSO
   useEffect(() => {
+    const ssoToken = searchParams.get("token");
+
+    // If a new SSO token is present, we must clear the old session FIRST
+    if (ssoToken && !ssoAttempted.current) {
+      const currentToken = auth.getToken();
+      // Only logout if there is actually something to clear
+      if (currentToken) {
+        console.log("SSO Token detected in URL. Clearing existing local sessions to prioritize new login.");
+        auth.logout();
+      }
+      setChecking(false);
+      return;
+    }
+
     const token = auth.getToken();
     const user = auth.getUser();
 
@@ -34,7 +48,7 @@ function LoginContent() {
     } else {
       setChecking(false);
     }
-  }, [router]);
+  }, [router, searchParams]);
 
   // SSO: when URL has ?token=..., verify with backend and log in
   useEffect(() => {

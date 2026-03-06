@@ -50,8 +50,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setUser(null);
             localStorage.removeItem('user'); // Ensure local storage user is gone
 
-            // Redirect to login page
-            window.location.href = '/login';
+            // Redirect to login page only if not already there
+            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login';
+            }
         };
 
         window.addEventListener('auth-logout', handleGlobalLogout);
