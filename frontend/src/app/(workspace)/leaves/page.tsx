@@ -1184,6 +1184,14 @@ export default function LeavesPage() {
         }
 
         if (evidenceFile) {
+          // Check file size (20MB limit)
+          const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+          if (evidenceFile.size > MAX_FILE_SIZE) {
+            toast.error('The selected photo is too large. please upload a photo smaller than 20MB.');
+            setLoading(false);
+            return;
+          }
+
           setLoadingMessage('Uploading photo');
           const uploadRes = await api.uploadEvidence(evidenceFile);
           // API returns { success, url, key, filename } at top level (no .data wrapper)
