@@ -210,6 +210,24 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       default: Date.now,
     },
 
+    /**
+     * Store lists of date strings (YYYY-MM-DD) that contributed to each summary metric.
+     * This is used by the frontend to highlight relevant cells when a summary value is clicked.
+     */
+    contributingDates: {
+      present: [String],
+      leaves: [String],
+      ods: [String],
+      weeklyOffs: [String],
+      holidays: [String],
+      payableShifts: [String],
+      otHours: [String],
+      extraHours: [String],
+      lateIn: [String],
+      earlyOut: [String],
+      permissions: [String],
+    },
+
     // Additional metadata
     notes: {
       type: String,

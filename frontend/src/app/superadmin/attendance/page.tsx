@@ -114,6 +114,19 @@ interface MonthlyAttendanceData {
     // Late/Early metrics (combined)
     lateOrEarlyCount?: number;
     totalLateOrEarlyMinutes?: number;
+    contributingDates?: {
+      present?: string[];
+      leaves?: string[];
+      ods?: string[];
+      weeklyOffs?: string[];
+      holidays?: string[];
+      payableShifts?: string[];
+      otHours?: string[];
+      extraHours?: string[];
+      lateIn?: string[];
+      earlyOut?: string[];
+      permissions?: string[];
+    };
     lastCalculatedAt: string;
     createdAt: string;
     updatedAt: string;
@@ -267,6 +280,23 @@ export default function AttendancePage() {
   const [selectedRecordForInTime, setSelectedRecordForInTime] = useState<{ employee: Employee; date: string; shiftRecordId?: string } | null>(null);
   const [inTimeDialogValue, setInTimeDialogValue] = useState('');
   const [updatingInTime, setUpdatingInTime] = useState(false);
+
+  // Highlighting state
+  const [activeHighlight, setActiveHighlight] = useState<{ employeeId: string; category: string } | null>(null);
+  const activeHighlightDates = useMemo(() => {
+    if (!activeHighlight) return new Set<string>();
+    const empData = monthlyData.find(d => d.employee._id === activeHighlight.employeeId);
+    if (!empData?.summary?.contributingDates) return new Set<string>();
+    const dates = (empData.summary.contributingDates as any)[activeHighlight.category];
+    return new Set<string>(Array.isArray(dates) ? dates : []);
+  }, [activeHighlight, monthlyData]);
+
+  const handleSummaryClick = (employeeId: string, category: string) => {
+    setActiveHighlight(prev => {
+      if (prev?.employeeId === employeeId && prev?.category === category) return null;
+      return { employeeId, category };
+    });
+  };
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth() + 1;
@@ -2036,9 +2066,9 @@ export default function AttendancePage() {
                     <th className="border-r border-slate-200 bg-cyan-50 px-1 py-3 text-center text-[9px] font-bold uppercase text-cyan-700 dark:border-slate-700 dark:bg-cyan-900/20 w-[80px] min-w-[80px]">
                       Perms
                     </th>
-                  <th className="border-r border-slate-200 bg-rose-50 px-1 py-3 text-center text-[9px] font-bold uppercase text-rose-700 dark:border-slate-700 dark:bg-rose-900/20 w-[70px] min-w-[70px]">
-                    Lates+
-                  </th>
+                    <th className="border-r border-slate-200 bg-rose-50 px-1 py-3 text-center text-[9px] font-bold uppercase text-rose-700 dark:border-slate-700 dark:bg-rose-900/20 w-[70px] min-w-[70px]">
+                      Lates+
+                    </th>
                     <th className="bg-green-50 px-1 py-3 text-center text-[9px] font-bold uppercase text-green-700 dark:border-slate-700 dark:bg-green-900/20 w-[70px] min-w-[70px]">
                       Payable
                     </th>
@@ -2279,7 +2309,7 @@ export default function AttendancePage() {
                             key={dateStr}
                             onClick={() => hasData && item.employee && handleDateClick(item.employee, dateStr)}
                             className={`border-r border-slate-200 px-1 py-1.5 text-center dark:border-slate-700 w-[35px] min-w-[35px] align-middle relative ${hasData ? 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800' : ''
-                              } ${getStatusColor(record)} ${getCellBackgroundColor(record)}`}
+                              } ${getStatusColor(record)} ${getCellBackgroundColor(record)} ${activeHighlight?.employeeId === item.employee?._id && activeHighlightDates.has(dateStr) ? 'ring-2 ring-blue-500 ring-inset z-10 !bg-blue-50 dark:!bg-blue-900/40' : ''}`}
                           >
                             {record && record.isEdited && (
                               <span className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse z-20" title="Edited Manually"></span>
@@ -2352,60 +2382,118 @@ export default function AttendancePage() {
                       })}
                       {tableType === 'complete' && (
                         <>
-                          <td className="border-r border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:border-slate-700 dark:bg-blue-900/20 dark:text-blue-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'present')}
+                            className={`border-r border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:border-slate-700 dark:bg-blue-900/20 dark:text-blue-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-blue-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'present' ? 'ring-2 ring-blue-500 ring-inset bg-blue-100' : ''}`}
+                          >
                             {daysPresent}
                           </td>
-                          <td className="border-r border-slate-200 bg-amber-50 px-2 py-2 text-center text-[11px] font-bold text-amber-700 dark:border-slate-700 dark:bg-amber-900/20 dark:text-amber-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'leaves')}
+                            className={`border-r border-slate-200 bg-amber-50 px-2 py-2 text-center text-[11px] font-bold text-amber-700 dark:border-slate-700 dark:bg-amber-900/20 dark:text-amber-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-amber-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'leaves' ? 'ring-2 ring-amber-500 ring-inset bg-amber-100' : ''}`}
+                          >
                             {totalLeaves}
                           </td>
-                          <td className="border-r border-slate-200 bg-orange-100 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'weeklyOffs')}
+                            className={`border-r border-slate-200 bg-orange-100 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-orange-200 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'weeklyOffs' ? 'ring-2 ring-orange-500 ring-inset bg-orange-200' : ''}`}
+                          >
                             {weekOffsCount}
                           </td>
-                          <td className="border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'holidays')}
+                            className={`border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-red-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'holidays' ? 'ring-2 ring-red-500 ring-inset bg-red-100' : ''}`}
+                          >
                             {holidaysCount}
                           </td>
-                          <td className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'otHours')}
+                            className={`border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-orange-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'otHours' ? 'ring-2 ring-orange-500 ring-inset bg-orange-100' : ''}`}
+                          >
                             {formatHours(dailyValues.reduce((sum, record: any) => sum + (record?.otHours || 0), 0))}
                           </td>
-                          <td className="border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:border-slate-700 dark:bg-purple-900/20 dark:text-purple-300 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'extraHours')}
+                            className={`border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:border-slate-700 dark:bg-purple-900/20 dark:text-purple-300 w-[60px] min-w-[60px] cursor-pointer hover:bg-purple-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'extraHours' ? 'ring-2 ring-purple-500 ring-inset bg-purple-100' : ''}`}
+                          >
                             {formatHours(dailyValues.reduce((sum, record: any) => sum + (record?.extraHours || 0), 0))}
                           </td>
-                          <td className="border-r border-slate-200 bg-cyan-50 px-2 py-2 text-center text-[11px] font-bold text-cyan-700 dark:border-slate-700 dark:bg-cyan-900/20 dark:text-cyan-300 w-[80px] min-w-[80px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'permissions')}
+                            className={`border-r border-slate-200 bg-cyan-50 px-2 py-2 text-center text-[11px] font-bold text-cyan-700 dark:border-slate-700 dark:bg-cyan-900/20 dark:text-cyan-300 w-[80px] min-w-[80px] cursor-pointer hover:bg-cyan-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'permissions' ? 'ring-2 ring-cyan-500 ring-inset bg-cyan-100' : ''}`}
+                          >
                             {dailyValues.reduce((sum, record: any) => sum + (record?.permissionCount || 0), 0)}
                           </td>
-                          <td className="border-r border-slate-200 bg-rose-50 px-2 py-2 text-center text-[11px] font-bold text-rose-700 dark:border-slate-700 dark:bg-rose-900/20 dark:text-rose-300 w-[70px] min-w-[70px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'lateIn')}
+                            className={`border-r border-slate-200 bg-rose-50 px-2 py-2 text-center text-[11px] font-bold text-rose-700 dark:border-slate-700 dark:bg-rose-900/20 dark:text-rose-300 w-[70px] min-w-[70px] cursor-pointer hover:bg-rose-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'lateIn' ? 'ring-2 ring-rose-500 ring-inset bg-rose-100' : ''}`}
+                          >
                             {item.summary?.lateOrEarlyCount ?? 0}
                           </td>
-                          <td className="bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300 w-[70px] min-w-[70px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'payableShifts')}
+                            className={`bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300 w-[70px] min-w-[70px] cursor-pointer hover:bg-green-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'payableShifts' ? 'ring-2 ring-green-500 ring-inset bg-green-100' : ''}`}
+                          >
                             {payableShifts.toFixed(2)}
                           </td>
                         </>
                       )}
                       {tableType === 'present_absent' && (
                         <>
-                          <td className="border-r border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 w-[60px] min-w-[60px]">{monthPresent}</td>
-                          <td className="border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 w-[60px] min-w-[60px]">{monthAbsent}</td>
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'present')}
+                            className={`border-r border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 cursor-pointer hover:bg-green-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'present' ? 'ring-2 ring-green-500 ring-inset bg-green-100' : ''} w-[60px] min-w-[60px]`}
+                          >
+                            {monthPresent}
+                          </td>
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'absent')}
+                            className={`border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 cursor-pointer hover:bg-red-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'absent' ? 'ring-2 ring-red-500 ring-inset bg-red-100' : ''} w-[60px] min-w-[60px]`}
+                          >
+                            {monthAbsent}
+                          </td>
                         </>
                       )}
                       {tableType === 'in_out' && (
-                        <td className="border-r border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 w-[60px] min-w-[60px]">{daysPresent}</td>
+                        <td
+                          onClick={() => item.employee && handleSummaryClick(item.employee._id, 'present')}
+                          className={`border-r border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 cursor-pointer hover:bg-blue-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'present' ? 'ring-2 ring-blue-500 ring-inset bg-blue-100' : ''} w-[60px] min-w-[60px]`}
+                        >
+                          {daysPresent}
+                        </td>
                       )}
                       {tableType === 'leaves' && (
                         <>
-                          <td className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 w-[60px] min-w-[60px]">{totalLeaves}</td>
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'leaves')}
+                            className={`border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 cursor-pointer hover:bg-orange-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'leaves' ? 'ring-2 ring-orange-500 ring-inset bg-orange-100' : ''} w-[60px] min-w-[60px]`}
+                          >
+                            {totalLeaves}
+                          </td>
                           <td className="border-r border-slate-200 bg-yellow-50 px-2 py-2 text-center text-[11px] font-bold text-yellow-700 w-[60px] min-w-[60px]">{paidLeaves}</td>
                           <td className="border-r border-slate-200 bg-rose-50 px-2 py-2 text-center text-[11px] font-bold text-rose-700 w-[60px] min-w-[60px]">{lopCount}</td>
                         </>
                       )}
                       {tableType === 'od' && (
-                        <td className="border-r border-slate-200 bg-indigo-50 px-2 py-2 text-center text-[11px] font-bold text-indigo-700 w-[60px] min-w-[60px]">{totalODs}</td>
+                        <td
+                          onClick={() => item.employee && handleSummaryClick(item.employee._id, 'ods')}
+                          className={`border-r border-slate-200 bg-indigo-50 px-2 py-2 text-center text-[11px] font-bold text-indigo-700 cursor-pointer hover:bg-indigo-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'ods' ? 'ring-2 ring-indigo-500 ring-inset bg-indigo-100' : ''} w-[60px] min-w-[60px]`}
+                        >
+                          {totalODs}
+                        </td>
                       )}
                       {tableType === 'ot' && (
                         <>
-                          <td className="border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'otHours')}
+                            className={`border-r border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 cursor-pointer hover:bg-orange-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'otHours' ? 'ring-2 ring-orange-500 ring-inset bg-orange-100' : ''} w-[60px] min-w-[60px]`}
+                          >
                             {formatHours(dailyValues.reduce((sum, record: any) => sum + (record?.otHours || 0), 0))}
                           </td>
-                          <td className="border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 w-[60px] min-w-[60px]">
+                          <td
+                            onClick={() => item.employee && handleSummaryClick(item.employee._id, 'extraHours')}
+                            className={`border-r border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 cursor-pointer hover:bg-purple-100 transition-colors ${activeHighlight?.employeeId === item.employee?._id && activeHighlight?.category === 'extraHours' ? 'ring-2 ring-purple-500 ring-inset bg-purple-100' : ''} w-[60px] min-w-[60px]`}
+                          >
                             {formatHours(dailyValues.reduce((sum, record: any) => sum + (record?.extraHours || 0), 0))}
                           </td>
                         </>
@@ -2706,11 +2794,10 @@ export default function AttendancePage() {
                   )}
                   {hasExistingOT && (
                     <div className="mt-3 text-right">
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${
-                        otRequestStatus === 'approved'
-                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                      }`}>
+                      <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${otRequestStatus === 'approved'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                        }`}>
                         {otRequestStatus === 'approved' ? 'OT Converted' : 'Pending approval'}
                       </span>
                     </div>
