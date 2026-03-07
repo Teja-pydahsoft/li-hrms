@@ -86,6 +86,10 @@ app.use('/api/employees', employeeRoutes);
 const employeeApplicationRoutes = require('./employee-applications/index.js');
 app.use('/api/employee-applications', employeeApplicationRoutes);
 
+// Employee Profile Update requests
+const employeeUpdateRoutes = require('./employee-updates/index.js');
+app.use('/api/employee-updates', employeeUpdateRoutes);
+
 // Workspaces routes
 const workspaceRoutes = require('./workspaces/index.js');
 app.use('/api/workspaces', workspaceRoutes);

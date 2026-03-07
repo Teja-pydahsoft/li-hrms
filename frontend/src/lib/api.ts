@@ -1715,6 +1715,44 @@ export const api = {
     });
   },
 
+  // General Settings
+  getSetting: async (key: string) => {
+    return apiRequest<any>(`/settings/${key}`, { method: 'GET' });
+  },
+
+  upsertSetting: async (data: { key: string; value: any; description?: string; category?: string }) => {
+    return apiRequest<any>(`/settings`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Employee Profile Update Requests
+  getEmployeeUpdateRequests: async (params?: { status?: string }) => {
+    const query = params?.status ? `?status=${params.status}` : '';
+    return apiRequest<any[]>(`/employee-updates${query}`, { method: 'GET' });
+  },
+
+  createEmployeeUpdateRequest: async (data: { requestedChanges: any; comments?: string }) => {
+    return apiRequest<any>('/employee-updates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  approveEmployeeUpdateRequest: async (id: string) => {
+    return apiRequest<any>(`/employee-updates/${id}/approve`, {
+      method: 'PUT',
+    });
+  },
+
+  rejectEmployeeUpdateRequest: async (id: string, comments?: string) => {
+    return apiRequest<any>(`/employee-updates/${id}/reject`, {
+      method: 'PUT',
+      body: JSON.stringify({ comments }),
+    });
+  },
+
   // Workspaces
   getMyWorkspaces: async () => {
     return apiRequest<any>('/workspaces/my-workspaces', { method: 'GET' });

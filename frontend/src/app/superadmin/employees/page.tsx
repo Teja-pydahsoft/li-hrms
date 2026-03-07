@@ -40,6 +40,25 @@ import {
 
 
 
+interface UpdateRequest {
+  _id: string;
+  employeeId: {
+    _id: string;
+    employee_name: string;
+    profilePhoto?: string;
+    emp_no: string;
+    department?: { name: string };
+    designation?: { name: string };
+    dynamicFields?: Record<string, any>;
+  };
+  emp_no: string;
+  requestedChanges: Record<string, any>;
+  status: 'pending' | 'approved' | 'rejected';
+  createdBy?: { name: string };
+  comments?: string;
+  createdAt: string;
+}
+
 interface FormSettings {
   groups: Array<{
     id: string;
@@ -228,10 +247,28 @@ const isEmployeeActive = (employee: any) => {
   return status === true || status === 1 || (status !== false && status !== 0 && status !== '0');
 };
 
+const getFieldLabel = (fieldId: string, formSettings: any) => {
+  if (!formSettings) return fieldId.replace(/_/g, ' ');
+  for (const group of formSettings.groups) {
+    const field = group.fields.find((f: any) => f.id === fieldId);
+    if (field) return field.label;
+  }
+  if (formSettings.qualifications?.fields?.some((f: any) => f.id === fieldId)) {
+    return formSettings.qualifications?.fields.find((f: any) => f.id === fieldId)?.label || fieldId;
+  }
+  return fieldId.replace(/_/g, ' ');
+};
+
 export default function EmployeesPage() {
-  const [activeTab, setActiveTab] = useState<'employees' | 'applications'>('employees');
+  const [activeTab, setActiveTab] = useState<'employees' | 'applications' | 'requests'>('employees');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [applications, setApplications] = useState<EmployeeApplication[]>([]);
+  const [updateRequests, setUpdateRequests] = useState<UpdateRequest[]>([]);
+  const [loadingUpdateRequests, setLoadingUpdateRequests] = useState(false);
+  const [selectedUpdateRequest, setSelectedUpdateRequest] = useState<UpdateRequest | null>(null);
+  const [updateRequestStatusFilter, setUpdateRequestStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [processingUpdateRequest, setProcessingUpdateRequest] = useState(false);
+  const [updateRequestRejectComments, setUpdateRequestRejectComments] = useState('');
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
@@ -1100,6 +1137,71 @@ export default function EmployeesPage() {
     return value;
   };
 
+  const loadUpdateRequests = async () => {
+    try {
+      setLoadingUpdateRequests(true);
+      const res = await api.getEmployeeUpdateRequests({
+        status: updateRequestStatusFilter !== 'all' ? updateRequestStatusFilter : undefined
+      });
+      if (res.success) {
+        setUpdateRequests(res.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch update requests');
+    } finally {
+      setLoadingUpdateRequests(false);
+    }
+  };
+
+  const handleApproveUpdateRequest = async (id: string) => {
+    const result = await alertConfirm(
+      'Approve Changes?',
+      'Are you sure you want to approve these changes? The employee profile will be updated immediately.'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setProcessingUpdateRequest(true);
+      const res = await api.approveEmployeeUpdateRequest(id);
+      if (res.success) {
+        await alertSuccess('Approved!', 'Request approved successfully');
+        setSelectedUpdateRequest(null);
+        loadUpdateRequests();
+        loadEmployees(currentPage);
+      } else {
+        await alertError('Failed', res.message || 'Failed to approve request');
+      }
+    } catch (err) {
+      await alertError('Error', 'An error occurred');
+    } finally {
+      setProcessingUpdateRequest(false);
+    }
+  };
+
+  const handleRejectUpdateRequest = async (id: string) => {
+    if (!updateRequestRejectComments.trim()) {
+      await alertError('Required', 'Please provide a reason for rejection');
+      return;
+    }
+
+    try {
+      setProcessingUpdateRequest(true);
+      const res = await api.rejectEmployeeUpdateRequest(id, updateRequestRejectComments);
+      if (res.success) {
+        await alertSuccess('Rejected', 'Request rejected');
+        setSelectedUpdateRequest(null);
+        setUpdateRequestRejectComments('');
+        loadUpdateRequests();
+      } else {
+        await alertError('Failed', res.message || 'Failed to reject request');
+      }
+    } catch (err) {
+      await alertError('Error', 'An error occurred');
+    } finally {
+      setProcessingUpdateRequest(false);
+    }
+  };
+
   const loadEmployees = async (pageNum: number = 1) => {
     try {
       setLoading(true);
@@ -1233,7 +1335,17 @@ export default function EmployeesPage() {
   // Trigger search and filter
   useEffect(() => {
     loadEmployees(1);
+    // Also fetch requests count if not on requests tab to show badge if needed
+    if (activeTab !== 'requests') {
+      loadUpdateRequests();
+    }
   }, [searchQuery, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, includeLeftEmployees, itemsPerPage]);
+
+  useEffect(() => {
+    if (activeTab === 'requests') {
+      loadUpdateRequests();
+    }
+  }, [activeTab, updateRequestStatusFilter]);
 
   const loadApplications = async () => {
     try {
@@ -1946,6 +2058,7 @@ export default function EmployeesPage() {
   );
 
   const pendingApplications = filteredApplications.filter(app => app.status === 'pending');
+  const pendingUpdateRequests = updateRequests.filter(r => r.status === 'pending');
   const approvedApplications = filteredApplications.filter(app => app.status === 'approved');
   const rejectedApplications = filteredApplications.filter(app => app.status === 'rejected');
 
@@ -2209,12 +2322,14 @@ export default function EmployeesPage() {
             {/* Tab Slider */}
             <div className="relative flex h-10 items-center rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
               <div
-                className={`absolute h-8 rounded-lg bg-white shadow-sm transition-all duration-300 ease-in-out dark:bg-slate-700 ${activeTab === 'employees' ? 'left-1 w-[calc(50%-4px)]' : 'left-[calc(50%)] w-[calc(50%-4px)]'
+                className={`absolute h-8 rounded-lg bg-white shadow-sm transition-all duration-300 ease-in-out dark:bg-slate-700 ${activeTab === 'employees' ? 'left-1 w-[calc(33.33%-4px)]' :
+                  activeTab === 'applications' ? 'left-[calc(33.33%)] w-[calc(33.33%-4px)]' :
+                    'left-[calc(66.66%)] w-[calc(33.33%-4px)]'
                   }`}
               />
               <button
                 onClick={() => setActiveTab('employees')}
-                className={`relative z-10 w-36 px-4 py-1.5 text-sm font-semibold transition-colors ${activeTab === 'employees'
+                className={`relative z-10 w-32 px-4 py-1.5 text-sm font-semibold transition-colors ${activeTab === 'employees'
                   ? 'text-slate-900 dark:text-slate-100'
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
                   }`}
@@ -2223,18 +2338,29 @@ export default function EmployeesPage() {
               </button>
               <button
                 onClick={() => setActiveTab('applications')}
-                className={`relative z-10 w-36 px-4 py-1.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${activeTab === 'applications'
+                className={`relative z-10 w-32 px-4 py-1.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${activeTab === 'applications'
                   ? 'text-slate-900 dark:text-slate-100'
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
                   }`}
               >
                 Applications
-                {/* Count Badge - Always Visible */}
                 {pendingApplications.length > 0 && (
-                  <span className={`flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] bg-red-500 text-white
-                    
-                    `}>
+                  <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] bg-red-500 text-white">
                     {pendingApplications.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('requests')}
+                className={`relative z-10 w-36 px-4 py-1.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${activeTab === 'requests'
+                  ? 'text-slate-900 dark:text-slate-100'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                  }`}
+              >
+                Update Requests
+                {pendingUpdateRequests.length > 0 && (
+                  <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] bg-indigo-500 text-white">
+                    {pendingUpdateRequests.length}
                   </span>
                 )}
               </button>
@@ -2812,6 +2938,120 @@ export default function EmployeesPage() {
           </>
         )}
 
+        {/* Update Requests Tab */}
+        {activeTab === 'requests' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setUpdateRequestStatusFilter('pending')}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${updateRequestStatusFilter === 'pending'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  Pending
+                </button>
+                <button
+                  onClick={() => setUpdateRequestStatusFilter('approved')}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${updateRequestStatusFilter === 'approved'
+                    ? 'bg-green-600 text-white shadow-md'
+                    : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  Approved
+                </button>
+                <button
+                  onClick={() => setUpdateRequestStatusFilter('rejected')}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${updateRequestStatusFilter === 'rejected'
+                    ? 'bg-red-600 text-white shadow-md'
+                    : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  Rejected
+                </button>
+                <button
+                  onClick={() => setUpdateRequestStatusFilter('all')}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${updateRequestStatusFilter === 'all'
+                    ? 'bg-slate-600 text-white shadow-md'
+                    : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  All
+                </button>
+              </div>
+            </div>
+
+            {loadingUpdateRequests ? (
+              <div className="flex flex-col items-center justify-center py-20">
+                <Spinner className="h-10 w-10 text-indigo-600" />
+                <p className="mt-4 text-slate-500">Loading requests...</p>
+              </div>
+            ) : updateRequests.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50/50 p-12 text-center dark:border-slate-700 dark:bg-slate-900/50">
+                <p className="text-lg font-medium text-slate-600 dark:text-slate-400">No update requests found</p>
+                <p className="mt-1 text-sm text-slate-500">New profile update requests from employees will appear here.</p>
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {updateRequests.map((req) => (
+                  <div
+                    key={req._id}
+                    onClick={() => setSelectedUpdateRequest(req)}
+                    className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all hover:border-indigo-300 hover:shadow-xl dark:border-slate-800 dark:bg-slate-950"
+                  >
+                    <div className="p-5">
+                      <div className="mb-4 flex items-center gap-3">
+                        {req.employeeId?.profilePhoto ? (
+                          <img
+                            src={req.employeeId.profilePhoto}
+                            alt=""
+                            className="h-12 w-12 rounded-xl object-cover ring-2 ring-slate-100 dark:ring-slate-800"
+                          />
+                        ) : (
+                          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-xl font-bold text-indigo-600 dark:bg-indigo-900/30">
+                            {req.employeeId?.employee_name?.charAt(0) || req.emp_no.charAt(0)}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <h3 className="truncate font-bold text-slate-900 dark:text-slate-100">{req.employeeId?.employee_name || 'Unknown Employee'}</h3>
+                          <p className="text-xs text-slate-500">{req.emp_no}</p>
+                        </div>
+                      </div>
+
+                      <div className="mb-4 flex flex-wrap gap-2">
+                        {Object.keys(req.requestedChanges).slice(0, 3).map((field) => (
+                          <span
+                            key={field}
+                            className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                          >
+                            {field.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                        {Object.keys(req.requestedChanges).length > 3 && (
+                          <span className="text-[10px] text-slate-400">+{Object.keys(req.requestedChanges).length - 3} more</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase font-semibold">
+                          {new Date(req.createdAt).toLocaleDateString()}
+                        </span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${req.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                          req.status === 'approved' ? 'bg-green-100 text-green-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                          {req.status}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Employees Tab */}
         {activeTab === 'employees' && (
           <>
@@ -2929,6 +3169,12 @@ export default function EmployeesPage() {
                                     <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-1 text-[10px] font-bold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 uppercase tracking-wider">
                                       <LucideClock className="w-3 h-3" />
                                       SALARY PENDING
+                                    </span>
+                                  )}
+                                  {pendingUpdateRequests.some((r: any) => r.emp_no === employee.emp_no && r.status === 'pending') && (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 uppercase tracking-wider">
+                                      <Edit2 className="w-3 h-3" />
+                                      UPDATE PENDING
                                     </span>
                                   )}
                                 </div>

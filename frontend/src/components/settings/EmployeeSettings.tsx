@@ -3,9 +3,9 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { toast } from 'react-toastify';
-import Spinner from '@/components/Spinner';
+
 import { SettingsSkeleton } from './SettingsSkeleton';
-import { Save, Database, Trash2, CheckCircle2, AlertCircle, ChevronRight } from 'lucide-react';
+import { AlertCircle, ChevronRight } from 'lucide-react';
 
 const EmployeeSettings = () => {
     const [employeeDataSource, setEmployeeDataSource] = useState<string>('mongodb');
@@ -14,6 +14,12 @@ const EmployeeSettings = () => {
     const [mssqlConnected, setMssqlConnected] = useState(false);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [updateRequestConfig, setUpdateRequestConfig] = useState({
+        enabled: false,
+        requestableFields: [] as string[],
+        allowQualifications: false
+    });
+    const [allFields, setAllFields] = useState<{ id: string; label: string; group: string }[]>([]);
 
     const loadSettings = async () => {
         try {
@@ -24,6 +30,28 @@ const EmployeeSettings = () => {
                 setEmployeeDeleteTarget(res.data.deleteTarget || 'both');
                 setAutoGenerateEmployeeNumber(!!res.data.auto_generate_employee_number);
                 setMssqlConnected(res.data.mssqlConnected || false);
+            }
+
+            // Load profile update request config
+            const configRes = await api.getSetting('profile_update_request_config');
+            if (configRes.success && configRes.data) {
+                setUpdateRequestConfig(configRes.data.value);
+            }
+
+            // Load form settings to get all fields
+            const formSettingsRes = await api.getFormSettings();
+            if (formSettingsRes.success && formSettingsRes.data) {
+                const fields: any[] = [];
+                formSettingsRes.data.groups.forEach((group: any) => {
+                    group.fields.forEach((field: any) => {
+                        fields.push({
+                            id: field.id,
+                            label: field.label,
+                            group: group.name
+                        });
+                    });
+                });
+                setAllFields(fields);
             }
         } catch (err) {
             console.error('Error loading employee settings:', err);
@@ -44,6 +72,14 @@ const EmployeeSettings = () => {
                 dataSource: employeeDataSource,
                 deleteTarget: employeeDeleteTarget,
                 auto_generate_employee_number: autoGenerateEmployeeNumber,
+            });
+
+            // Save profile update request config
+            await api.upsertSetting({
+                key: 'profile_update_request_config',
+                value: updateRequestConfig,
+                category: 'employee',
+                description: 'Configuration for employee profile update requests'
             });
 
             if (res.success) {
@@ -154,6 +190,72 @@ const EmployeeSettings = () => {
                             </p>
                         </div>
                     </div>
+
+                    {/* Profile Update Request Configuration */}
+                    <section className="bg-white dark:bg-[#1E293B] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden p-4 sm:p-6 lg:p-8">
+                        <div className="px-8 py-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">Profile Update Request Configuration</h3>
+                            <div className="flex items-center gap-4">
+                                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold border uppercase tracking-tight ${updateRequestConfig.enabled ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                                    {updateRequestConfig.enabled ? 'Enabled' : 'Disabled'}
+                                </span>
+                                <div className="flex h-10 items-center">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={updateRequestConfig.enabled}
+                                        onClick={() => setUpdateRequestConfig(prev => ({ ...prev, enabled: !prev.enabled }))}
+                                        className={`${updateRequestConfig.enabled ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 ease-in-out focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2`}
+                                    >
+                                        <span className={`${updateRequestConfig.enabled ? 'translate-x-5' : 'translate-x-1'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-8 space-y-6">
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest">Allow Qualifications Update</label>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={updateRequestConfig.allowQualifications}
+                                        onClick={() => setUpdateRequestConfig(prev => ({ ...prev, allowQualifications: !prev.allowQualifications }))}
+                                        className={`${updateRequestConfig.allowQualifications ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 ease-in-out focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2`}
+                                    >
+                                        <span className={`${updateRequestConfig.allowQualifications ? 'translate-x-5' : 'translate-x-1'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
+                                    </button>
+                                </div>
+                                <p className="text-[10px] text-gray-400">When enabled, employees can request updates to their educational and professional qualifications.</p>
+                            </div>
+
+                            <div className="pt-4 border-t border-gray-100 dark:border-gray-800">
+                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Select Requestable Fields</label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {allFields.map(field => (
+                                        <label key={field.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#0F172A] cursor-pointer transition-colors">
+                                            <input
+                                                type="checkbox"
+                                                checked={updateRequestConfig.requestableFields.includes(field.id)}
+                                                onChange={(e) => {
+                                                    const fields = e.target.checked
+                                                        ? [...updateRequestConfig.requestableFields, field.id]
+                                                        : updateRequestConfig.requestableFields.filter(id => id !== field.id);
+                                                    setUpdateRequestConfig(prev => ({ ...prev, requestableFields: fields }));
+                                                }}
+                                                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                            />
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">{field.label}</p>
+                                                <p className="text-[10px] text-gray-400 truncate">{field.group}</p>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
 
                 <div className="space-y-8">
