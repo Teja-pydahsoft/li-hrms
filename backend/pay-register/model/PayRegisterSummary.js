@@ -720,7 +720,7 @@ payRegisterSummarySchema.methods.recalculateTotals = function () {
   totals.totalODDays = totals.odDays + totals.odHalfDays * 0.5;
 
   // totalPresentDays already includes OD (presentDays/presentHalfDays count both 'present' and 'od')
-  // Payable shifts = present (includes OD, including when edited from absent) + extra days
+  // Payable shifts (for salary) = present (includes OD) + extra days
   totals.totalPayableShifts = totals.totalPresentDays + (totals.extraDays || 0);
   // This is where we will also use the shift-based payable units if implemented here
   // But for now, let's keep it consistent with the service fix I just did

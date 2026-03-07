@@ -50,10 +50,10 @@ async function getRosterWOHOLCounts(emp_no, startDate, endDate) {
  * @returns {Promise<Object>} The same totals object (with totalWeeklyOffs/totalHolidays updated)
  */
 async function ensureTotalsRespectRoster(totals, emp_no, startDate, endDate) {
-  if (!totals || typeof totals !== 'object') return totals;
-  const { totalWeeklyOffs, totalHolidays } = await getRosterWOHOLCounts(emp_no, startDate, endDate);
-  totals.totalWeeklyOffs = totalWeeklyOffs;
-  totals.totalHolidays = totalHolidays;
+  // if (!totals || typeof totals !== 'object') return totals;
+  // const { totalWeeklyOffs, totalHolidays } = await getRosterWOHOLCounts(emp_no, startDate, endDate);
+  // totals.totalWeeklyOffs = totalWeeklyOffs;
+  // totals.totalHolidays = totalHolidays;
   return totals;
 }
 

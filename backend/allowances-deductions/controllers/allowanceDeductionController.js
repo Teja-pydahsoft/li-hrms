@@ -781,12 +781,16 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+    // Use header: 1 (array of arrays) so we process EVERY column by index - avoids losing columns
+    // when Excel changes headers or sheet_to_json object keys get overwritten
+    const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    const headers = Array.isArray(rawData[0]) ? rawData[0] : [];
+    const dataRows = rawData.slice(1).filter(row => Array.isArray(row) && row.some(cell => cell !== '' && cell != null));
 
-    if (!jsonData || jsonData.length === 0) {
+    if (!dataRows.length) {
       return res.status(400).json({
         success: false,
-        message: 'The uploaded file is empty',
+        message: 'The uploaded file is empty or has no data rows',
       });
     }
 
@@ -796,20 +800,41 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
       AllowanceDeductionMaster.find({ category: 'deduction', isActive: true }),
     ]);
 
-    // Create lookup maps: "Name (category)" -> Master Object
-    // Update: User requested headers without ID, so we must map by Name+Category.
+    // Create lookup maps: exact "Name (category)" AND normalized key -> Master Object
+    // Normalized key = lowercase, alphanumeric only (handles Excel changing "PF (deduction)" to "PF (Deduction)" or adding spaces)
     const headerMap = new Map();
+    const normalizedHeaderMap = new Map();
+
+    const normalizeHeader = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
     const addToMap = (list) => {
       list.forEach(item => {
-        // Must match the format generated in downloadTemplate: `${name} (${category})`
         const headerKey = `${item.name} (${item.category})`;
         headerMap.set(headerKey, item);
+        normalizedHeaderMap.set(normalizeHeader(headerKey), item);
       });
     };
 
     addToMap(allowances);
     addToMap(deductions);
+
+    const findMasterByHeader = (header) => headerMap.get(header) || normalizedHeaderMap.get(normalizeHeader(header));
+
+    const findEmpNoFromRowArr = (rowArr) => {
+      const empIdNorm = normalizeHeader('Employee ID');
+      const empNoNorm = 'empno';
+      const empNoUnderscore = 'emp_no';
+      for (let i = 0; i < headers.length; i++) {
+        const h = headers[i];
+        if (!h) continue;
+        const n = normalizeHeader(h);
+        if (n === empIdNorm || n === empNoNorm || n === empNoUnderscore) {
+          const v = rowArr[i];
+          if (v !== undefined && v !== null && v !== '') return v;
+        }
+      }
+      return undefined;
+    };
 
     const results = {
       updated: 0,
@@ -817,9 +842,9 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
       errors: [],
     };
 
-    // 2. Process each row
-    for (const [index, row] of jsonData.entries()) {
-      const empNo = row['Employee ID'];
+    // 2. Process each row (by column index - never miss a column)
+    for (const [index, rowArr] of dataRows.entries()) {
+      const empNo = findEmpNoFromRowArr(rowArr);
 
       if (!empNo) {
         results.errors.push(`Row ${index + 2}: Missing Employee ID`);
@@ -827,7 +852,7 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
         continue;
       }
 
-      const employee = await Employee.findOne({ emp_no: String(empNo).toUpperCase() });
+      const employee = await Employee.findOne({ emp_no: String(empNo).trim().toUpperCase() });
       if (!employee) {
         results.errors.push(`Row ${index + 2}: Employee with ID ${empNo} not found`);
         results.failed++;
@@ -837,39 +862,35 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
       const newAllowances = [];
       const newDeductions = [];
 
-      // Iterate through row keys to find A&D columns
-      Object.keys(row).forEach(key => {
-        const master = headerMap.get(key);
-        if (master) {
-          let val = row[key];
+      // Process EVERY column by index - no column lost to duplicate keys or Excel quirks
+      for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+        const header = headers[colIdx];
+        const master = findMasterByHeader(header);
+        if (!master) continue;
 
-          if (val !== '' && val !== null && val !== undefined) {
-            // Handle deduction negative input if user kept it negative
-            if (master.category === 'deduction' && val < 0) {
-              val = Math.abs(val);
-            }
+        let val = rowArr[colIdx];
+        if (val === '' || val === null || val === undefined) continue;
 
-            const amount = Number(val);
-            if (!isNaN(amount)) {
-              const overrideObj = {
-                masterId: master._id,
-                name: master.name,
-                category: master.category,
-                type: 'fixed', // Overrides are typically fixed amounts in this context
-                amount: amount,
-                basedOnPresentDays: master.departmentRules?.[0]?.basedOnPresentDays || master.globalRule?.basedOnPresentDays || false, // Best guess fallback, ideally should come from user input but simplistic for now
-                isOverride: true
-              };
+        if (master.category === 'deduction' && val < 0) val = Math.abs(val);
+        const amount = Number(val);
+        if (!Number.isFinite(amount)) continue;
 
-              if (master.category === 'allowance') {
-                newAllowances.push(overrideObj);
-              } else {
-                newDeductions.push(overrideObj);
-              }
-            }
-          }
+        const overrideObj = {
+          masterId: master._id,
+          name: master.name,
+          category: master.category,
+          type: 'fixed',
+          amount: amount,
+          basedOnPresentDays: master.departmentRules?.[0]?.basedOnPresentDays || master.globalRule?.basedOnPresentDays || false,
+          isOverride: true
+        };
+
+        if (master.category === 'allowance') {
+          newAllowances.push(overrideObj);
+        } else {
+          newDeductions.push(overrideObj);
         }
-      });
+      }
 
       // Update employee
       // We REPLACE existing overrides with the ones found in the sheet for the columns present.
@@ -902,7 +923,7 @@ exports.bulkUpdateAllowancesDeductions = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Processed ${jsonData.length} rows. Updated: ${results.updated}, Failed: ${results.failed}`,
+      message: `Processed ${dataRows.length} rows. Updated: ${results.updated}, Failed: ${results.failed}`,
       errors: results.errors,
     });
 

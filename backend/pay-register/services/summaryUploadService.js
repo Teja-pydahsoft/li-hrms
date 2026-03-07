@@ -19,7 +19,8 @@ const mongoose = require('mongoose');
  */
 async function processSummaryBulkUpload(month, rows, userId) {
     const [year, monthNum] = month.split('-').map(Number);
-    const { startDate, endDate } = await getPayrollDateRange(year, monthNum);
+    const range = await getPayrollDateRange(year, monthNum);
+
     const results = {
         total: rows.length,
         success: 0,
@@ -39,214 +40,182 @@ async function processSummaryBulkUpload(month, rows, userId) {
 
     for (const row of rows) {
         try {
-            const empNo = getValue(row, ['Employee Code', 'Emp Code', 'Emp No'])?.toString()?.trim();
+            const empNo = getValue(row, ['Employee Code', 'Emp Code', 'Emp No', 'EmployeeNo'])?.toString()?.trim();
             if (!empNo) {
                 results.failed++;
                 results.errors.push(`Row ${rows.indexOf(row) + 1}: Missing Employee Code`);
                 continue;
             }
 
-            // 1. Find employee
-            const employee = await Employee.findOne({ emp_no: empNo })
-                .populate('department_id', 'name')
-                .populate('division_id', 'name');
-
+            const employee = await Employee.findOne({ emp_no: empNo });
             if (!employee) {
                 results.failed++;
-                results.errors.push(`Employee ${empNo}: Not found in system`);
+                results.errors.push(`Employee not found: ${empNo}`);
                 continue;
             }
 
-            // 3. Get or Create Pay Register
-            let payRegister = await PayRegisterSummary.findOne({ employeeId: employee._id, month });
+            const employeeId = employee._id;
 
+            // 1. DATA EXTRACTION
+            const totalPresentInput = Number(getValue(row, ['Total Present', 'Present Days'])) || 0;
+            const paidLeaves = Number(getValue(row, ['Paid Leaves', 'PaidLeaveCount', 'Leaves'])) || 0;
+            const lopCount = Number(getValue(row, ['LOP Count', 'LOP'])) || 0;
+            const holidayCount = Number(getValue(row, ['Holiday Count', 'Holidays', 'Weekoff Count'])) || 0;
+            const totalODCount = Number(getValue(row, ['Total OD', 'OD Days', 'OD'])) || 0;
+            const otHoursTotal = Number(getValue(row, ['OT Hours', 'Total OT'])) || 0;
+            const extraDaysValue = Number(getValue(row, ['Extra Days', 'Total Extra Days'])) || 0;
+            const lateCountRaw = Number(getValue(row, ['Late Count', 'Lates'])) || 0;
+
+            // 2. DYNAMIC MONTH DAYS CALCULATION
+            let totalDaysInMonth = range.totalDays || 30;
+            const excelMonthDays = Number(getValue(row, ['Month Days', 'Total Days']));
+            if (excelMonthDays > 0) totalDaysInMonth = excelMonthDays;
+
+            // 3. DYNAMIC ABSENT CALCULATION
+            const totalAbsentInputFromExcel = Number(getValue(row, ['Total Absent', 'Absent Days']));
+            let totalAbsent = totalAbsentInputFromExcel;
+            if (!totalAbsent || totalAbsent === 0) {
+                totalAbsent = Math.max(0, totalDaysInMonth - (totalPresentInput + paidLeaves + lopCount + holidayCount));
+            }
+
+            let payRegister = await PayRegisterSummary.findOne({ employeeId, month });
             if (!payRegister) {
-                const dailyRecords = await populatePayRegisterFromSources(employee._id, employee.emp_no, year, monthNum);
-                payRegister = new PayRegisterSummary({
-                    employeeId: employee._id,
+                payRegister = await PayRegisterSummary.create({
+                    employeeId,
                     emp_no: employee.emp_no,
                     month,
                     monthName: new Date(year, monthNum - 1).toLocaleString('default', { month: 'long', year: 'numeric' }),
                     year,
                     monthNumber: monthNum,
-                    totalDaysInMonth: new Date(year, monthNum, 0).getDate(),
-                    dailyRecords,
+                    startDate: range.startDate,
+                    endDate: range.endDate,
                     status: 'draft',
+                    totalDaysInMonth,
+                    dailyRecords: await populatePayRegisterFromSources(employeeId, employee.emp_no, year, monthNum),
+                    totals: {
+                        totalDays: totalDaysInMonth,
+                        totalPresentDays: 0,
+                        totalAbsentDays: 0,
+                        totalLeaveDays: 0,
+                        totalODDays: 0,
+                        totalPayableShifts: 0,
+                    }
                 });
+            } else {
+                payRegister.totalDaysInMonth = totalDaysInMonth;
+                payRegister.startDate = range.startDate;
+                payRegister.endDate = range.endDate;
+                if (!payRegister.dailyRecords || payRegister.dailyRecords.length === 0) {
+                    payRegister.dailyRecords = await populatePayRegisterFromSources(employeeId, employee.emp_no, year, monthNum);
+                }
             }
 
-            // 4. Identify Working and Off Days
-            const workingDates = [];
-            const offDates = []; // Holidays and Week-offs
-
+            // 4. RESET ALL DAILY RECORDS (Clean Slate - No Shift Roster Respect)
             payRegister.dailyRecords.forEach(dr => {
-                // RESET EVERY record before distributing new totals to prevent accumulation
+                dr.status = 'absent';
+                dr.isOD = false;
+                dr.isSplit = false;
+                dr.leaveType = null;
+                dr.leaveNature = null;
                 dr.isLate = false;
-                dr.isEarlyOut = false;
                 dr.otHours = 0;
                 dr.remarks = null;
                 dr.isManuallyEdited = false;
-
-                const status = dr.status || dr.firstHalf?.status;
-                if (status === 'holiday' || status === 'week_off') {
-                    offDates.push({ date: dr.date, originalStatus: status });
-                } else {
-                    workingDates.push(dr.date);
-                    // Reset working days to default absent before distributing
-                    dr.status = 'absent';
+                if (dr.firstHalf) {
                     dr.firstHalf.status = 'absent';
+                    dr.firstHalf.leaveType = null;
+                    dr.firstHalf.leaveNature = null;
+                    dr.firstHalf.isOD = false;
+                }
+                if (dr.secondHalf) {
                     dr.secondHalf.status = 'absent';
-                    dr.isSplit = false;
-                    dr.leaveType = null;
-                    dr.leaveNature = null;
-                    dr.isOD = false;
+                    dr.secondHalf.leaveType = null;
+                    dr.secondHalf.leaveNature = null;
+                    dr.secondHalf.isOD = false;
                 }
             });
+            payRegister.markModified('dailyRecords');
 
-            // 5. Extract values from Excel using robust matching
-            const totalODCount = Number(getValue(row, ['Total OD', 'OD Days', 'OD'])) || 0;
-            const totalPresentInput = Number(getValue(row, ['Total Present', 'Present Days', 'Present'])) || 0;
-            const paidLeaves = Number(getValue(row, ['Paid Leaves', 'Paid Leave'])) || 0;
-            const lopCount = Number(getValue(row, ['LOP Count', 'LOP'])) || 0;
-            const totalAbsent = Number(getValue(row, ['Total Absent', 'Absent Days', 'Absent'])) || 0;
-            const holidayCount = Number(getValue(row, ['Holidays', 'Holiday Count', 'Holidays & Weekoffs'])) || 0;
-            const lateCountRaw = Number(getValue(row, ['Lates', 'Late Count', 'Late'])) || 0;
-            const otHoursTotal = Number(getValue(row, ['Total OT Hours', 'OT Hours', 'OT'])) || 0;
-            const extraDaysValue = Number(getValue(row, ['Total Extra Days', 'Extra Days', 'Extra'])) || 0;
+            // 5. EXHAUSTIVE DISTRIBUTION (Sequential, ignoring roster positions)
+            const allDates = payRegister.dailyRecords.map(dr => dr.date);
 
-            // 6. Distribute statuses sequentially
-            let workingIndex = 0;
-            let offIndex = 0;
-
-            const distribute = (count, status, leaveNature = null) => {
+            const exhaustiveDistribute = (count, status, leaveNature = null) => {
                 let remaining = Number(count) || 0;
+                if (remaining <= 0) return;
 
-                // First pass: Fill working days
-                while (remaining > 0 && workingIndex < workingDates.length) {
-                    const date = workingDates[workingIndex];
+                // Simple sequential fill from the first available 'absent' day
+                for (const date of allDates) {
+                    if (remaining <= 0) break;
+
                     const dr = payRegister.dailyRecords.find(d => d.date === date);
+                    if (!dr || (dr.status !== 'absent' && dr.status !== null) || dr.isSplit) continue;
 
                     if (remaining >= 1) {
                         dr.status = status;
-                        dr.firstHalf.status = status;
-                        dr.secondHalf.status = status;
+                        dr.isOD = (status === 'od');
                         if (status === 'leave') {
                             dr.leaveNature = leaveNature;
-                            dr.firstHalf.leaveNature = leaveNature;
-                            dr.secondHalf.leaveNature = leaveNature;
+                            dr.leaveType = leaveNature === 'paid' ? 'cl' : 'lop';
                         }
-                        if (status === 'od') {
-                            dr.isOD = true;
-                            dr.firstHalf.isOD = true;
-                            dr.secondHalf.isOD = true;
-                        }
+                        // Sync halves
+                        if (dr.firstHalf) dr.firstHalf.status = status;
+                        if (dr.secondHalf) dr.secondHalf.status = status;
+
                         remaining -= 1;
-                    } else {
-                        // Half day logic
+                    } else if (remaining > 0) {
                         dr.isSplit = true;
-                        dr.firstHalf.status = status;
-                        if (status === 'leave') dr.firstHalf.leaveNature = leaveNature;
-                        if (status === 'od') dr.firstHalf.isOD = true;
+                        dr.firstHalf = { status, isOD: status === 'od', leaveNature };
+                        dr.secondHalf = { status: 'absent' };
                         remaining = 0;
                     }
-                    workingIndex++;
                 }
-
-                // Second pass: Overflow into Holidays/Week-offs (only for 'present' or 'od')
-                if (remaining > 0 && (status === 'present' || status === 'od')) {
-                    while (remaining > 0 && offIndex < offDates.length) {
-                        const { date, originalStatus } = offDates[offIndex];
-                        const dr = payRegister.dailyRecords.find(d => d.date === date);
-                        const label = originalStatus === 'holiday' ? 'Holiday' : 'Week Off';
-
-                        if (remaining >= 1) {
-                            dr.status = 'present';
-                            dr.firstHalf.status = 'present';
-                            dr.secondHalf.status = 'present';
-                            if (status === 'od') dr.isOD = true;
-
-                            const remark = `Worked on ${label} (Uploaded)`;
-                            dr.remarks = dr.remarks ? `${dr.remarks} | ${remark}` : remark;
-                            dr.isManuallyEdited = true;
-
-                            remaining -= 1;
-                        } else {
-                            // Half day overflow
-                            dr.isSplit = true;
-                            dr.firstHalf.status = 'present';
-                            if (status === 'od') dr.firstHalf.isOD = true;
-
-                            const remark = `Worked half-day on ${label} (Uploaded)`;
-                            dr.remarks = dr.remarks ? `${dr.remarks} | ${remark}` : remark;
-                            dr.isManuallyEdited = true;
-
-                            remaining = 0;
-                        }
-                        offIndex++;
-                    }
-                }
-
-                return remaining;
             };
 
             const remainingPresent = Math.max(0, totalPresentInput - totalODCount);
 
-            distribute(totalODCount, 'od');
-            distribute(remainingPresent, 'present');
-            distribute(paidLeaves, 'leave', 'paid');
-            distribute(lopCount, 'leave', 'lop');
+            // Sequential order: Holidays first, then Leaves, then OD, then Present
+            exhaustiveDistribute(holidayCount, 'holiday');
+            exhaustiveDistribute(paidLeaves, 'leave', 'paid');
+            exhaustiveDistribute(lopCount, 'leave', 'lop');
+            exhaustiveDistribute(totalODCount, 'od');
+            exhaustiveDistribute(remainingPresent, 'present');
 
-            // 7. Handle Manual Holiday Assignment (If roster was empty but Excel provides them)
-            if (holidayCount > 0 && offDates.length === 0) {
-                distribute(holidayCount, 'holiday');
-            }
-
-            distribute(totalAbsent, 'absent');
-
-            // 8. Handle Late Count Persistence
+            // 6. HANDLE LATES AND OT
             if (lateCountRaw > 0) {
                 let latesToApply = lateCountRaw;
-                // Distribute lates across 'present' or 'od' records
                 for (const dr of payRegister.dailyRecords) {
                     if (latesToApply <= 0) break;
-
                     const isFullPresent = dr.status === 'present' || dr.status === 'od';
                     const isHalfPresent = dr.isSplit && (dr.firstHalf.status === 'present' || dr.secondHalf.status === 'present');
-
                     if (isFullPresent || isHalfPresent) {
                         dr.isLate = true;
-                        const remark = "Late Arrival (Uploaded)";
-                        dr.remarks = dr.remarks ? `${dr.remarks} | ${remark}` : remark;
                         latesToApply -= 1;
                     }
                 }
             }
-
-            // 9. Handle OT Hours Persistence
             if (otHoursTotal > 0) {
-                const targetRecord = payRegister.dailyRecords.find(dr =>
-                    dr.status === 'present' || dr.status === 'od' ||
-                    (dr.isSplit && (dr.firstHalf.status === 'present' || dr.secondHalf.status === 'present'))
-                );
-                if (targetRecord) {
-                    targetRecord.otHours = otHoursTotal;
-                }
+                const target = payRegister.dailyRecords.find(dr => dr.status === 'present' || dr.status === 'od' || (dr.isSplit && dr.firstHalf.status === 'present'));
+                if (target) target.otHours = otHoursTotal;
             }
 
-            // 10. Finalize with robust recalculation
+            // 7. FINAL TOTALS OVERRIDE (Blindly follow Excel)
+            payRegister.set('totals.totalPresentDays', totalPresentInput);
+            payRegister.set('totals.totalPaidLeaveDays', paidLeaves);
+            payRegister.set('totals.totalLopDays', lopCount);
+            payRegister.set('totals.totalLeaveDays', paidLeaves + lopCount);
+            payRegister.set('totals.totalODDays', totalODCount);
+            payRegister.set('totals.totalAbsentDays', totalAbsent);
+            payRegister.set('totals.totalHolidays', holidayCount);
+            payRegister.set('totals.totalWeeklyOffs', 0);
+            payRegister.set('totals.lateCount', lateCountRaw);
+            payRegister.set('totals.totalOTHours', otHoursTotal);
+            payRegister.set('totals.extraDays', extraDaysValue);
+            payRegister.set('totals.totalPayableShifts', totalPresentInput + extraDaysValue);
+
             payRegister.lastEditedBy = userId;
             payRegister.lastEditedAt = new Date();
-
-            // Recalculate will aggregate based on marks
-            payRegister.recalculateTotals();
-
-            // Set final manual overrides
-            payRegister.set('totals.extraDays', extraDaysValue);
-
-            // Final aggregate pass
-            payRegister.recalculateTotals();
-            // Override week-offs and holidays from shift roster so totals respect roster
-            await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, startDate, endDate);
+            payRegister.markModified('totals');
+            payRegister.markModified('dailyRecords');
 
             await payRegister.save();
             results.success++;
