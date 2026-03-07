@@ -116,10 +116,11 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
         // Get leave policy settings for EL-as-paid feature (Parity with Regular Payroll)
         const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
         let elUsedInPayroll = 0;
-        // User request: ensure paid leaves are included in payable shifts (parity with regular payroll calculation logic)
-        // totalPayableShifts already includes present + extra; we add standard paid leave days
+        // NOTE: totalPayableShifts from PayRegisterSummary already includes paid leave days
+        // (it is computed as present + OD + paid leaves in the regular payroll flow).
+        // Do NOT add paidLeaveDays again — that was causing paid leaves to be counted twice.
         let paidLeaveDays = attendanceSummary.totalPaidLeaveDays || 0;
-        let payableShifts = (attendanceSummary.totalPayableShifts || 0) + paidLeaveDays;
+        let payableShifts = attendanceSummary.totalPayableShifts || 0;
         const monthDays = attendanceSummary.totalDaysInMonth;
 
         try {
