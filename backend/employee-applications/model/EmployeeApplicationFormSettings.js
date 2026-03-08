@@ -7,16 +7,7 @@ const mongoose = require('mongoose');
 
 /** Predefined qualification table columns – org can enable/disable or delete. S.No is UI-only (row index), not stored. */
 function getDefaultQualificationFields() {
-  return [
-    { id: 'examination', label: 'Examination', type: 'text', isRequired: true, isEnabled: true, placeholder: 'E.g., 10th, 12th, B.Tech', validation: { minLength: 1, maxLength: 200 }, order: 1 },
-    { id: 'university_board', label: 'University/Board', type: 'text', isRequired: false, isEnabled: true, placeholder: 'E.g., CBSE, Mumbai University', validation: { minLength: 0, maxLength: 200 }, order: 2 },
-    { id: 'school_college_name', label: 'School/College name', type: 'text', isRequired: false, isEnabled: true, placeholder: 'Name of institution', validation: { minLength: 0, maxLength: 300 }, order: 3 },
-    { id: 'subjects', label: 'Subjects', type: 'text', isRequired: false, isEnabled: true, placeholder: 'E.g., Physics, Chemistry, Maths', validation: { minLength: 0, maxLength: 500 }, order: 4 },
-    { id: 'month_year_of_pass', label: 'Month & Year of pass', type: 'date', isRequired: false, isEnabled: true, placeholder: 'Month & Year', order: 5 },
-    { id: 'marks', label: 'Marks', type: 'text', isRequired: false, isEnabled: true, placeholder: 'E.g., 85% or 450/500', validation: { minLength: 0, maxLength: 50 }, order: 6 },
-    { id: 'grade_division', label: 'Grade/Division', type: 'text', isRequired: false, isEnabled: true, placeholder: 'E.g., First Class, A+', validation: { minLength: 0, maxLength: 100 }, order: 7 },
-    { id: 'certificate_submitted', label: 'Certificate submitted?', type: 'boolean', isRequired: false, isEnabled: true, placeholder: '', order: 8 },
-  ];
+  return [];
 }
 
 const FieldSchema = new mongoose.Schema(
@@ -580,7 +571,7 @@ EmployeeApplicationFormSettingsSchema.statics.initializeDefault = async function
     qualifications: {
       isEnabled: true,
       enableCertificateUpload: false,
-      fields: getDefaultQualificationFields(),
+      fields: [],
       defaultRows: [],
     },
   };

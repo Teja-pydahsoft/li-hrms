@@ -1652,6 +1652,18 @@ export const api = {
       method: 'DELETE',
     });
   },
+  reorderFormGroups: async (groupIds: string[]) => {
+    return apiRequest<any>('/employee-applications/form-settings/reorder-groups', {
+      method: 'PUT',
+      body: JSON.stringify({ groupIds }),
+    });
+  },
+  reorderFormFields: async (groupId: string, fieldIds: string[]) => {
+    return apiRequest<any>(`/employee-applications/form-settings/groups/${groupId}/reorder-fields`, {
+      method: 'PUT',
+      body: JSON.stringify({ fieldIds }),
+    });
+  },
 
   // Qualifications management
   updateQualificationsConfig: async (config: { isEnabled?: boolean; enableCertificateUpload?: boolean; defaultRows?: Record<string, unknown>[] }) => {
@@ -1696,6 +1708,13 @@ export const api = {
       method: 'DELETE',
     });
   },
+  reorderQualificationsFields: async (fieldIds: string[]) => {
+    return apiRequest<any>('/employee-applications/form-settings/qualifications/reorder-fields', {
+      method: 'PUT',
+      body: JSON.stringify({ fieldIds }),
+    });
+  },
+
 
   deleteEmployee: async (empNo: string) => {
     return apiRequest<any>(`/employees/${empNo}`, { method: 'DELETE' });
@@ -1717,17 +1736,6 @@ export const api = {
     });
   },
 
-  // General Settings
-  getSetting: async (key: string) => {
-    return apiRequest<any>(`/settings/${key}`, { method: 'GET' });
-  },
-
-  upsertSetting: async (data: { key: string; value: any; description?: string; category?: string }) => {
-    return apiRequest<any>(`/settings`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
 
   // Employee Profile Update Requests
   getEmployeeUpdateRequests: async (params?: { status?: string }) => {
