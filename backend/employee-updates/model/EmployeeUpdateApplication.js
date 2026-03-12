@@ -22,6 +22,11 @@ const EmployeeUpdateApplicationSchema = new mongoose.Schema({
         enum: ['pending', 'approved', 'rejected'],
         default: 'pending'
     },
+    type: {
+        type: String,
+        enum: ['profile', 'bank'],
+        default: 'profile'
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

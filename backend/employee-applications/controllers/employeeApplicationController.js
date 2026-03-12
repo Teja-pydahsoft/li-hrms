@@ -743,7 +743,9 @@ const approveSalaryInternal = async (applicationId, salaryData, approver) => {
   const {
     approvedSalary, doj, comments, employeeAllowances, employeeDeductions,
     ctcSalary, calculatedSalary, second_salary,
-    qualifications, qualificationStatus, paidLeaves, casualLeaves
+    qualifications, qualificationStatus, paidLeaves, casualLeaves,
+    applyProfessionTax, applyESI, applyPF, applyAttendanceDeduction,
+    deductLateIn, deductEarlyOut, deductPermission, deductAbsent
   } = salaryData;
 
   const application = await EmployeeApplication.findById(applicationId);
@@ -771,6 +773,16 @@ const approveSalaryInternal = async (applicationId, salaryData, approver) => {
   if (paidLeaves !== undefined) application.paidLeaves = paidLeaves;
   if (casualLeaves !== undefined) application.casualLeaves = casualLeaves;
 
+  // Deduction Preferences
+  if (applyProfessionTax !== undefined) application.applyProfessionTax = applyProfessionTax;
+  if (applyESI !== undefined) application.applyESI = applyESI;
+  if (applyPF !== undefined) application.applyPF = applyPF;
+  if (applyAttendanceDeduction !== undefined) application.applyAttendanceDeduction = applyAttendanceDeduction;
+  if (deductLateIn !== undefined) application.deductLateIn = deductLateIn;
+  if (deductEarlyOut !== undefined) application.deductEarlyOut = deductEarlyOut;
+  if (deductPermission !== undefined) application.deductPermission = deductPermission;
+  if (deductAbsent !== undefined) application.deductAbsent = deductAbsent;
+
   await application.save();
 
   // Update Employee
@@ -796,6 +808,16 @@ const approveSalaryInternal = async (applicationId, salaryData, approver) => {
     if (qualificationStatus !== undefined) employee.qualificationStatus = qualificationStatus;
     if (paidLeaves !== undefined) employee.paidLeaves = paidLeaves;
     if (casualLeaves !== undefined) employee.casualLeaves = casualLeaves;
+
+    // Deduction Preferences
+    if (applyProfessionTax !== undefined) employee.applyProfessionTax = applyProfessionTax;
+    if (applyESI !== undefined) employee.applyESI = applyESI;
+    if (applyPF !== undefined) employee.applyPF = applyPF;
+    if (applyAttendanceDeduction !== undefined) employee.applyAttendanceDeduction = applyAttendanceDeduction;
+    if (deductLateIn !== undefined) employee.deductLateIn = deductLateIn;
+    if (deductEarlyOut !== undefined) employee.deductEarlyOut = deductEarlyOut;
+    if (deductPermission !== undefined) employee.deductPermission = deductPermission;
+    if (deductAbsent !== undefined) employee.deductAbsent = deductAbsent;
 
     await employee.save();
 

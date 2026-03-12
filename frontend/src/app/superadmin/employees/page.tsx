@@ -14,6 +14,7 @@ import HistoryViewCompleteModal from '@/components/employee/HistoryViewCompleteM
 import ResignationModal from '@/components/employee/ResignationModal';
 import BulkAllowancesDeductionsModal from '@/components/employee/BulkAllowancesDeductionsModal';
 import UpdateRequestReviewModal from '@/components/employee/UpdateRequestReviewModal';
+import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
 import Spinner from '@/components/Spinner';
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
@@ -366,6 +367,8 @@ export default function EmployeesPage() {
   const [updatingStatusIds, setUpdatingStatusIds] = useState<Set<string>>(new Set());
   const [showEmployeeUpdateModal, setShowEmployeeUpdateModal] = useState(false);
   const [showBulkAllowancesDeductions, setShowBulkAllowancesDeductions] = useState(false);
+  const [showBankUpdateDialog, setShowBankUpdateDialog] = useState(false);
+  const [submittingBankUpdate, setSubmittingBankUpdate] = useState(false);
 
   const [dynamicTemplate, setDynamicTemplate] = useState<{ headers: string[]; sample: any[]; columns: TemplateColumn[] }>({
     headers: EMPLOYEE_TEMPLATE_HEADERS,
@@ -388,14 +391,38 @@ export default function EmployeesPage() {
   const [applicationRowsPerPage, setApplicationRowsPerPage] = useState(10);
   const [applicationFilters, setApplicationFilters] = useState<Record<string, string>>({});
 
-  // Helper to extract unique values for a column
-  const getUniqueValues = (data: any[], key: string, nestedKey?: string) => {
-    const values = data.map(item => {
-      const val = nestedKey ? item[key]?.[nestedKey] : item[key];
-      return val || '';
-    }).filter((v, i, a) => v && a.indexOf(v) === i);
-    return values.sort();
-  };
+  // Deduction Defaults
+  const [defaultStatutory, setDefaultStatutory] = useState(true);
+  const [defaultAttendance, setDefaultAttendance] = useState(true);
+
+  const fetchDeductionDefaults = useCallback(async () => {
+    try {
+      const [statRes, attRes] = await Promise.all([
+        api.getSetting('default_apply_statutory_deductions'),
+        api.getSetting('default_apply_attendance_deductions')
+      ]);
+      if (statRes.success && statRes.data) setDefaultStatutory(!!statRes.data.value);
+      if (attRes.success && attRes.data) setDefaultAttendance(!!attRes.data.value);
+    } catch (err) {
+      console.error('Error fetching deduction defaults:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDeductionDefaults();
+  }, [fetchDeductionDefaults]);
+
+  const initialFormStateWithDefaults = useMemo(() => ({
+    ...initialFormState,
+    applyPF: defaultStatutory,
+    applyESI: defaultStatutory,
+    applyProfessionTax: defaultStatutory,
+    applyAttendanceDeduction: defaultAttendance,
+    deductLateIn: defaultAttendance,
+    deductEarlyOut: defaultAttendance,
+    deductPermission: defaultAttendance,
+    deductAbsent: defaultAttendance,
+  }), [defaultStatutory, defaultAttendance]);
 
 
 
@@ -1932,6 +1959,7 @@ export default function EmployeesPage() {
     }
   };
 
+
   const handleSetLeftDate = (employee: Employee) => {
     setSelectedEmployeeForLeftDate(employee);
     const defaultLastWorking = (() => {
@@ -2020,6 +2048,31 @@ export default function EmployeesPage() {
       }
     } catch (err: any) {
       await alertError('An error occurred', err.message || 'An error occurred');
+      console.error(err);
+    }
+  };
+
+  const handleToggleDeductionPreference = async (key: string, value: boolean) => {
+    if (!viewingEmployee) return;
+
+    try {
+      // Optimistic update
+      const updatedEmployee = { ...viewingEmployee, [key]: value };
+      setViewingEmployee(updatedEmployee as Employee);
+
+      const response = await api.updateEmployee(viewingEmployee.emp_no, { [key]: value });
+
+      if (response.success) {
+        // Update the employees list as well if it's currently loaded
+        setEmployees(prev => prev.map(emp => emp.emp_no === viewingEmployee.emp_no ? { ...emp, [key]: value } : emp));
+      } else {
+        // Rollback
+        setViewingEmployee(viewingEmployee);
+        await alertError('Failed to update', response.message || 'Failed to update deduction preference');
+      }
+    } catch (err: any) {
+      setViewingEmployee(viewingEmployee);
+      await alertError('Error', err.message || 'An error occurred');
       console.error(err);
     }
   };
@@ -2272,6 +2325,13 @@ export default function EmployeesPage() {
         employeeDeductions: buildOverridePayload(approvalComponentDefaults.deductions, approvalOverrideDeductions, approvalOverrideDeductionsBasedOnPresentDays, 'deduction'),
         ctcSalary: approvalSalarySummary.ctcSalary,
         calculatedSalary: approvalSalarySummary.netSalary,
+        applyESI: (approvalData as any).applyESI,
+        applyProfessionTax: (approvalData as any).applyProfessionTax,
+        applyAttendanceDeduction: (approvalData as any).applyAttendanceDeduction,
+        deductLateIn: (approvalData as any).deductLateIn,
+        deductEarlyOut: (approvalData as any).deductEarlyOut,
+        deductPermission: (approvalData as any).deductPermission,
+        deductAbsent: (approvalData as any).deductAbsent,
       } as any);
 
       if (response.success) {
@@ -2281,7 +2341,15 @@ export default function EmployeesPage() {
         setViewingEmployee(null);
         setSelectedApplication(null);
 
-        setApprovalData({ approvedSalary: 0, doj: '', comments: '', qualifications: [], qualificationStatus: 'Partial', paidLeaves: 0, casualLeaves: 0 });
+        setApprovalData({
+          approvedSalary: 0,
+          doj: '',
+          comments: '',
+          qualifications: [],
+          qualificationStatus: 'Partial',
+          paidLeaves: 0,
+          casualLeaves: 0
+        });
         loadApplications();
         loadEmployees(); // Reload employees list
       } else {
@@ -2347,6 +2415,17 @@ export default function EmployeesPage() {
       paidLeaves: application.paidLeaves ?? application.dynamicFields?.paid_leaves ?? 0,
       casualLeaves: application.casualLeaves ?? application.dynamicFields?.casual_leaves ?? 0,
     });
+    setFormData(prev => ({
+      ...prev,
+      applyPF: application.applyPF ?? defaultStatutory,
+      applyESI: application.applyESI ?? defaultStatutory,
+      applyProfessionTax: application.applyProfessionTax ?? defaultStatutory,
+      applyAttendanceDeduction: application.applyAttendanceDeduction ?? defaultAttendance,
+      deductLateIn: application.deductLateIn ?? defaultAttendance,
+      deductEarlyOut: application.deductEarlyOut ?? defaultAttendance,
+      deductPermission: application.deductPermission ?? defaultAttendance,
+      deductAbsent: application.deductAbsent ?? defaultAttendance,
+    }));
     setApprovalComponentDefaults({ allowances: [], deductions: [] });
     setApprovalOverrideAllowances({});
     setApprovalOverrideDeductions({});
@@ -2366,20 +2445,7 @@ export default function EmployeesPage() {
   };
 
 
-  const openApplicationDialog = () => {
-    setApplicationFormData({ ...initialFormState, proposedSalary: 0 });
-    setComponentDefaults({ allowances: [], deductions: [] });
-    setOverrideAllowances({});
-    setOverrideDeductions({});
-    setApplicationSalarySummary({
-      totalAllowances: 0,
-      totalDeductions: 0,
-      netSalary: 0,
-      ctcSalary: 0,
-    });
-    setShowApplicationDialog(true);
-    setError('');
-  };
+
 
   return (
     <div className="relative min-h-screen">
@@ -4000,6 +4066,7 @@ export default function EmployeesPage() {
                             {quals.map((qual: any, idx: number) => {
                               const certificateUrl = qual.certificateUrl;
                               const isPDF = certificateUrl?.toLowerCase().endsWith('.pdf');
+
                               const displayEntries = Object.entries(qual).filter(([k, v]) =>
                                 k !== 'certificateUrl' && k !== 'status' && v !== null && v !== undefined && v !== ''
                               );
@@ -4347,6 +4414,64 @@ export default function EmployeesPage() {
                               </div>
                             );
                           })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Deduction Preferences */}
+                  <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      {/* Statutory Deductions */}
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyPF', label: 'PF' },
+                            { id: 'applyESI', label: 'ESI' },
+                            { id: 'applyProfessionTax', label: 'Profession Tax' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((approvalData as any)[pref.id] ?? true);
+                                  setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Attendance Deductions */}
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                            { id: 'deductLateIn', label: 'Late-ins' },
+                            { id: 'deductEarlyOut', label: 'Early-outs' },
+                            { id: 'deductPermission', label: 'Permission' },
+                            { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((approvalData as any)[pref.id] ?? true);
+                                  setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -5237,6 +5362,81 @@ export default function EmployeesPage() {
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.salary_mode || 'Bank'}</p>
                           </div>
                         </div>
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setShowBankUpdateDialog(true)}
+                            className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300"
+                          >
+                            Update Bank Details
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Deduction Preferences - Statutory & Attendance flags */}
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
+                        <h3 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">Deduction Preferences</h3>
+                        <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+                          Controls which statutory and attendance deductions apply to this employee during payroll. Disabled items are not calculated (amount 0).
+                        </p>
+                        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                          <div>
+                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Statutory</p>
+                            <div className="space-y-3">
+                              {[
+                                { key: 'applyProfessionTax', label: 'Profession Tax' },
+                                { key: 'applyESI', label: 'ESI' },
+                                { key: 'applyPF', label: 'PF' },
+                              ].map(({ key, label }) => {
+                                const isEnabled = (viewingEmployee as any)[key] !== false;
+                                return (
+                                  <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                    <button
+                                      onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                        }`}
+                                    >
+                                      <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                          }`}
+                                      />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Attendance deduction</p>
+                            <div className="space-y-3">
+                              {[
+                                { key: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                                { key: 'deductLateIn', label: 'Late-ins' },
+                                { key: 'deductEarlyOut', label: 'Early-outs' },
+                                { key: 'deductPermission', label: 'Permission' },
+                                { key: 'deductAbsent', label: 'Absents (extra LOP)' },
+                              ].map(({ key, label }) => {
+                                const isEnabled = (viewingEmployee as any)[key] !== false;
+                                return (
+                                  <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                    <button
+                                      onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                        }`}
+                                    >
+                                      <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                          }`}
+                                      />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Professional Information */}
@@ -5300,7 +5500,7 @@ export default function EmployeesPage() {
                                       <tbody>
                                         {quals.map((qual: any, idx: number) => {
                                           const certificateUrl = qual.certificateUrl;
-                                          const isPDF = certificateUrl?.toLowerCase().endsWith('.pdf');
+     
                                           return (
                                             <tr key={idx} className="border-b border-slate-100 dark:border-slate-700/50">
                                               {qualFields.map((f: any) => {
@@ -6095,6 +6295,39 @@ export default function EmployeesPage() {
           onClose={() => setSelectedUpdateRequest(null)}
         />
       )}
+      <BankUpdateDialog
+        isOpen={showBankUpdateDialog}
+        onClose={() => setShowBankUpdateDialog(false)}
+        employee={viewingEmployee}
+        onSubmit={async (bankFormData) => {
+          if (!viewingEmployee) return;
+          setSubmittingBankUpdate(true);
+          try {
+            const res = await api.createEmployeeUpdateRequest({
+              requestedChanges: bankFormData,
+              comments: 'Bank detail update request',
+              type: 'bank',
+              employeeId: viewingEmployee._id
+            });
+            if (res.success) {
+              setShowBankUpdateDialog(false);
+              Swal.fire({
+                title: 'Submitted!',
+                text: 'Bank detail update request has been submitted for approval.',
+                icon: 'success',
+                confirmButtonColor: '#4f46e5',
+              });
+            } else {
+              alertError(res.error || 'Failed to submit bank update request.');
+            }
+          } catch (err: any) {
+            alertError(err.message || 'An error occurred.');
+          } finally {
+            setSubmittingBankUpdate(false);
+          }
+        }}
+        submitting={submittingBankUpdate}
+      />
     </div>
   );
 }

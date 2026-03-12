@@ -578,6 +578,14 @@ export interface Department {
   divisions?: (string | Division)[];
   designations?: (string | Designation)[];
   divisionDefaults?: { division: string | Division; shifts: (string | Shift)[] }[];
+  applyPF?: boolean;
+  applyESI?: boolean;
+  applyProfessionTax?: boolean;
+  applyAttendanceDeduction?: boolean;
+  deductLateIn?: boolean;
+  deductEarlyOut?: boolean;
+  deductPermission?: boolean;
+  deductAbsent?: boolean;
 }
 
 export interface Division {
@@ -704,6 +712,14 @@ export interface EmployeeApplication extends Partial<Employee> {
   rejectedAt?: string;
   employeeAllowances?: (Allowance & { overrideAmount?: number })[];
   employeeDeductions?: (Deduction & { overrideAmount?: number })[];
+  applyPF?: boolean;
+  applyESI?: boolean;
+  applyProfessionTax?: boolean;
+  applyAttendanceDeduction?: boolean;
+  deductLateIn?: boolean;
+  deductEarlyOut?: boolean;
+  deductPermission?: boolean;
+  deductAbsent?: boolean;
 }
 
 export interface LiveAttendanceEmployee {
@@ -1573,7 +1589,7 @@ export const api = {
     });
   },
 
-  approveEmployeeSalary: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; second_salary?: number; qualificationStatus?: string; paidLeaves?: number; casualLeaves?: number; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number }) => {
+  approveEmployeeSalary: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; second_salary?: number; qualificationStatus?: string; paidLeaves?: number; casualLeaves?: number; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number; applyPF?: boolean; applyESI?: boolean; applyProfessionTax?: boolean; applyAttendanceDeduction?: boolean; deductLateIn?: boolean; deductEarlyOut?: boolean; deductPermission?: boolean; deductAbsent?: boolean; }) => {
     return apiRequest<any>(`/employee-applications/${id}/approve-salary`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1743,7 +1759,7 @@ export const api = {
     return apiRequest<any[]>(`/employee-updates${query}`, { method: 'GET' });
   },
 
-  createEmployeeUpdateRequest: async (data: { requestedChanges: any; comments?: string }) => {
+  createEmployeeUpdateRequest: async (data: { requestedChanges: any; comments?: string; type?: string; employeeId?: string }) => {
     return apiRequest<any>('/employee-updates', {
       method: 'POST',
       body: JSON.stringify(data),

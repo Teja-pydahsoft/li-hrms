@@ -265,15 +265,29 @@ export default function DynamicEmployeeForm({
       // Filter departments based on selected division if division_id is set
       let filteredDepartments = departments;
       if (formData.division_id) {
-        const selectedDivision = (divisions as any[]).find(d => d._id === formData.division_id);
-        if (selectedDivision && selectedDivision.departments) {
-          const linkedDeptIds = selectedDivision.departments.map((d: any) => typeof d === 'string' ? d : d._id);
-          filteredDepartments = departments.filter(d => linkedDeptIds.includes(d._id));
-        } else {
-          // If division is selected but has no departments linked, show nothing or all?
-          // Usually, if division is selected, we should restrict.
-          filteredDepartments = [];
-        }
+        const selDivId = String(formData.division_id?._id || formData.division_id);
+        const selectedDivision = (divisions as any[]).find(d => String(d._id) === selDivId);
+
+        // Mirror the robust logic from page.tsx to ensure consistency
+        filteredDepartments = departments.filter(d => {
+          // 1. Check division's departments array
+          if (selectedDivision?.departments) {
+            const divDeptIds = selectedDivision.departments.map((dd: any) => typeof dd === 'string' ? dd : dd._id);
+            if (divDeptIds.includes(d._id)) return true;
+          }
+
+          // 2. Check department's divisions array
+          if ((d as any).divisions) {
+            const deptDivIds = (d as any).divisions.map((dv: any) => typeof dv === 'string' ? dv : dv._id);
+            if (deptDivIds.includes(selDivId)) return true;
+          }
+
+          // 3. Check department's division_id
+          const dDivId = (d as any).division_id?._id || (d as any).division_id;
+          if (dDivId && String(dDivId) === selDivId) return true;
+
+          return false;
+        });
       }
 
       return (

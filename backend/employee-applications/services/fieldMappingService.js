@@ -46,6 +46,14 @@ const PERMANENT_FIELDS = [
   'is_active',
   'second_salary',
   'profilePhoto',
+  'applyProfessionTax',
+  'applyESI',
+  'applyPF',
+  'applyAttendanceDeduction',
+  'deductLateIn',
+  'deductEarlyOut',
+  'deductPermission',
+  'deductAbsent',
 ];
 
 /**

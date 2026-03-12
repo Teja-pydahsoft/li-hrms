@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
  */
 exports.createRequest = async (req, res) => {
     try {
-        const { requestedChanges, comments } = req.body;
+        const { requestedChanges, comments, type = 'profile' } = req.body;
 
         // 1. Get the profile update configuration
         const configSetting = await Settings.findOne({ key: 'profile_update_request_config' });
@@ -33,7 +33,13 @@ exports.createRequest = async (req, res) => {
 
         for (const key in requestedChanges) {
             // Check if the field is allowed either in system fields or dynamic fields
-            if (config.requestableFields.includes(key)) {
+            if (type === 'bank') {
+                const bankFields = ['bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'];
+                if (bankFields.includes(key)) {
+                    filteredChanges[key] = requestedChanges[key];
+                    hasChanges = true;
+                }
+            } else if (config.requestableFields.includes(key)) {
                 filteredChanges[key] = requestedChanges[key];
                 hasChanges = true;
             }
@@ -52,22 +58,30 @@ exports.createRequest = async (req, res) => {
             });
         }
 
-        // 3. Find the employee record for the current user
+        // 3. Find the employee record (from body if admin, or from session)
         const query = { $or: [] };
-        if (mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
-            query.$or.push({ _id: req.user.employeeId });
-        }
-        if (req.user.emp_no) {
-            query.$or.push({ emp_no: req.user.emp_no });
-        } else if (req.user.employeeId && !mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
-            // If employeeId is not an ObjectId, it's likely the emp_no
-            query.$or.push({ emp_no: req.user.employeeId });
+        
+        if (req.body.employeeId) {
+            // Target specific employee (likely Admin/Manager initiated)
+            if (mongoose.Types.ObjectId.isValid(req.body.employeeId)) {
+                query.$or.push({ _id: req.body.employeeId });
+            } else {
+                query.$or.push({ emp_no: req.body.employeeId });
+            }
+        } else {
+            // Self-service (Employee initiated, use session)
+            if (mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
+                query.$or.push({ _id: req.user.employeeId });
+            }
+            if (req.user.emp_no) {
+                query.$or.push({ emp_no: req.user.emp_no });
+            }
         }
 
         if (query.$or.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'No valid employee identification found in user session'
+                message: 'No valid employee identification found in request or session'
             });
         }
 
@@ -105,6 +119,7 @@ exports.createRequest = async (req, res) => {
             requestedChanges: filteredChanges,
             previousValues,
             status: 'pending',
+            type,
             createdBy: req.user._id,
             comments: comments || ''
         });
@@ -176,7 +191,8 @@ exports.approveRequest = async (req, res) => {
         const permanentFields = [
             'employee_name', 'email', 'phone_number', 'address',
             'blood_group', 'qualifications', 'dob', 'doj',
-            'gender', 'marital_status'
+            'gender', 'marital_status',
+            'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'
         ];
 
         // Mapping for frontend aliases

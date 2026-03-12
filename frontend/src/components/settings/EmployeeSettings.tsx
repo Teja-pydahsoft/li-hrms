@@ -19,6 +19,8 @@ const EmployeeSettings = () => {
         requestableFields: [] as string[],
         allowQualifications: false
     });
+    const [defaultApplyStatutoryDeductions, setDefaultApplyStatutoryDeductions] = useState(true);
+    const [defaultApplyAttendanceDeductions, setDefaultApplyAttendanceDeductions] = useState(true);
     const [allFields, setAllFields] = useState<{ id: string; label: string; group: string }[]>([]);
 
     const loadSettings = async () => {
@@ -36,6 +38,16 @@ const EmployeeSettings = () => {
             const configRes = await api.getSetting('profile_update_request_config');
             if (configRes.success && configRes.data) {
                 setUpdateRequestConfig(configRes.data.value);
+            }
+
+            // Load deduction defaults
+            const statutoryRes = await api.getSetting('default_apply_statutory_deductions');
+            if (statutoryRes.success && statutoryRes.data) {
+                setDefaultApplyStatutoryDeductions(!!statutoryRes.data.value);
+            }
+            const attendanceRes = await api.getSetting('default_apply_attendance_deductions');
+            if (attendanceRes.success && attendanceRes.data) {
+                setDefaultApplyAttendanceDeductions(!!attendanceRes.data.value);
             }
 
             // Load form settings to get all fields
@@ -80,6 +92,20 @@ const EmployeeSettings = () => {
                 value: updateRequestConfig,
                 category: 'employee',
                 description: 'Configuration for employee profile update requests'
+            });
+
+            // Save deduction defaults
+            await api.upsertSetting({
+                key: 'default_apply_statutory_deductions',
+                value: defaultApplyStatutoryDeductions,
+                category: 'employee',
+                description: 'Default setting for statutory deductions (PT, ESI, PF) for new employees'
+            });
+            await api.upsertSetting({
+                key: 'default_apply_attendance_deductions',
+                value: defaultApplyAttendanceDeductions,
+                category: 'employee',
+                description: 'Default setting for attendance deductions (Late-in, Early-out, etc.) for new employees'
             });
 
             if (res.success) {
@@ -256,6 +282,51 @@ const EmployeeSettings = () => {
                             </div>
                         </div>
                     </section>
+
+                    <section className="bg-white dark:bg-[#1E293B] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden p-4 sm:p-6 lg:p-8">
+                        <div className="px-8 py-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">Default Employee Preferences</h3>
+                        </div>
+
+                        <div className="p-8 space-y-6">
+                            <div className="flex items-start gap-4">
+                                <div className="flex h-10 items-center">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={defaultApplyStatutoryDeductions}
+                                        onClick={() => setDefaultApplyStatutoryDeductions((v) => !v)}
+                                        className={`${defaultApplyStatutoryDeductions ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 ease-in-out focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2`}
+                                    >
+                                        <span className={`${defaultApplyStatutoryDeductions ? 'translate-x-5' : 'translate-x-1'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
+                                    </button>
+                                </div>
+                                <div className="space-y-0.5">
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest">Default Statutory Deductions</label>
+                                    <p className="text-[10px] text-gray-400">Apply Profession Tax, ESI, and PF by default for new employees.</p>
+                                </div>
+                            </div>
+
+                            <div className="flex items-start gap-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+                                <div className="flex h-10 items-center">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={defaultApplyAttendanceDeductions}
+                                        onClick={() => setDefaultApplyAttendanceDeductions((v) => !v)}
+                                        className={`${defaultApplyAttendanceDeductions ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 ease-in-out focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2`}
+                                    >
+                                        <span className={`${defaultApplyAttendanceDeductions ? 'translate-x-5' : 'translate-x-1'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
+                                    </button>
+                                </div>
+                                <div className="space-y-0.5">
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest">Default Attendance Deductions</label>
+                                    <p className="text-[10px] text-gray-400">Apply Late-in, Early-out, Permission, and Absent deductions by default for new employees.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
                 </div>
 
                 <div className="space-y-8">

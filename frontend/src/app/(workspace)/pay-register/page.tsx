@@ -100,7 +100,7 @@ interface PayRegisterSummary {
 interface Shift {
   _id: string;
   name: string;
-  payableShifts: number;
+  payableShifts?: number;
 }
 
 type TableType = 'all' | 'present' | 'absent' | 'leaves' | 'od' | 'ot' | 'extraHours' | 'shifts';
@@ -345,7 +345,11 @@ export default function PayRegisterPage() {
     try {
       const response = await api.getShifts();
       if (response.success && response.data) {
-        setShifts(response.data.map((s: Shift) => ({ ...s, payableShifts: s.payableShifts || 0 })));
+        setShifts(response.data.map((s: any) => ({
+          _id: s._id,
+          name: s.name,
+          payableShifts: (s as any).payableShifts || 0
+        })));
       }
     } catch (err) {
       console.error('Error loading shifts:', err);
@@ -395,41 +399,32 @@ export default function PayRegisterPage() {
       const targetDivId = selectedDivision && selectedDivision.trim() !== '' ? selectedDivision : undefined;
 
       const limit = PAGE_SIZE;
-      const response = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, searchQuery, pageToLoad, limit);
+      const rawResponse = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, searchQuery, pageToLoad, limit);
+      const response = rawResponse as any;
 
       if (response.success) {
-        const payRegisterList = response.data || [];
+        const payRegisterList = (response.data as PayRegisterSummary[]) || [];
 
-        const respAny = response as any;
-        if (respAny.startDate) setPayrollStartDate(respAny.startDate);
-        if (respAny.endDate) setPayrollEndDate(respAny.endDate);
+        if (response.startDate) setPayrollStartDate(String(response.startDate));
+        if (response.endDate) setPayrollEndDate(String(response.endDate));
 
         if (append) {
-          setPayRegisters(prev => [...prev, ...payRegisterList]);
+          setPayRegisters((prev: PayRegisterSummary[]) => [...prev, ...payRegisterList]);
         } else {
           setPayRegisters(payRegisterList);
         }
 
-        if (response.pagination) {
-          setPaginationTotal((response.pagination as any).total ?? 0);
-          setPaginationTotalPages((response.pagination as any).totalPages ?? 1);
-          setHasMore(pageToLoad < (response.pagination as any).totalPages);
+        const pagination = response.pagination;
+        if (pagination) {
+          setPaginationTotal(pagination.total ?? 0);
+          setPaginationTotalPages(pagination.totalPages ?? 1);
+          setHasMore(pageToLoad < pagination.totalPages);
         } else {
           setHasMore(payRegisterList.length === limit);
         }
 
         if (payRegisterList.length === 0 && !append) {
           toast.info('No employees found for this selection');
-        }
-      } else {
-        console.error('[Pay Register] API call failed:', response);
-        if (!append) {
-          setPayRegisters([]);
-          setPaginationTotal(0);
-          setPaginationTotalPages(1);
-        }
-        if (response.message) {
-          toast.error(response.message);
         }
       }
     } catch (error: unknown) {
@@ -629,22 +624,23 @@ export default function PayRegisterPage() {
       const results = await parseFile(file);
 
       // Send to backend
-      const response = await apiRequest('/payroll/upload-summary', {
+      const rawResponse = await apiRequest('/payroll/upload-summary', {
         method: 'POST',
         body: JSON.stringify({
           month: monthStr,
           data: results
         })
       });
+      const response = rawResponse as any;
 
       if (response.success) {
         setUploadResults({
-          success: response.data.successCount,
-          failed: response.data.failCount,
-          total: results.length,
-          errors: response.data.errors || []
+          success: response.data?.successCount || 0,
+          failed: response.data?.failCount || 0,
+          total: (results as any).length,
+          errors: response.data?.errors || []
         });
-        toast.success(`Upload complete: ${response.data.successCount} successful, ${response.data.failCount} failed`);
+        toast.success(`Upload complete: ${response.data?.successCount || 0} successful, ${response.data?.failCount || 0} failed`);
         loadPayRegisters();
       } else {
         toast.error(response.message || 'Failed to upload summary');
@@ -965,81 +961,6 @@ export default function PayRegisterPage() {
     }
   };
 
-  const handleCalculatePayrollForAll = async () => {
-    if (!payRegisters || payRegisters.length === 0) {
-      toast.info('No employees to calculate payroll for.');
-      return;
-    }
-    const params = payrollStrategy === 'new' ? '?strategy=new' : '?strategy=legacy';
-    let successCount = 0;
-    let failCount = 0;
-    const batchIds = new Set<string>(); // Store unique batch IDs
-
-    setBulkCalculating(true);
-    toast.info('Calculating payroll for listed employees...');
-    try {
-      for (const pr of payRegisters) {
-        const employeeId = typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId;
-
-        // Filter arrears for this specific employee
-        // Now using the employeeId stored in selectedArrears items
-        const employeeArrears = selectedArrears.filter((arrear: { employeeId?: string }) => {
-          return arrear.employeeId === employeeId;
-        });
-
-        try {
-          const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears);
-          if (response && response.data && response.data.batchId) {
-            batchIds.add(response.data.batchId);
-          }
-          successCount += 1;
-        } catch (err) {
-          failCount += 1;
-          console.error(`Error calculating payroll for employee ${employeeId}:`, err);
-        }
-      }
-
-      if (failCount === 0) {
-        toast.success(`Payroll calculated for ${successCount} employees`);
-      } else {
-        toast.error(`Calculated ${successCount}, failed ${failCount}`);
-      }
-
-      // Redirect logic based on batches created
-      if (batchIds.size === 1) {
-        // Single batch -> Redirect to that batch
-        const batchId = Array.from(batchIds)[0];
-        toast.info('Redirecting to Batch Details...');
-        setTimeout(() => {
-          router.push(`/superadmin/payments/${batchId}`);
-        }, 1500);
-      } else if (batchIds.size > 1) {
-        // Multiple batches -> Redirect to list
-        toast.info('Redirecting to Payments List...');
-        setTimeout(() => {
-          router.push('/superadmin/payments');
-        }, 1500);
-      }
-      else if (successCount > 0) {
-        // No batches but legacy/success -> Download Excel
-        const listedEmployeeIds = payRegisters.map((pr) =>
-          typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId
-        );
-        await downloadPayrollExcel(listedEmployeeIds);
-      } else {
-        toast.warning('Calculation failed for all employees. Nothing to export.');
-      }
-
-    } catch (error) {
-      console.error('Error in bulk payroll calculation:', error);
-    } finally {
-      setBulkCalculating(false);
-    }
-  };
-
-  const handleArrearsSelected = (arrears: Array<{ id: string, amount: number, employeeId?: string }>) => {
-    setSelectedArrears(arrears);
-  };
 
   return (
     <div className="relative min-h-screen">

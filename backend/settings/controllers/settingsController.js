@@ -43,6 +43,8 @@ exports.getSetting = async (req, res) => {
         'lop_days_per_absent': 1,
         'allow_employee_bulk_process': false,
         'qualification_statuses': ['Partial', 'Not Certified', 'Certified'],
+        'default_apply_statutory_deductions': true,
+        'default_apply_attendance_deductions': true,
       };
 
       if (defaults[req.params.key] !== undefined) {
