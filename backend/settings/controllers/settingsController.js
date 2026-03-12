@@ -44,6 +44,9 @@ exports.getSetting = async (req, res) => {
         'allow_employee_bulk_process': false,
         'payroll_cycle_start_day': '1',
         'payroll_cycle_end_day': '31'
+        'qualification_statuses': ['Partial', 'Not Certified', 'Certified'],
+        'default_apply_statutory_deductions': true,
+        'default_apply_attendance_deductions': true,
       };
 
       if (defaults[req.params.key] !== undefined) {

@@ -14,10 +14,18 @@ const EmployeeUpdateApplicationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed,
         required: true
     },
+    previousValues: {
+        type: mongoose.Schema.Types.Mixed
+    },
     status: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],
         default: 'pending'
+    },
+    type: {
+        type: String,
+        enum: ['profile', 'bank'],
+        default: 'profile'
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,

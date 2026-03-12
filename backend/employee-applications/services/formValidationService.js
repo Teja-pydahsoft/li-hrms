@@ -307,6 +307,14 @@ exports.transformFormData = (formData, settings) => {
     'bank_name',
     'bank_place',
     'ifsc_code',
+    'applyProfessionTax',
+    'applyESI',
+    'applyPF',
+    'applyAttendanceDeduction',
+    'deductLateIn',
+    'deductEarlyOut',
+    'deductPermission',
+    'deductAbsent',
   ];
 
   const permanentFields = {};

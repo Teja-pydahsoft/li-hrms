@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
  */
 exports.createRequest = async (req, res) => {
     try {
-        const { requestedChanges, comments } = req.body;
+        const { requestedChanges, comments, type = 'profile' } = req.body;
 
         // 1. Get the profile update configuration
         const configSetting = await Settings.findOne({ key: 'profile_update_request_config' });
@@ -33,7 +33,13 @@ exports.createRequest = async (req, res) => {
 
         for (const key in requestedChanges) {
             // Check if the field is allowed either in system fields or dynamic fields
-            if (config.requestableFields.includes(key)) {
+            if (type === 'bank') {
+                const bankFields = ['bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'];
+                if (bankFields.includes(key)) {
+                    filteredChanges[key] = requestedChanges[key];
+                    hasChanges = true;
+                }
+            } else if (config.requestableFields.includes(key)) {
                 filteredChanges[key] = requestedChanges[key];
                 hasChanges = true;
             }
@@ -52,22 +58,30 @@ exports.createRequest = async (req, res) => {
             });
         }
 
-        // 3. Find the employee record for the current user
+        // 3. Find the employee record (from body if admin, or from session)
         const query = { $or: [] };
-        if (mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
-            query.$or.push({ _id: req.user.employeeId });
-        }
-        if (req.user.emp_no) {
-            query.$or.push({ emp_no: req.user.emp_no });
-        } else if (req.user.employeeId && !mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
-            // If employeeId is not an ObjectId, it's likely the emp_no
-            query.$or.push({ emp_no: req.user.employeeId });
+        
+        if (req.body.employeeId) {
+            // Target specific employee (likely Admin/Manager initiated)
+            if (mongoose.Types.ObjectId.isValid(req.body.employeeId)) {
+                query.$or.push({ _id: req.body.employeeId });
+            } else {
+                query.$or.push({ emp_no: req.body.employeeId });
+            }
+        } else {
+            // Self-service (Employee initiated, use session)
+            if (mongoose.Types.ObjectId.isValid(req.user.employeeId)) {
+                query.$or.push({ _id: req.user.employeeId });
+            }
+            if (req.user.emp_no) {
+                query.$or.push({ emp_no: req.user.emp_no });
+            }
         }
 
         if (query.$or.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'No valid employee identification found in user session'
+                message: 'No valid employee identification found in request or session'
             });
         }
 
@@ -80,11 +94,32 @@ exports.createRequest = async (req, res) => {
         }
 
         // 4. Create the request
+        const fieldMapping = {
+            'personal_email': 'email',
+            'phone': 'phone_number',
+            'date_of_birth': 'dob',
+            'joining_date': 'doj'
+        };
+
+        const previousValues = {};
+        for (const key in filteredChanges) {
+            const actualKey = fieldMapping[key] || key;
+            if (employee[actualKey] !== undefined) {
+                previousValues[key] = employee[actualKey];
+            } else if (employee.dynamicFields && employee.dynamicFields[actualKey] !== undefined) {
+                previousValues[key] = employee.dynamicFields[actualKey];
+            } else {
+                previousValues[key] = null;
+            }
+        }
+
         const request = await EmployeeUpdateApplication.create({
             employeeId: employee._id,
             emp_no: employee.emp_no,
             requestedChanges: filteredChanges,
+            previousValues,
             status: 'pending',
+            type,
             createdBy: req.user._id,
             comments: comments || ''
         });
@@ -115,7 +150,7 @@ exports.getRequests = async (req, res) => {
         if (status) query.status = status;
 
         const requests = await EmployeeUpdateApplication.find(query)
-            .populate('employeeId', 'employee_name profilePhoto department designation dynamicFields personal_email phone address blood_group qualifications')
+            .populate('employeeId', 'employee_name profilePhoto department designation dynamicFields email phone_number address blood_group qualifications dob doj gender marital_status')
             .populate('createdBy', 'name')
             .sort({ createdAt: -1 });
 
@@ -153,9 +188,20 @@ exports.approveRequest = async (req, res) => {
         }
 
         // 1. Separate permanent fields from dynamic fields
-        // This is a bit tricky as we don't know which fields are which without FormSettings
-        // But we can check the Employee model schema or common fields.
-        const permanentFields = ['employee_name', 'personal_email', 'phone', 'address', 'blood_group', 'qualifications'];
+        const permanentFields = [
+            'employee_name', 'email', 'phone_number', 'address',
+            'blood_group', 'qualifications', 'dob', 'doj',
+            'gender', 'marital_status',
+            'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'
+        ];
+
+        // Mapping for frontend aliases
+        const fieldMapping = {
+            'personal_email': 'email',
+            'phone': 'phone_number',
+            'date_of_birth': 'dob',
+            'joining_date': 'doj'
+        };
 
         const updates = { ...request.requestedChanges };
         const permanentUpdates = {};
@@ -163,12 +209,16 @@ exports.approveRequest = async (req, res) => {
         let hasPermanent = false;
         let hasDynamic = false;
 
-        for (const key in updates) {
-            if (permanentFields.includes(key)) {
-                permanentUpdates[key] = updates[key];
+        for (let key in updates) {
+            // Apply mapping if exists
+            const actualKey = fieldMapping[key] || key;
+            const value = updates[key];
+
+            if (permanentFields.includes(actualKey)) {
+                permanentUpdates[actualKey] = value;
                 hasPermanent = true;
             } else {
-                dynamicUpdates[key] = updates[key];
+                dynamicUpdates[actualKey] = value;
                 hasDynamic = true;
             }
         }
@@ -182,16 +232,41 @@ exports.approveRequest = async (req, res) => {
             employee.markModified('dynamicFields');
         }
 
+        if (permanentUpdates.qualifications) {
+            employee.markModified('qualifications');
+        }
+
         await employee.save();
 
-        // 3. Log to History
+        // 2b. Sync with User model if necessary
+        if (permanentUpdates.employee_name || permanentUpdates.email) {
+            const User = require('../../users/model/User');
+            const userUpdate = {};
+            if (permanentUpdates.employee_name) userUpdate.name = permanentUpdates.employee_name;
+            if (permanentUpdates.email) userUpdate.email = permanentUpdates.email;
+
+            await User.findOneAndUpdate(
+                { employeeRef: employee._id },
+                { $set: userUpdate }
+            ).catch(err => console.error('Failed to sync User model:', err));
+        }
+
+        // 3. Log to History with detailed changes
+        const historyChanges = Object.keys(updates).map(key => ({
+            field: key,
+            previous: request.previousValues ? request.previousValues[key] : null,
+            current: updates[key]
+        }));
+
         await EmployeeHistory.create({
             emp_no: employee.emp_no,
             event: 'employee_updated',
             performedBy: req.user._id,
+            performedByName: req.user.name || null,
+            performedByRole: req.user.role || null,
             details: {
                 updateRequestId: request._id,
-                changes: updates,
+                changes: historyChanges,
                 type: 'profile_update_request'
             }
         }).catch(err => console.error('Failed to log history:', err));

@@ -92,3 +92,19 @@ body {
     background: #475569;
   }
 } */
+
+/* Hide number input spinners globally and via utility class */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button,
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+input[type="number"],
+.no-spinner {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

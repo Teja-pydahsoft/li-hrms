@@ -31,6 +31,9 @@ const {
   addQualificationsField,
   updateQualificationsField,
   deleteQualificationsField,
+  reorderGroups,
+  reorderFields,
+  reorderQualificationsFields,
 } = require('./controllers/formSettingsController');
 
 // All routes require authentication
@@ -53,17 +56,20 @@ router.put('/form-settings', authorize('super_admin', 'sub_admin'), updateSettin
 router.post('/form-settings/groups', authorize('super_admin', 'sub_admin'), addGroup);
 router.put('/form-settings/groups/:groupId', authorize('super_admin', 'sub_admin'), updateGroup);
 router.delete('/form-settings/groups/:groupId', authorize('super_admin', 'sub_admin'), deleteGroup);
+router.put('/form-settings/reorder-groups', authorize('super_admin', 'sub_admin'), reorderGroups);
 
 // Field management
 router.post('/form-settings/groups/:groupId/fields', authorize('super_admin', 'sub_admin'), addField);
 router.put('/form-settings/groups/:groupId/fields/:fieldId', authorize('super_admin', 'sub_admin'), updateField);
 router.delete('/form-settings/groups/:groupId/fields/:fieldId', authorize('super_admin', 'sub_admin'), deleteField);
+router.put('/form-settings/groups/:groupId/reorder-fields', authorize('super_admin', 'sub_admin'), reorderFields);
 
 // Qualifications management
 router.put('/form-settings/qualifications', authorize('super_admin', 'sub_admin'), updateQualificationsConfig);
 router.post('/form-settings/qualifications/fields', authorize('super_admin', 'sub_admin'), addQualificationsField);
 router.put('/form-settings/qualifications/fields/:fieldId', authorize('super_admin', 'sub_admin'), updateQualificationsField);
 router.delete('/form-settings/qualifications/fields/:fieldId', authorize('super_admin', 'sub_admin'), deleteQualificationsField);
+router.put('/form-settings/qualifications/reorder-fields', authorize('super_admin', 'sub_admin'), reorderQualificationsFields);
 
 // ==========================================
 // APPLICATION ROUTES

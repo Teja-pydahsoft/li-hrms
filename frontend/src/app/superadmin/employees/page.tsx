@@ -9,6 +9,12 @@ import Swal from 'sweetalert2';
 import BulkUpload from '@/components/BulkUpload';
 import DynamicEmployeeForm from '@/components/DynamicEmployeeForm';
 import EmployeeUpdateModal from '@/components/EmployeeUpdateModal';
+import CertificatePreviewModal from '@/components/employee/CertificatePreviewModal';
+import HistoryViewCompleteModal from '@/components/employee/HistoryViewCompleteModal';
+import ResignationModal from '@/components/employee/ResignationModal';
+import BulkAllowancesDeductionsModal from '@/components/employee/BulkAllowancesDeductionsModal';
+import UpdateRequestReviewModal from '@/components/employee/UpdateRequestReviewModal';
+import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
 import Spinner from '@/components/Spinner';
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
@@ -35,8 +41,14 @@ import {
   KeyRound,
   Upload,
   Settings,
-  Users
+  Users,
+  List,
+  LayoutGrid,
+  ArrowRight,
+  XCircle,
+  AlertTriangle
 } from 'lucide-react';
+
 
 
 
@@ -50,9 +62,18 @@ interface UpdateRequest {
     department?: { name: string };
     designation?: { name: string };
     dynamicFields?: Record<string, any>;
+    email?: string;
+    phone_number?: string;
+    address?: string;
+    blood_group?: string;
+    dob?: string;
+    doj?: string;
+    gender?: string;
+    marital_status?: string;
   };
   emp_no: string;
   requestedChanges: Record<string, any>;
+  previousValues?: Record<string, any>;
   status: 'pending' | 'approved' | 'rejected';
   createdBy?: { name: string };
   comments?: string;
@@ -64,6 +85,8 @@ interface FormSettings {
     id: string;
     label: string;
     isEnabled: boolean;
+    isSystem?: boolean;
+    order?: number;
     fields: Array<{
       id: string;
       label: string;
@@ -71,6 +94,8 @@ interface FormSettings {
       isEnabled: boolean;
       options?: Array<{ label: string; value: string }>;
       isRequired?: boolean;
+      order?: number;
+      description?: string;
     }>;
   }>;
   qualifications?: {
@@ -79,6 +104,7 @@ interface FormSettings {
     fields: Array<{ id: string; label: string }>;
     defaultRows?: Record<string, unknown>[];
   };
+  qualification_statuses?: Array<{ label: string; value: string }>;
 }
 
 const initialFormState: Partial<Employee> = {
@@ -267,6 +293,7 @@ export default function EmployeesPage() {
   const [loadingUpdateRequests, setLoadingUpdateRequests] = useState(false);
   const [selectedUpdateRequest, setSelectedUpdateRequest] = useState<UpdateRequest | null>(null);
   const [updateRequestStatusFilter, setUpdateRequestStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [updateRequestViewMode, setUpdateRequestViewMode] = useState<'list' | 'card'>('list');
   const [processingUpdateRequest, setProcessingUpdateRequest] = useState(false);
   const [updateRequestRejectComments, setUpdateRequestRejectComments] = useState('');
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -285,6 +312,8 @@ export default function EmployeesPage() {
   const [editingApplicationID, setEditingApplicationID] = useState<string | null>(null);
   const [viewingEmployee, setViewingEmployee] = useState<Employee | null>(null);
   const [showViewDialog, setShowViewDialog] = useState(false);
+  const [showApprovalOverrides, setShowApprovalOverrides] = useState(false);
+
   const [employeeHistory, setEmployeeHistory] = useState<any[]>([]);
   const [employeeHistoryLoading, setEmployeeHistoryLoading] = useState(false);
   const [employeeViewTab, setEmployeeViewTab] = useState<'profile' | 'history'>('profile');
@@ -302,7 +331,11 @@ export default function EmployeesPage() {
     second_salary?: number;
     doj: string;
     comments: string;
-  }>({ approvedSalary: 0, doj: '', comments: '' });
+    qualifications?: any[];
+    qualificationStatus?: string;
+    paidLeaves?: number;
+    casualLeaves?: number;
+  }>({ approvedSalary: 0, doj: '', comments: '', qualifications: [], qualificationStatus: 'Partial', paidLeaves: 0, casualLeaves: 0 });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [notificationChannels, setNotificationChannels] = useState<{ sms: boolean; whatsapp: boolean; email: boolean }>({
@@ -334,6 +367,8 @@ export default function EmployeesPage() {
   const [updatingStatusIds, setUpdatingStatusIds] = useState<Set<string>>(new Set());
   const [showEmployeeUpdateModal, setShowEmployeeUpdateModal] = useState(false);
   const [showBulkAllowancesDeductions, setShowBulkAllowancesDeductions] = useState(false);
+  const [showBankUpdateDialog, setShowBankUpdateDialog] = useState(false);
+  const [submittingBankUpdate, setSubmittingBankUpdate] = useState(false);
 
   const [dynamicTemplate, setDynamicTemplate] = useState<{ headers: string[]; sample: any[]; columns: TemplateColumn[] }>({
     headers: EMPLOYEE_TEMPLATE_HEADERS,
@@ -356,14 +391,38 @@ export default function EmployeesPage() {
   const [applicationRowsPerPage, setApplicationRowsPerPage] = useState(10);
   const [applicationFilters, setApplicationFilters] = useState<Record<string, string>>({});
 
-  // Helper to extract unique values for a column
-  const getUniqueValues = (data: any[], key: string, nestedKey?: string) => {
-    const values = data.map(item => {
-      const val = nestedKey ? item[key]?.[nestedKey] : item[key];
-      return val || '';
-    }).filter((v, i, a) => v && a.indexOf(v) === i);
-    return values.sort();
-  };
+  // Deduction Defaults
+  const [defaultStatutory, setDefaultStatutory] = useState(true);
+  const [defaultAttendance, setDefaultAttendance] = useState(true);
+
+  const fetchDeductionDefaults = useCallback(async () => {
+    try {
+      const [statRes, attRes] = await Promise.all([
+        api.getSetting('default_apply_statutory_deductions'),
+        api.getSetting('default_apply_attendance_deductions')
+      ]);
+      if (statRes.success && statRes.data) setDefaultStatutory(!!statRes.data.value);
+      if (attRes.success && attRes.data) setDefaultAttendance(!!attRes.data.value);
+    } catch (err) {
+      console.error('Error fetching deduction defaults:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDeductionDefaults();
+  }, [fetchDeductionDefaults]);
+
+  const initialFormStateWithDefaults = useMemo(() => ({
+    ...initialFormState,
+    applyPF: defaultStatutory,
+    applyESI: defaultStatutory,
+    applyProfessionTax: defaultStatutory,
+    applyAttendanceDeduction: defaultAttendance,
+    deductLateIn: defaultAttendance,
+    deductEarlyOut: defaultAttendance,
+    deductPermission: defaultAttendance,
+    deductAbsent: defaultAttendance,
+  }), [defaultStatutory, defaultAttendance]);
 
 
 
@@ -766,6 +825,7 @@ export default function EmployeesPage() {
     if (user) {
       setUserRole(user.role);
     }
+
     loadEmployees(1); // Load first page
     loadDivisions();
     loadDepartments();
@@ -849,7 +909,7 @@ export default function EmployeesPage() {
 
   // Load allowance/deduction defaults for approval dialog when opened or salary changes
   useEffect(() => {
-    if (!showApprovalDialog || !selectedApplication) return;
+    if ((!showApprovalDialog && !showViewDialog) || !selectedApplication) return;
     const deptRaw = selectedApplication.department_id || selectedApplication.department?._id;
     const deptId = typeof deptRaw === 'string' ? deptRaw : (deptRaw as any)?._id;
     const gross = approvalData.approvedSalary || selectedApplication.proposedSalary;
@@ -860,7 +920,8 @@ export default function EmployeesPage() {
       setApprovalOverrideAllowances({});
       setApprovalOverrideDeductions({});
     }
-  }, [showApprovalDialog, selectedApplication, approvalData.approvedSalary]);
+  }, [showApprovalDialog, showViewDialog, selectedApplication, approvalData.approvedSalary]);
+
 
   useEffect(() => {
     // Show all designations since they are now global
@@ -1166,8 +1227,11 @@ export default function EmployeesPage() {
       if (res.success) {
         await alertSuccess('Approved!', 'Request approved successfully');
         setSelectedUpdateRequest(null);
+        setShowViewDialog(false);
+        setViewingEmployee(null);
         loadUpdateRequests();
         loadEmployees(currentPage);
+
       } else {
         await alertError('Failed', res.message || 'Failed to approve request');
       }
@@ -1190,8 +1254,11 @@ export default function EmployeesPage() {
       if (res.success) {
         await alertSuccess('Rejected', 'Request rejected');
         setSelectedUpdateRequest(null);
+        setShowViewDialog(false);
+        setViewingEmployee(null);
         setUpdateRequestRejectComments('');
         loadUpdateRequests();
+
       } else {
         await alertError('Failed', res.message || 'Failed to reject request');
       }
@@ -1331,6 +1398,18 @@ export default function EmployeesPage() {
     });
     return { division: divMap, department: deptMap, designation: desMap };
   }, [divisions, departments, designations]);
+
+  // Derived state for the currently viewed employee in the View Dialog
+  const pendingUpdateForViewing = useMemo(() => {
+    if (!viewingEmployee) return null;
+    return updateRequests.find(r => r.emp_no === viewingEmployee.emp_no && r.status === 'pending');
+  }, [viewingEmployee, updateRequests]);
+
+  const pendingAppForViewing = useMemo(() => {
+    if (!viewingEmployee) return null;
+    return applications.find(a => a.emp_no === viewingEmployee.emp_no && a.status === 'verified');
+  }, [viewingEmployee, applications]);
+
 
   // Trigger search and filter
   useEffect(() => {
@@ -1881,6 +1960,7 @@ export default function EmployeesPage() {
     }
   };
 
+
   const handleSetLeftDate = (employee: Employee) => {
     setSelectedEmployeeForLeftDate(employee);
     const defaultLastWorking = (() => {
@@ -1973,6 +2053,31 @@ export default function EmployeesPage() {
     }
   };
 
+  const handleToggleDeductionPreference = async (key: string, value: boolean) => {
+    if (!viewingEmployee) return;
+
+    try {
+      // Optimistic update
+      const updatedEmployee = { ...viewingEmployee, [key]: value };
+      setViewingEmployee(updatedEmployee as Employee);
+
+      const response = await api.updateEmployee(viewingEmployee.emp_no, { [key]: value });
+
+      if (response.success) {
+        // Update the employees list as well if it's currently loaded
+        setEmployees(prev => prev.map(emp => emp.emp_no === viewingEmployee.emp_no ? { ...emp, [key]: value } : emp));
+      } else {
+        // Rollback
+        setViewingEmployee(viewingEmployee);
+        await alertError('Failed to update', response.message || 'Failed to update deduction preference');
+      }
+    } catch (err: any) {
+      setViewingEmployee(viewingEmployee);
+      await alertError('Error', err.message || 'An error occurred');
+      console.error(err);
+    }
+  };
+
   const handleViewEmployee = async (employee: Employee) => {
     // Initial set to show dialog immediately with available data
     setViewingEmployee(employee);
@@ -1999,13 +2104,18 @@ export default function EmployeesPage() {
       } else {
         setEmployeeHistory([]);
       }
-    } catch (error) {
-      console.error('Error fetching employee history:', error);
-      setEmployeeHistory([]);
     } finally {
       setEmployeeHistoryLoading(false);
     }
+
+    // Check if there is a pending salary approval (verified application) for this employee
+    const pendingApp = applications.find(a => a.emp_no === employee.emp_no && a.status === 'verified');
+    if (pendingApp) {
+      initApprovalState(pendingApp);
+    }
   };
+
+
 
   const openCreateDialog = () => {
     setEditingEmployee(null);
@@ -2208,17 +2318,39 @@ export default function EmployeesPage() {
         second_salary: (approvalData as any).second_salary || undefined,
         doj: approvalData.doj || undefined,
         comments: approvalData.comments,
+        qualifications: (approvalData as any).qualifications,
+        qualificationStatus: (approvalData as any).qualificationStatus,
+        paidLeaves: (approvalData as any).paidLeaves,
+        casualLeaves: (approvalData as any).casualLeaves,
         employeeAllowances: buildOverridePayload(approvalComponentDefaults.allowances, approvalOverrideAllowances, approvalOverrideAllowancesBasedOnPresentDays, 'allowance'),
         employeeDeductions: buildOverridePayload(approvalComponentDefaults.deductions, approvalOverrideDeductions, approvalOverrideDeductionsBasedOnPresentDays, 'deduction'),
         ctcSalary: approvalSalarySummary.ctcSalary,
         calculatedSalary: approvalSalarySummary.netSalary,
-      });
+        applyESI: (approvalData as any).applyESI,
+        applyProfessionTax: (approvalData as any).applyProfessionTax,
+        applyAttendanceDeduction: (approvalData as any).applyAttendanceDeduction,
+        deductLateIn: (approvalData as any).deductLateIn,
+        deductEarlyOut: (approvalData as any).deductEarlyOut,
+        deductPermission: (approvalData as any).deductPermission,
+        deductAbsent: (approvalData as any).deductAbsent,
+      } as any);
 
       if (response.success) {
         setSuccess(response.message || 'Application approved and employee created successfully!');
         setShowApprovalDialog(false);
+        setShowViewDialog(false);
+        setViewingEmployee(null);
         setSelectedApplication(null);
-        setApprovalData({ approvedSalary: 0, doj: '', comments: '' });
+
+        setApprovalData({
+          approvedSalary: 0,
+          doj: '',
+          comments: '',
+          qualifications: [],
+          qualificationStatus: 'Partial',
+          paidLeaves: 0,
+          casualLeaves: 0
+        });
         loadApplications();
         loadEmployees(); // Reload employees list
       } else {
@@ -2244,8 +2376,11 @@ export default function EmployeesPage() {
       if (response.success) {
         setSuccess('Application rejected successfully!');
         setShowApprovalDialog(false);
+        setShowViewDialog(false);
+        setViewingEmployee(null);
         setSelectedApplication(null);
-        setApprovalData({ approvedSalary: 0, doj: '', comments: '' });
+
+        setApprovalData({ approvedSalary: 0, doj: '', comments: '', qualifications: [], qualificationStatus: 'Partial', paidLeaves: 0, casualLeaves: 0 });
         loadApplications();
       } else {
         setError(response.message || 'Failed to reject application');
@@ -2256,7 +2391,7 @@ export default function EmployeesPage() {
     }
   };
 
-  const openApprovalDialog = (application: EmployeeApplication) => {
+  const initApprovalState = (application: EmployeeApplication) => {
     setSelectedApplication(application);
     // Use application DOJ if available, otherwise default to today
     let dojValue = '';
@@ -2276,7 +2411,22 @@ export default function EmployeesPage() {
       second_salary: application.second_salary || undefined,
       doj: dojValue,
       comments: '',
+      qualifications: application.qualifications ? structuredClone(application.qualifications) : [],
+      qualificationStatus: application.qualificationStatus || 'Partial',
+      paidLeaves: application.paidLeaves ?? application.dynamicFields?.paid_leaves ?? 0,
+      casualLeaves: application.casualLeaves ?? application.dynamicFields?.casual_leaves ?? 0,
     });
+    setFormData(prev => ({
+      ...prev,
+      applyPF: application.applyPF ?? defaultStatutory,
+      applyESI: application.applyESI ?? defaultStatutory,
+      applyProfessionTax: application.applyProfessionTax ?? defaultStatutory,
+      applyAttendanceDeduction: application.applyAttendanceDeduction ?? defaultAttendance,
+      deductLateIn: application.deductLateIn ?? defaultAttendance,
+      deductEarlyOut: application.deductEarlyOut ?? defaultAttendance,
+      deductPermission: application.deductPermission ?? defaultAttendance,
+      deductAbsent: application.deductAbsent ?? defaultAttendance,
+    }));
     setApprovalComponentDefaults({ allowances: [], deductions: [] });
     setApprovalOverrideAllowances({});
     setApprovalOverrideDeductions({});
@@ -2286,25 +2436,17 @@ export default function EmployeesPage() {
       netSalary: 0,
       ctcSalary: 0,
     });
+  };
+
+  const openApprovalDialog = (application: EmployeeApplication) => {
+    initApprovalState(application);
     setShowApprovalDialog(true);
     setError('');
     setSuccess('');
   };
 
-  const openApplicationDialog = () => {
-    setApplicationFormData({ ...initialFormState, proposedSalary: 0 });
-    setComponentDefaults({ allowances: [], deductions: [] });
-    setOverrideAllowances({});
-    setOverrideDeductions({});
-    setApplicationSalarySummary({
-      totalAllowances: 0,
-      totalDeductions: 0,
-      netSalary: 0,
-      ctcSalary: 0,
-    });
-    setShowApplicationDialog(true);
-    setError('');
-  };
+
+
 
   return (
     <div className="relative min-h-screen">
@@ -2357,7 +2499,7 @@ export default function EmployeesPage() {
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
                   }`}
               >
-                Update Requests
+                Updates
                 {pendingUpdateRequests.length > 0 && (
                   <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] bg-indigo-500 text-white">
                     {pendingUpdateRequests.length}
@@ -2938,7 +3080,7 @@ export default function EmployeesPage() {
           </>
         )}
 
-        {/* Update Requests Tab */}
+        {/* Updates Tab */}
         {activeTab === 'requests' && (
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2980,69 +3122,223 @@ export default function EmployeesPage() {
                   All
                 </button>
               </div>
+
+              <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+                <button
+                  onClick={() => setUpdateRequestViewMode('list')}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${updateRequestViewMode === 'list'
+                    ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-400'
+                    : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                >
+                  <List className="h-3.5 w-3.5" />
+                  List
+                </button>
+                <button
+                  onClick={() => setUpdateRequestViewMode('card')}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${updateRequestViewMode === 'card'
+                    ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-400'
+                    : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  Cards
+                </button>
+              </div>
             </div>
 
             {loadingUpdateRequests ? (
               <div className="flex flex-col items-center justify-center py-20">
                 <Spinner className="h-10 w-10 text-indigo-600" />
-                <p className="mt-4 text-slate-500">Loading requests...</p>
+                <p className="mt-4 text-slate-500">Loading updates...</p>
               </div>
             ) : updateRequests.length === 0 ? (
               <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50/50 p-12 text-center dark:border-slate-700 dark:bg-slate-900/50">
-                <p className="text-lg font-medium text-slate-600 dark:text-slate-400">No update requests found</p>
+                <p className="text-lg font-medium text-slate-600 dark:text-slate-400">No profile updates found</p>
                 <p className="mt-1 text-sm text-slate-500">New profile update requests from employees will appear here.</p>
               </div>
+            ) : updateRequestViewMode === 'list' ? (
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-900/50">
+                        <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Employee</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Requested Changes</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th className="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {updateRequests.map((req) => (
+                        <tr key={req._id} className="group transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-900/50">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              {req.employeeId?.profilePhoto ? (
+                                <img src={req.employeeId.profilePhoto} alt="" className="h-10 w-10 rounded-xl object-cover ring-2 ring-slate-100 dark:ring-slate-800" />
+                              ) : (
+                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-sm font-bold text-indigo-600 dark:bg-indigo-900/30">
+                                  {req.employeeId?.employee_name?.charAt(0) || req.emp_no.charAt(0)}
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="font-bold text-slate-900 dark:text-slate-100">{req.employeeId?.employee_name || 'Unknown'}</h4>
+                                <p className="text-xs text-slate-500 font-medium">{req.emp_no}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="max-w-[300px] flex flex-wrap gap-1.5">
+                              {Object.entries(req.requestedChanges).map(([field, newValue]) => {
+                                const oldValue = req.previousValues?.[field] ??
+                                  (req.employeeId as any)[field] ??
+                                  (req.employeeId.dynamicFields?.[field]);
+                                return (
+                                  <div key={field} className="flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-[10px] ring-1 ring-slate-200 dark:bg-slate-800/50 dark:ring-slate-700">
+                                    <span className="font-bold text-indigo-600 dark:text-indigo-400 capitalize">{field.replace(/_/g, ' ')}:</span>
+                                    <span className="text-slate-400 line-through decoration-red-300/50">{String(oldValue || '—')}</span>
+                                    <ArrowRight className="h-2 w-2 text-slate-400" />
+                                    <span className="font-semibold text-slate-900 dark:text-slate-100">{String(newValue || '—')}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            {new Date(req.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${req.status === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                              req.status === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                                'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                              }`}>
+                              {req.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex justify-end gap-2">
+                              {req.status === 'pending' && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedUpdateRequest(req);
+                                      setUpdateRequestRejectComments(''); // Reset comments
+                                    }}
+                                    className="rounded-lg bg-red-50 p-2 text-red-600 transition-all hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
+                                    title="Reject"
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleApproveUpdateRequest(req._id)}
+                                    className="rounded-lg bg-indigo-50 p-2 text-indigo-600 transition-all hover:bg-indigo-100 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/40"
+                                    title="Approve"
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => setSelectedUpdateRequest(req)}
+                                className="rounded-lg bg-slate-50 p-2 text-slate-600 transition-all hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700"
+                                title="View Details"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ) : (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid gap-6 sm:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
                 {updateRequests.map((req) => (
                   <div
                     key={req._id}
-                    onClick={() => setSelectedUpdateRequest(req)}
-                    className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all hover:border-indigo-300 hover:shadow-xl dark:border-slate-800 dark:bg-slate-950"
+                    className="group relative overflow-hidden rounded-3xl border border-slate-200 bg-white transition-all hover:border-indigo-300 hover:shadow-xl dark:border-slate-800 dark:bg-slate-950"
                   >
-                    <div className="p-5">
-                      <div className="mb-4 flex items-center gap-3">
-                        {req.employeeId?.profilePhoto ? (
-                          <img
-                            src={req.employeeId.profilePhoto}
-                            alt=""
-                            className="h-12 w-12 rounded-xl object-cover ring-2 ring-slate-100 dark:ring-slate-800"
-                          />
-                        ) : (
-                          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-xl font-bold text-indigo-600 dark:bg-indigo-900/30">
-                            {req.employeeId?.employee_name?.charAt(0) || req.emp_no.charAt(0)}
+                    <div className="p-6">
+                      {/* Header with Employee Info */}
+                      <div className="mb-6 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          {req.employeeId?.profilePhoto ? (
+                            <img src={req.employeeId.profilePhoto} alt="" className="h-14 w-14 rounded-2xl object-cover ring-2 ring-slate-100 dark:ring-slate-800" />
+                          ) : (
+                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-2xl font-bold text-indigo-600 dark:bg-indigo-900/30">
+                              {req.employeeId?.employee_name?.charAt(0) || req.emp_no.charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">{req.employeeId?.employee_name || 'Unknown'}</h3>
+                            <p className="text-sm font-medium text-slate-500">{req.emp_no}</p>
                           </div>
-                        )}
-                        <div className="min-w-0">
-                          <h3 className="truncate font-bold text-slate-900 dark:text-slate-100">{req.employeeId?.employee_name || 'Unknown Employee'}</h3>
-                          <p className="text-xs text-slate-500">{req.emp_no}</p>
+                        </div>
+                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ${req.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                          req.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {req.status}
+                        </span>
+                      </div>
+
+                      {/* Content: Changes */}
+                      <div className="space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400">Requested Changes</h4>
+                        <div className="grid gap-2">
+                          {Object.entries(req.requestedChanges).map(([field, newValue]) => {
+                            const oldValue = req.previousValues?.[field] ??
+                              (req.employeeId as any)[field] ??
+                              (req.employeeId.dynamicFields?.[field]);
+                            return (
+                              <div key={field} className="rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-colors hover:border-indigo-100 hover:bg-white dark:border-slate-800 dark:bg-slate-900/50 dark:hover:bg-slate-900">
+                                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                                  {getFieldLabel(field, formSettings)}
+                                </label>
+                                <div className="flex items-center gap-3">
+                                  <div className="text-xs text-slate-400 line-through decoration-red-200">{String(oldValue || '—')}</div>
+                                  <ArrowRight className="h-3 w-3 text-slate-300" />
+                                  <div className="text-xs font-bold text-slate-900 dark:text-slate-100">{String(newValue || '—')}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
 
-                      <div className="mb-4 flex flex-wrap gap-2">
-                        {Object.keys(req.requestedChanges).slice(0, 3).map((field) => (
-                          <span
-                            key={field}
-                            className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                      {/* Footer Actions */}
+                      <div className="mt-8 flex items-center justify-between gap-4 border-t border-slate-100 pt-6 dark:border-slate-800">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                          Requested on {new Date(req.createdAt).toLocaleDateString()}
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSelectedUpdateRequest(req)}
+                            className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600 transition-all hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
                           >
-                            {field.replace(/_/g, ' ')}
-                          </span>
-                        ))}
-                        {Object.keys(req.requestedChanges).length > 3 && (
-                          <span className="text-[10px] text-slate-400">+{Object.keys(req.requestedChanges).length - 3} more</span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
-                        <span className="text-[10px] text-slate-400 uppercase font-semibold">
-                          {new Date(req.createdAt).toLocaleDateString()}
-                        </span>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${req.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                          req.status === 'approved' ? 'bg-green-100 text-green-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
-                          {req.status}
-                        </span>
+                            Details
+                          </button>
+                          {req.status === 'pending' && (
+                            <>
+                              <button
+                                onClick={() => {
+                                  setSelectedUpdateRequest(req);
+                                  setUpdateRequestRejectComments('');
+                                }}
+                                className="rounded-xl bg-red-100 px-4 py-2 text-xs font-bold text-red-600 transition-all hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
+                              >
+                                Reject
+                              </button>
+                              <button
+                                onClick={() => handleApproveUpdateRequest(req._id)}
+                                className="rounded-xl bg-indigo-600 px-6 py-2 text-xs font-bold text-white shadow-lg shadow-indigo-600/20 transition-all hover:bg-indigo-700 hover:shadow-indigo-600/40"
+                              >
+                                Approve
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -3445,16 +3741,17 @@ export default function EmployeesPage() {
                         <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
                           Monthly Paid Leaves
                         </label>
-                        <input
-                          type="number"
-                          name="paidLeaves"
-                          value={applicationFormData.paidLeaves ?? ''}
-                          onChange={handleApplicationInputChange}
-                          min="0"
-                          step="0.5"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                          placeholder="Optional"
-                        />
+                          <input
+                            type="number"
+                            name="paidLeaves"
+                            value={applicationFormData.paidLeaves ?? ''}
+                            onChange={handleApplicationInputChange}
+                            onWheel={(e) => e.currentTarget.blur()}
+                            min="0"
+                            step="0.5"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
+                            placeholder="Optional"
+                          />
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           Monthly recurring paid leaves
                         </p>
@@ -3463,16 +3760,17 @@ export default function EmployeesPage() {
                         <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
                           Yearly Allotted Leaves
                         </label>
-                        <input
-                          type="number"
-                          name="allottedLeaves"
-                          value={applicationFormData.allottedLeaves ?? ''}
-                          onChange={handleApplicationInputChange}
-                          min="0"
-                          step="0.5"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                          placeholder="Optional"
-                        />
+                          <input
+                            type="number"
+                            name="allottedLeaves"
+                            value={applicationFormData.allottedLeaves ?? ''}
+                            onChange={handleApplicationInputChange}
+                            onWheel={(e) => e.currentTarget.blur()}
+                            min="0"
+                            step="0.5"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
+                            placeholder="Optional"
+                          />
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           Yearly total for without_pay/LOP leaves
                         </p>
@@ -3558,7 +3856,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -3624,7 +3923,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -3760,7 +4060,7 @@ export default function EmployeesPage() {
                   <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
                     <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Qualifications & Certificates</h3>
                     {(() => {
-                      const quals = selectedApplication.qualifications;
+                      const quals = approvalData.qualifications || selectedApplication.qualifications;
                       if (!quals || (Array.isArray(quals) && quals.length === 0)) {
                         return <p className="text-sm italic text-slate-500 dark:text-slate-400">No qualifications provided.</p>;
                       }
@@ -3771,9 +4071,16 @@ export default function EmployeesPage() {
                             {quals.map((qual: any, idx: number) => {
                               const certificateUrl = qual.certificateUrl;
                               const isPDF = certificateUrl?.toLowerCase().endsWith('.pdf');
+
                               const displayEntries = Object.entries(qual).filter(([k, v]) =>
-                                k !== 'certificateUrl' && v !== null && v !== undefined && v !== ''
+                                k !== 'certificateUrl' && k !== 'status' && v !== null && v !== undefined && v !== ''
                               );
+
+                              const handleStatusChange = (newStatus: string) => {
+                                const newQuals = [...quals];
+                                newQuals[idx] = { ...newQuals[idx], status: newStatus };
+                                setApprovalData({ ...approvalData, qualifications: newQuals });
+                              };
 
                               return (
                                 <div key={idx} className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all hover:border-blue-300 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-700 flex flex-col h-full">
@@ -3821,6 +4128,22 @@ export default function EmployeesPage() {
                                   {/* Card Content Area */}
                                   <div className="flex flex-1 flex-col p-5">
                                     <div className="space-y-3">
+                                      {/* Status Dropdown */}
+                                      <div className="flex flex-col border-b border-slate-100 pb-3 last:border-0 last:pb-0 dark:border-slate-800">
+                                        <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 dark:text-slate-500 mb-1">
+                                          Verification Status
+                                        </label>
+                                        <select
+                                          value={qual.status || 'Partial'}
+                                          onChange={(e) => handleStatusChange(e.target.value)}
+                                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                        >
+                                          <option value="Partial">Partial</option>
+                                          <option value="Not Certified">Not Certified</option>
+                                          <option value="Certified">Certified</option>
+                                        </select>
+                                      </div>
+
                                       {displayEntries.length > 0 ? displayEntries.map(([key, value]) => {
                                         const fieldLabel = formSettings?.qualifications?.fields?.find((f: any) => f.id === key)?.label || key.replace(/_/g, ' ');
                                         return (
@@ -3877,9 +4200,10 @@ export default function EmployeesPage() {
                           type="number"
                           value={approvalData.approvedSalary}
                           onChange={(e) => setApprovalData({ ...approvalData, approvedSalary: Number(e.target.value) })}
+                          onWheel={(e) => e.currentTarget.blur()}
                           min="0"
                           step="0.01"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                         />
                         {approvalData.approvedSalary !== selectedApplication.proposedSalary && (
                           <p className="mt-2 text-xs text-green-600 dark:text-green-400">
@@ -3896,9 +4220,10 @@ export default function EmployeesPage() {
                           type="number"
                           value={(approvalData as any).second_salary || ''}
                           onChange={(e) => setApprovalData({ ...approvalData, second_salary: Number(e.target.value) } as any)}
+                          onWheel={(e) => e.currentTarget.blur()}
                           min="0"
                           step="0.01"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                           placeholder="Enter second salary if any"
                         />
                         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -4003,7 +4328,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleApprovalOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4069,7 +4395,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleApprovalOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4096,6 +4423,64 @@ export default function EmployeesPage() {
                               </div>
                             );
                           })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Deduction Preferences */}
+                  <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      {/* Statutory Deductions */}
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyPF', label: 'PF' },
+                            { id: 'applyESI', label: 'ESI' },
+                            { id: 'applyProfessionTax', label: 'Profession Tax' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((approvalData as any)[pref.id] ?? true);
+                                  setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Attendance Deductions */}
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                            { id: 'deductLateIn', label: 'Late-ins' },
+                            { id: 'deductEarlyOut', label: 'Early-outs' },
+                            { id: 'deductPermission', label: 'Permission' },
+                            { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((approvalData as any)[pref.id] ?? true);
+                                  setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -4254,9 +4639,10 @@ export default function EmployeesPage() {
                           name="paidLeaves"
                           value={formData.paidLeaves ?? ''}
                           onChange={handleInputChange}
+                          onWheel={(e) => e.currentTarget.blur()}
                           min="0"
                           step="0.5"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                           placeholder="Optional"
                         />
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -4272,9 +4658,10 @@ export default function EmployeesPage() {
                           name="allottedLeaves"
                           value={formData.allottedLeaves ?? ''}
                           onChange={handleInputChange}
+                          onWheel={(e) => e.currentTarget.blur()}
                           min="0"
                           step="0.5"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                           placeholder="Optional"
                         />
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -4369,7 +4756,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4435,7 +4823,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4746,6 +5135,14 @@ export default function EmployeesPage() {
                       </div>
                     )}
                     <div>
+                      <div className="mb-1 flex items-center gap-3">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          Gross: {viewingEmployee.gross_salary ? `₹${viewingEmployee.gross_salary.toLocaleString()}` : '-'}
+                        </span>
+                        <span className="rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300">
+                          Cert Status: {viewingEmployee.qualificationStatus || '—'}
+                        </span>
+                      </div>
                       <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
                         {viewingEmployee.employee_name}
                       </h2>
@@ -4789,7 +5186,51 @@ export default function EmployeesPage() {
                 </div>
 
                 <div className="space-y-6">
+                  {/* Action Bar for Pending Items */}
+                  {(pendingUpdateForViewing || pendingAppForViewing) && (
+                    <div className="mb-6 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-900/30 dark:bg-indigo-900/10">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400">
+                            <AlertTriangle className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">Action Required</h4>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">This employee has pending management actions.</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {pendingUpdateForViewing && (
+                            <button
+                              onClick={() => setSelectedUpdateRequest(pendingUpdateForViewing)}
+                              className="flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-indigo-600 shadow-sm transition hover:bg-slate-50 dark:bg-slate-800 dark:text-indigo-400 dark:hover:bg-slate-700"
+                            >
+                              <LucideClock className="h-4 w-4" />
+                              Review Profile Changes
+                            </button>
+                          )}
+                          {pendingAppForViewing && (
+                            <button
+                              onClick={() => {
+                                setEmployeeViewTab('profile');
+                                setTimeout(() => {
+                                  const element = document.getElementById('salary-approval-section');
+                                  element?.scrollIntoView({ behavior: 'smooth' });
+                                }, 100);
+                              }}
+                              className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-md transition hover:bg-indigo-700 hover:shadow-lg shadow-indigo-500/30"
+                            >
+                              <CheckCircle className="h-4 w-4" />
+                              Finalize Salary Structure
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Status Badge */}
+
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className={viewingEmployee.is_active !== false
@@ -4830,7 +5271,10 @@ export default function EmployeesPage() {
 
                   {employeeViewTab === 'profile' && (
                     <>
+
+
                       {/* Basic Information */}
+
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
                         <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Basic Information</h3>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -4858,26 +5302,7 @@ export default function EmployeesPage() {
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Date of Birth</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.dob ? new Date(viewingEmployee.dob).toLocaleDateString() : '-'}</p>
                           </div>
-                          <div>
-                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Gross Salary</label>
-                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.gross_salary ? `₹${viewingEmployee.gross_salary.toLocaleString()}` : '-'}</p>
-                          </div>
-                          <div>
-                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Second Salary</label>
-                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.second_salary ? `₹${viewingEmployee.second_salary.toLocaleString()}` : '-'}</p>
-                          </div>
-                          <div>
-                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">CTC Salary</label>
-                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{(viewingEmployee as any).ctcSalary ? `₹${(viewingEmployee as any).ctcSalary.toLocaleString()}` : '-'}</p>
-                          </div>
-                          <div>
-                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Calculated Salary (Net)</label>
-                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{(viewingEmployee as any).calculatedSalary ? `₹${(viewingEmployee as any).calculatedSalary.toLocaleString()}` : '-'}</p>
-                          </div>
-                          <div>
-                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Paid Leaves</label>
-                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.paidLeaves ?? '-'}</p>
-                          </div>
+
                           <div>
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Gender</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.gender || '-'}</p>
@@ -4890,13 +5315,6 @@ export default function EmployeesPage() {
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Blood Group</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.blood_group || '-'}</p>
                           </div>
-                        </div>
-                      </div>
-
-                      {/* Contact Information */}
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
-                        <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Contact Information</h3>
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                           <div>
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Phone Number</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.phone_number || '-'}</p>
@@ -4920,28 +5338,156 @@ export default function EmployeesPage() {
                         </div>
                       </div>
 
+                      {/* Financial Information */}
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
+                        <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Financial Information</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">PF Number</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.pf_number || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">ESI Number</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.esi_number || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Aadhar Number</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.aadhar_number || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Account Number</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_account_no || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Bank Name</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_name || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Bank Place</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_place || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">IFSC Code</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.ifsc_code || '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Salary Mode</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.salary_mode || 'Bank'}</p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setShowBankUpdateDialog(true)}
+                            className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300"
+                          >
+                            Update Bank Details
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Deduction Preferences - Statutory & Attendance flags */}
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
+                        <h3 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">Deduction Preferences</h3>
+                        <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+                          Controls which statutory and attendance deductions apply to this employee during payroll. Disabled items are not calculated (amount 0).
+                        </p>
+                        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                          <div>
+                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Statutory</p>
+                            <div className="space-y-3">
+                              {[
+                                { key: 'applyProfessionTax', label: 'Profession Tax' },
+                                { key: 'applyESI', label: 'ESI' },
+                                { key: 'applyPF', label: 'PF' },
+                              ].map(({ key, label }) => {
+                                const isEnabled = (viewingEmployee as any)[key] !== false;
+                                return (
+                                  <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                    <button
+                                      onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                        }`}
+                                    >
+                                      <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                          }`}
+                                      />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Attendance deduction</p>
+                            <div className="space-y-3">
+                              {[
+                                { key: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                                { key: 'deductLateIn', label: 'Late-ins' },
+                                { key: 'deductEarlyOut', label: 'Early-outs' },
+                                { key: 'deductPermission', label: 'Permission' },
+                                { key: 'deductAbsent', label: 'Absents (extra LOP)' },
+                              ].map(({ key, label }) => {
+                                const isEnabled = (viewingEmployee as any)[key] !== false;
+                                return (
+                                  <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                    <button
+                                      onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                        }`}
+                                    >
+                                      <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                          }`}
+                                      />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       {/* Professional Information */}
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
                         <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Professional Information</h3>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                           <div className="sm:col-span-2 lg:col-span-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Qualifications</label>
+                            <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Qualifications</label>
                               {(() => {
-                                const quals = viewingEmployee.qualifications;
-                                if (!quals || !Array.isArray(quals) || quals.length === 0) return null;
-                                const total = quals.length;
-                                const certLabel = formSettings?.qualifications?.fields?.find((f: any) => f.id === 'certificate_submitted')?.label;
-                                const count = quals.filter((q: any) => {
-                                  const v = q.certificate_submitted ?? (certLabel ? q[certLabel] : null);
-                                  return v === true || v === 'Yes' || (typeof v === 'string' && v.toLowerCase() === 'yes');
-                                }).length;
-                                const status = total === 0 ? '—' : count === total ? 'Certified' : `Partial (${count}/${total})`;
-                                return (
-                                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${count === total ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'}`}>
-                                    {status}
-                                  </span>
-                                );
+                                const statuses = formSettings?.qualification_statuses || ['Partial', 'Not Certified', 'Certified'];
+                                if (pendingAppForViewing) {
+                                  return (
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                      <span className="text-xs font-medium text-slate-500">Overall Status:</span>
+                                      <select
+                                        value={approvalData.qualificationStatus || 'Partial'}
+                                        onChange={(e) => setApprovalData({ ...approvalData, qualificationStatus: e.target.value })}
+                                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800"
+                                      >
+                                        {statuses.map((st: any) => {
+                                          const val = typeof st === 'object' ? st.value : st;
+                                          const label = typeof st === 'object' ? st.label : st;
+                                          return <option key={val} value={val}>{label}</option>;
+                                        })}
+                                      </select>
+                                    </div>
+                                  );
+                                } else {
+                                  return (
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                      <span className="text-xs font-medium text-slate-500">Overall Status:</span>
+                                      <span className="rounded-full px-2.5 py-1 text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                        {viewingEmployee.qualificationStatus || '—'}
+                                      </span>
+                                    </div>
+                                  );
+                                }
                               })()}
                             </div>
                             {(() => {
@@ -4967,7 +5513,7 @@ export default function EmployeesPage() {
                                       <tbody>
                                         {quals.map((qual: any, idx: number) => {
                                           const certificateUrl = qual.certificateUrl;
-                                          const isPDF = certificateUrl?.toLowerCase().endsWith('.pdf');
+     
                                           return (
                                             <tr key={idx} className="border-b border-slate-100 dark:border-slate-700/50">
                                               {qualFields.map((f: any) => {
@@ -5009,6 +5555,251 @@ export default function EmployeesPage() {
                           </div>
                         </div>
                       </div>
+
+
+                      {/* Salary and Leave Details */}
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
+                        <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Salary and Leave Details</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Gross Salary</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.gross_salary ? `₹${viewingEmployee.gross_salary.toLocaleString()}` : '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Second Salary</label>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.second_salary ? `₹${viewingEmployee.second_salary.toLocaleString()}` : '-'}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Paid Leaves</label>
+                            {pendingAppForViewing ? (
+                              <input
+                                type="number"
+                                value={approvalData.paidLeaves ?? 0}
+                                onChange={(e) => setApprovalData({ ...approvalData, paidLeaves: Number(e.target.value) })}
+                                onWheel={(e) => e.currentTarget.blur()}
+                                className="mt-1 w-full max-w-[120px] rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white no-spinner"
+                              />
+                            ) : (
+                              <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                {(() => {
+                                  const val = (viewingEmployee as any).paid_leaves ?? viewingEmployee.dynamicFields?.paid_leaves;
+                                  return val !== undefined && val !== null ? String(val) : '0';
+                                })()}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Total paid leaves balance
+                            </p>
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Casual Leaves</label>
+                            {pendingAppForViewing ? (
+                              <input
+                                type="number"
+                                value={approvalData.casualLeaves ?? 0}
+                                onChange={(e) => setApprovalData({ ...approvalData, casualLeaves: Number(e.target.value) })}
+                                onWheel={(e) => e.currentTarget.blur()}
+                                className="mt-1 w-full max-w-[120px] rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white no-spinner"
+                              />
+                            ) : (
+                              <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                {(() => {
+                                  const val = viewingEmployee.casualLeaves ?? (viewingEmployee as any).casual_leaves ?? viewingEmployee.dynamicFields?.casual_leaves;
+                                  return val !== undefined && val !== null ? String(val) : '0';
+                                })()}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Casual leaves count
+                            </p>
+                          </div>
+                          {((viewingEmployee as any).ctcSalary !== undefined && (viewingEmployee as any).ctcSalary !== null) && (
+                            <div>
+                              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">CTC Salary</label>
+                              <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                ₹{Number((viewingEmployee as any).ctcSalary || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </p>
+                            </div>
+                          )}
+                          {((viewingEmployee as any).calculatedSalary !== undefined && (viewingEmployee as any).calculatedSalary !== null) && (
+                            <div>
+                              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Calculated Salary (Net)</label>
+                              <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                ₹{Number((viewingEmployee as any).calculatedSalary || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Integrated Salary Approval Section (Consolidated Flow) */}
+                      {pendingAppForViewing && selectedApplication && (
+                        <div id="salary-approval-section" className="mb-6 overflow-hidden rounded-2xl border-2 border-green-200 bg-green-50/50 shadow-sm dark:border-green-800 dark:bg-green-900/20">
+                          <div className="border-b border-green-100 bg-green-100/30 px-5 py-3 dark:border-green-800 dark:bg-green-950/30">
+                            <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-green-800 dark:text-green-400">
+                              <ShieldCheck className="h-4 w-4" />
+                              Final Salary Approval
+                            </h3>
+                          </div>
+
+                          <div className="p-5">
+                            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                              {/* Left Column: Form Fields */}
+                              <div className="space-y-4">
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Approved Salary (Monthly Gross) *
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={approvalData.approvedSalary}
+                                    onChange={(e) => setApprovalData({ ...approvalData, approvedSalary: Number(e.target.value) })}
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
+                                  />
+                                  <p className="mt-1.5 text-[10px] text-slate-500">Proposed by HR: ₹{selectedApplication.proposedSalary.toLocaleString()}</p>
+                                </div>
+
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Second Salary / Fixed Allowance
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={(approvalData as any).second_salary || ''}
+                                    onChange={(e) => setApprovalData({ ...approvalData, second_salary: Number(e.target.value) } as any)}
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    placeholder="Enter additional amount"
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Date of Joining *
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={approvalData.doj || ''}
+                                    onChange={(e) => setApprovalData({ ...approvalData, doj: e.target.value })}
+                                    className="w-full rounded-xl border-2 border-green-400 bg-white px-4 py-2.5 text-sm font-bold transition-all focus:border-green-500 focus:outline-none dark:border-green-600 dark:bg-slate-900 dark:text-slate-100"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Right Column: Allowances/Deductions Preview */}
+                              <div className="space-y-4">
+                                <div className="rounded-xl border border-slate-200 bg-white/50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                                  <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Salary Summary</h4>
+                                  <div className="space-y-2 text-sm">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-500">Gross Salary</span>
+                                      <span className="font-semibold text-slate-900 dark:text-slate-100">₹{Number(approvalData.approvedSalary || 0).toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-green-600">Total Allowances</span>
+                                      <span className="font-semibold text-green-600">+₹{approvalSalarySummary.totalAllowances.toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-red-600">Total Deductions</span>
+                                      <span className="font-semibold text-red-600">-₹{approvalSalarySummary.totalDeductions.toLocaleString()}</span>
+                                    </div>
+                                    <div className="mt-2 border-t border-slate-200 pt-2 flex justify-between font-bold text-slate-900 dark:text-slate-100">
+                                      <span>Net Salary</span>
+                                      <span>₹{approvalSalarySummary.netSalary.toLocaleString()}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Comments</label>
+                                  <textarea
+                                    value={approvalData.comments}
+                                    onChange={(e) => setApprovalData({ ...approvalData, comments: e.target.value })}
+                                    className="h-24 w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                    placeholder="Add notes about this approval..."
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Overrides Expanded Section (Optional toggle if too long) */}
+                            <div className="mt-6">
+                              <button
+                                type="button"
+                                onClick={() => setShowApprovalOverrides(!showApprovalOverrides)}
+                                className="flex items-center gap-2 text-xs font-bold text-green-700 dark:text-green-400 hover:underline"
+                              >
+                                {showApprovalOverrides ? 'Hide component overrides' : 'Show component overrides (Allowances/Deductions)'}
+                                <ChevronRight className={`h-4 w-4 transition-transform ${showApprovalOverrides ? 'rotate-90' : ''}`} />
+                              </button>
+
+                              {showApprovalOverrides && (
+                                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                                  {/* Copying minimized version of override inputs here or just using the existing logic */}
+                                  <div className="rounded-xl border border-green-100 bg-green-50/30 p-4">
+                                    <h5 className="mb-3 text-[10px] font-bold uppercase text-green-700">Allowances</h5>
+                                    <div className="space-y-3">
+                                      {approvalComponentDefaults.allowances.map(item => {
+                                        const key = getKey(item);
+                                        const current = approvalOverrideAllowances[key] ?? item.amount ?? 0;
+                                        return (
+                                          <div key={key} className="flex items-center justify-between gap-4">
+                                            <span className="text-xs text-slate-700 dark:text-slate-300">{item.name}</span>
+                                            <input
+                                              type="number"
+                                              value={current === null ? '' : current}
+                                              onChange={(e) => handleApprovalOverrideChange('allowance', item, e.target.value)}
+                                              onWheel={(e) => e.currentTarget.blur()}
+                                              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right no-spinner"
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                  <div className="rounded-xl border border-red-100 bg-red-50/30 p-4">
+                                    <h5 className="mb-3 text-[10px] font-bold uppercase text-red-700">Deductions</h5>
+                                    <div className="space-y-3">
+                                      {approvalComponentDefaults.deductions.map(item => {
+                                        const key = getKey(item);
+                                        const current = approvalOverrideDeductions[key] ?? item.amount ?? 0;
+                                        return (
+                                          <div key={key} className="flex items-center justify-between gap-4">
+                                            <span className="text-xs text-slate-700 dark:text-slate-300">{item.name}</span>
+                                            <input
+                                              type="number"
+                                              value={current === null ? '' : current}
+                                              onChange={(e) => handleApprovalOverrideChange('deduction', item, e.target.value)}
+                                              onWheel={(e) => e.currentTarget.blur()}
+                                              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right no-spinner"
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="mt-6 flex justify-end gap-3">
+                              <button
+                                onClick={handleRejectApplication}
+                                className="rounded-xl px-6 py-2.5 text-sm font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                              >
+                                Reject Application
+                              </button>
+                              <button
+                                onClick={handleApproveApplication}
+                                className="rounded-xl bg-gradient-to-r from-green-600 to-green-700 px-8 py-2.5 text-sm font-bold text-white shadow-lg shadow-green-600/30 transition-all hover:scale-[1.02] active:scale-95"
+                              >
+                                Approve & Finalize
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -5071,9 +5862,18 @@ export default function EmployeesPage() {
                               name: 'Name',
                               employee_name: 'Name',
                               email: 'Email',
+                              personal_email: 'Personal Email',
                               phone: 'Phone',
+                              phone_number: 'Phone Number',
                               emp_no: 'Employee number',
                               date_of_joining: 'Date of joining',
+                              date_of_birth: 'Date of Birth',
+                              dob: 'Date of Birth',
+                              doj: 'Joining Date',
+                              gender: 'Gender',
+                              marital_status: 'Marital Status',
+                              blood_group: 'Blood Group',
+                              address: 'Address',
                               leftDate: 'Left date',
                               leftReason: 'Left reason',
                             };
@@ -5114,9 +5914,9 @@ export default function EmployeesPage() {
                               if (field === 'division_id' && /^[a-f\d]{24}$/i.test(s)) return refMaps.division[s] ?? s;
                               if (field === 'department_id' && /^[a-f\d]{24}$/i.test(s)) return refMaps.department[s] ?? s;
                               if (field === 'designation_id' && /^[a-f\d]{24}$/i.test(s)) return refMaps.designation[s] ?? s;
-                              if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+                              if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
                                 try {
-                                  return new Date(s).toLocaleString();
+                                  return new Date(s).toLocaleDateString();
                                 } catch {
                                   return s;
                                 }
@@ -5152,6 +5952,7 @@ export default function EmployeesPage() {
                             }
 
                             return (
+
                               <li key={h._id || `${h.event}-${when}-${actor}-${index}`} className="relative pl-4">
                                 {/* Timeline dot */}
                                 <span
@@ -5178,6 +5979,17 @@ export default function EmployeesPage() {
                                   {h.comments && (
                                     <div className="mt-2 text-xs text-slate-700 dark:text-slate-200">
                                       {h.comments}
+                                    </div>
+                                  )}
+                                  {h.details?.gross_salary && (
+                                    <div className="mt-2 flex items-baseline gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                                      <span>Gross Salary:</span>
+                                      <span className="font-mono">₹{Number(h.details.gross_salary).toLocaleString()}</span>
+                                    </div>
+                                  )}
+                                  {h.details?.action && !h.comments && (
+                                    <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
+                                      {h.details.action}
                                     </div>
                                   )}
                                   {Array.isArray(changes) && changes.length > 0 && (
@@ -5226,109 +6038,9 @@ export default function EmployeesPage() {
                     </div>
                   )}
 
-                  {/* Financial Information (profile view only) */}
-                  {employeeViewTab === 'profile' && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
-                      <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Financial Information</h3>
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">PF Number</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.pf_number || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">ESI Number</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.esi_number || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Aadhar Number</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.aadhar_number || '-'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
-                  {/* Deduction Preferences - Statutory & Attendance flags (profile view only) */}
-                  {employeeViewTab === 'profile' && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
-                      <h3 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">Deduction Preferences</h3>
-                      <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
-                        Controls which statutory and attendance deductions apply to this employee during payroll. Disabled items are not calculated (amount 0).
-                      </p>
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <div>
-                          <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Statutory</p>
-                          <div className="space-y-2">
-                            {[
-                              { key: 'applyProfessionTax', label: 'Profession Tax' },
-                              { key: 'applyESI', label: 'ESI' },
-                              { key: 'applyPF', label: 'PF' },
-                            ].map(({ key, label }) => {
-                              const enabled = (viewingEmployee as any)[key] !== false;
-                              return (
-                                <div key={key} className="flex items-center justify-between">
-                                  <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
-                                    {enabled ? 'Enabled' : 'Disabled'}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        <div>
-                          <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Attendance deduction</p>
-                          <div className="space-y-2">
-                            {[
-                              { key: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
-                              { key: 'deductLateIn', label: 'Late-ins' },
-                              { key: 'deductEarlyOut', label: 'Early-outs' },
-                              { key: 'deductPermission', label: 'Permission' },
-                              { key: 'deductAbsent', label: 'Absents (extra LOP)' },
-                            ].map(({ key, label }) => {
-                              const enabled = (viewingEmployee as any)[key] !== false;
-                              return (
-                                <div key={key} className="flex items-center justify-between">
-                                  <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
-                                    {enabled ? 'Enabled' : 'Disabled'}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
-                  {/* Bank Details (profile view only) */}
-                  {employeeViewTab === 'profile' && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
-                      <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Bank Details</h3>
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Account Number</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_account_no || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Bank Name</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_name || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Bank Place</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.bank_place || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">IFSC Code</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.ifsc_code || '-'}</p>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Salary Mode</label>
-                          <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.salary_mode || 'Bank'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+
 
                   {/* Profile Tab Content */}
                   {employeeViewTab === 'profile' && (
@@ -5423,6 +6135,43 @@ export default function EmployeesPage() {
                         </div>
                       </div>
 
+
+                  {/* Generic dynamic form groups (profile view only) */}
+                  {employeeViewTab === 'profile' && formSettings?.groups?.filter(g =>
+                    g.isEnabled &&
+                    !['basic_info', 'personal_info', 'contact_info', 'bank_details', 'reporting_authority', 'leave_info', 'leave_information'].includes(g.id) &&
+                    !g.isSystem
+                  )
+                    .sort((a, b) => (a.order || 0) - (b.order || 0))
+                    .map(group => (
+                      <div key={group.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
+                        <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">{group.label}</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          {group.fields
+                            ?.filter(f => f.isEnabled !== false)
+                            .sort((a, b) => (a.order || 0) - (b.order || 0))
+                            .map(field => {
+                              const value = (viewingEmployee as any)[field.id] ?? viewingEmployee.dynamicFields?.[field.id];
+                              return (
+                                <div key={field.id}>
+                                  <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{field.label}</label>
+                                  <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                    {value != null && value !== '' ? (
+                                      typeof value === 'object' ? JSON.stringify(value) : String(value)
+                                    ) : '-'}
+                                  </p>
+                                  {field.description && (
+                                    <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                                      {field.description}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ))}
+
                       {/* Reporting Authority */}
                       {((viewingEmployee as any).reporting_to || (viewingEmployee as any).reporting_to_) && (
                         <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
@@ -5473,6 +6222,16 @@ export default function EmployeesPage() {
                   </div>
                 </div>
               )}
+
+                  {/* Certificate image/document popup */}
+                  {certificatePreviewUrl && (
+                    <CertificatePreviewModal
+                      url={certificatePreviewUrl}
+                      onClose={() => setCertificatePreviewUrl(null)}
+                    />
+                  )}
+                </div>
+              </div>
             </div>
           )
         }
@@ -5523,6 +6282,99 @@ export default function EmployeesPage() {
           </div>
         )}
       </div>
+          <HistoryViewCompleteModal
+            data={historyViewComplete}
+            onClose={() => setHistoryViewComplete(null)}
+          />
+        )}
+
+        {/* Left Date Modal */}
+        {showLeftDateModal && selectedEmployeeForLeftDate && (
+          <ResignationModal
+            employee={selectedEmployeeForLeftDate}
+            leftDateForm={leftDateForm}
+            setLeftDateForm={setLeftDateForm}
+            resignationNoticePeriodDays={resignationNoticePeriodDays}
+            error={error}
+            success={success}
+            onSubmit={handleSubmitLeftDate}
+            onClose={() => {
+              setShowLeftDateModal(false);
+              setSelectedEmployeeForLeftDate(null);
+              setLeftDateForm({ leftDate: '', leftReason: '' });
+            }}
+          />
+        )}
+      </div >
+
+      {allowEmployeeBulkProcess && showEmployeeUpdateModal && (
+        <EmployeeUpdateModal
+          onClose={() => setShowEmployeeUpdateModal(false)}
+          onSuccess={() => {
+            setShowEmployeeUpdateModal(false);
+            loadEmployees(currentPage);
+          }}
+        />
+      )}
+
+      {allowEmployeeBulkProcess && showBulkAllowancesDeductions && (
+        <BulkAllowancesDeductionsModal
+          onClose={() => setShowBulkAllowancesDeductions(false)}
+          onSuccess={(msg) => setSuccess(msg)}
+          onError={(msg) => setError(msg)}
+          setLoading={setLoading}
+          loadEmployees={loadEmployees}
+          currentPage={currentPage}
+        />
+      )}
+
+      {/* Comparison Modal */}
+      {selectedUpdateRequest && (
+        <UpdateRequestReviewModal
+          request={selectedUpdateRequest}
+          rejectComments={updateRequestRejectComments}
+          setRejectComments={setUpdateRequestRejectComments}
+          processingUpdateRequest={processingUpdateRequest}
+          formSettings={formSettings}
+          getFieldLabel={getFieldLabel}
+          onApprove={handleApproveUpdateRequest}
+          onReject={handleRejectUpdateRequest}
+          onClose={() => setSelectedUpdateRequest(null)}
+        />
+      )}
+      <BankUpdateDialog
+        isOpen={showBankUpdateDialog}
+        onClose={() => setShowBankUpdateDialog(false)}
+        employee={viewingEmployee}
+        onSubmit={async (bankFormData) => {
+          if (!viewingEmployee) return;
+          setSubmittingBankUpdate(true);
+          try {
+            const res = await api.createEmployeeUpdateRequest({
+              requestedChanges: bankFormData,
+              comments: 'Bank detail update request',
+              type: 'bank',
+              employeeId: viewingEmployee._id
+            });
+            if (res.success) {
+              setShowBankUpdateDialog(false);
+              Swal.fire({
+                title: 'Submitted!',
+                text: 'Bank detail update request has been submitted for approval.',
+                icon: 'success',
+                confirmButtonColor: '#4f46e5',
+              });
+            } else {
+              alertError(res.error || 'Failed to submit bank update request.');
+            }
+          } catch (err: any) {
+            alertError(err.message || 'An error occurred.');
+          } finally {
+            setSubmittingBankUpdate(false);
+          }
+        }}
+        submitting={submittingBankUpdate}
+      />
     </div>
   );
 }
