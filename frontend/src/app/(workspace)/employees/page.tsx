@@ -88,6 +88,7 @@ interface Employee {
   employeeAllowances?: any[];
   employeeDeductions?: any[];
   salaryStatus?: 'pending_approval' | 'approved';
+  qualificationStatus?: string;
   profilePhoto?: string;
 }
 
@@ -2624,6 +2625,12 @@ export default function EmployeesPage() {
                   <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Division</th>
                   {!hideDepartmentColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Department</th>}
                   {activeTab === 'employees' && !hideDesignationColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Designation</th>}
+                  {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
+                    <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
+                  )}
+                  {activeTab === 'employees' && (
+                    <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Cert Status</th>
+                  )}
                   {activeTab === 'applications' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
                   <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Status</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest text-text-secondary">Actions</th>
@@ -2639,7 +2646,14 @@ export default function EmployeesPage() {
                     </td>
                     <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
                     {!hideDepartmentColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
-                    <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
+                    {activeTab === 'employees' && !hideDesignationColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
+                    {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
+                      <td className="px-6 py-4"><div className="h-4 w-20 rounded bg-bg-base" /></td>
+                    )}
+                    {activeTab === 'employees' && (
+                      <td className="px-6 py-4"><div className="h-4 w-20 rounded bg-bg-base" /></td>
+                    )}
+                    {activeTab === 'applications' && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
                     <td className="px-6 py-4"><div className="h-6 w-16 rounded-full bg-bg-base" /></td>
                     <td className="px-6 py-4 text-right"><div className="ml-auto h-8 w-24 rounded bg-bg-base" /></td>
                   </tr>
@@ -2703,6 +2717,18 @@ export default function EmployeesPage() {
                           setFilters={setEmployeeFilters}
                         />
                       )}
+                      {userRole !== 'hod' && userRole !== 'employee' && (
+                        <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
+                      )}
+                      {userRole !== 'hod' && userRole !== 'employee' && (
+                        <RenderFilterHeader
+                          label="Cert Status"
+                          filterKey="qualificationStatus"
+                          options={Array.from(new Set(employees.map(e => e.qualificationStatus).filter((x) => !!x))) as string[]}
+                          currentFilters={employeeFilters}
+                          setFilters={setEmployeeFilters}
+                        />
+                      )}
                       <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Phone</th>
                       <RenderFilterHeader
                         label="Status"
@@ -2758,6 +2784,24 @@ export default function EmployeesPage() {
                         {!hideDesignationColumn && (
                           <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                             {employee.designation?.name || '-'}
+                          </td>
+                        )}
+                        {userRole !== 'hod' && userRole !== 'employee' && (
+                          <td className="whitespace-nowrap px-6 py-4 text-xs font-black text-text-primary">
+                            {employee.gross_salary ? `₹${employee.gross_salary.toLocaleString()}` : '-'}
+                          </td>
+                        )}
+                        {userRole !== 'hod' && userRole !== 'employee' && (
+                          <td className="whitespace-nowrap px-6 py-4">
+                            <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${employee.qualificationStatus === 'verified'
+                              ? 'bg-status-positive/10 text-status-positive'
+                              : employee.qualificationStatus === 'pending'
+                                ? 'bg-status-warning/10 text-status-warning'
+                                : 'bg-text-secondary/10 text-text-secondary'
+                              }`}>
+                              {employee.qualificationStatus === 'verified' ? <CheckCircle className="w-3 h-3" /> : <LucideClock className="w-3 h-3" />}
+                              {employee.qualificationStatus || 'Not Uploaded'}
+                            </span>
                           </td>
                         )}
                         <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
@@ -2989,8 +3033,26 @@ export default function EmployeesPage() {
                     )}
                     {employee.phone_number && (
                       <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-                        <span className="font-medium">Phone:</span>
                         <span className="font-bold">{employee.phone_number}</span>
+                      </div>
+                    )}
+                    {userRole !== 'hod' && userRole !== 'employee' && employee.gross_salary && (
+                      <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                        <span className="font-medium">Gross Salary:</span>
+                        <span className="font-black text-text-primary">₹{employee.gross_salary.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {userRole !== 'hod' && userRole !== 'employee' && (
+                      <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                        <span className="font-medium">Cert Status:</span>
+                        <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider ${employee.qualificationStatus === 'verified'
+                          ? 'bg-status-positive/10 text-status-positive'
+                          : employee.qualificationStatus === 'pending'
+                            ? 'bg-status-warning/10 text-status-warning'
+                            : 'bg-text-secondary/10 text-text-secondary'
+                          }`}>
+                          {employee.qualificationStatus || 'Not Uploaded'}
+                        </span>
                       </div>
                     )}
                     {employee.leftDate && (
@@ -3231,7 +3293,7 @@ export default function EmployeesPage() {
                           currentFilters={applicationFilters}
                           setFilters={setApplicationFilters}
                         />
-                        {userRole !== 'hod' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
+                        {userRole !== 'hod' && userRole !== 'employee' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
                         <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Created By</th>
                         <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest text-text-secondary">Actions</th>
                       </tr>
@@ -3269,7 +3331,7 @@ export default function EmployeesPage() {
                             <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                               {app.department?.name || (app.department_id as { name?: string })?.name || '-'}
                             </td>
-                            {userRole !== 'hod' && (
+                            {userRole !== 'hod' && userRole !== 'employee' && (
                               <td className="whitespace-nowrap px-6 py-4 text-sm font-black text-text-primary">
                                 ₹{app.proposedSalary.toLocaleString()}
                               </td>
@@ -3340,7 +3402,7 @@ export default function EmployeesPage() {
                                 <span className="font-bold">{app.department?.name || (app.department_id as { name?: string })?.name}</span>
                               </div>
                             )}
-                            {userRole !== 'hod' && (
+                            {userRole !== 'hod' && userRole !== 'employee' && (
                               <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                                 <span className="font-medium">Salary:</span>
                                 <span className="font-bold text-text-primary">₹{app.proposedSalary.toLocaleString()}</span>
@@ -4797,6 +4859,16 @@ export default function EmployeesPage() {
                       <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Designation</label>
                       <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.designation?.name || '-'}</p>
                     </div>
+                    {userRole !== 'hod' && userRole !== 'employee' && (
+                      <>
+                        <div>
+                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Certificate Status</label>
+                          <p className={`mt-1 text-sm font-bold ${viewingEmployee.qualificationStatus === 'verified' ? 'text-green-600' : viewingEmployee.qualificationStatus === 'pending' ? 'text-orange-500' : 'text-slate-600'}`}>
+                            {viewingEmployee.qualificationStatus || 'Not Uploaded'}
+                          </p>
+                        </div>
+                      </>
+                    )}
                     <div>
                       <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Date of Joining</label>
                       <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.doj ? new Date(viewingEmployee.doj).toLocaleDateString() : '-'}</p>

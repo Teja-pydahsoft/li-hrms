@@ -3439,14 +3439,15 @@ export const api = {
     });
   },
 
-  getEmployeesWithPayRegister: async (month: string, departmentId?: string, divisionId?: string, status?: string, page?: number, limit?: number) => {
+  getEmployeesWithPayRegister: async (month: string, departmentId?: string, divisionId?: string, status?: string, page?: number, limit?: number, search?: string) => {
     const query = new URLSearchParams();
     if (departmentId) query.append('departmentId', departmentId);
     if (divisionId) query.append('divisionId', divisionId);
     if (status) query.append('status', status);
     if (page) query.append('page', page.toString());
     if (limit) query.append('limit', limit.toString());
-    return apiRequest<any>(`/pay-register/employees/${month}${query.toString() ? `?${query.toString()}` : ''}`, {
+    if (search) query.append('search', search);
+    return apiRequest<{ data: any[], pagination?: any, success: boolean, message?: string }>(`/pay-register/employees/${month}${query.toString() ? `?${query.toString()}` : ''}`, {
       method: 'GET',
     });
   },
@@ -3482,8 +3483,8 @@ export const api = {
     return blob;
   },
 
-  uploadPayRegisterSummary: async (month: string, data: any[]) => {
-    return apiRequest<any>(`/pay-register/upload-summary/${month}`, {
+  uploadPayRegisterSummary: async (month: string, data: Record<string, unknown>[]) => {
+    return apiRequest<{ successCount: number; failCount: number; errors: string[] }>(`/pay-register/upload-summary/${month}`, {
       method: 'POST',
       body: JSON.stringify({ data }),
     });
