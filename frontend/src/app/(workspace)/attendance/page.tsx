@@ -375,6 +375,7 @@ export default function AttendancePage() {
 
   // Pay period (same as superadmin)
   const [payrollCycleStartDay, setPayrollCycleStartDay] = useState(1);
+  const [payrollCycleEndDay, setPayrollCycleEndDay] = useState(31);
   const [cycleDates, setCycleDates] = useState({ startDate: '', endDate: '', label: '' });
 
   // Filter states
@@ -538,9 +539,16 @@ export default function AttendancePage() {
 
   const loadPayrollSettings = async () => {
     try {
-      const response = await api.getSetting('payroll_cycle_start_day');
-      if (response.success && response.data) {
-        setPayrollCycleStartDay(parseInt(response.data.value, 10) || 1);
+      const [startRes, endRes] = await Promise.all([
+        api.getSetting('payroll_cycle_start_day'),
+        api.getSetting('payroll_cycle_end_day')
+      ]);
+
+      if (startRes.success && startRes.data) {
+        setPayrollCycleStartDay(parseInt(startRes.data.value, 10) || 1);
+      }
+      if (endRes.success && endRes.data) {
+        setPayrollCycleEndDay(parseInt(endRes.data.value, 10) || 31);
       }
     } catch (err) {
       console.error('Error loading payroll settings:', err);
@@ -560,21 +568,27 @@ export default function AttendancePage() {
           startMonth = 12;
           startYear = year - 1;
         }
-        const endDateObj = new Date(year, month - 1, payrollCycleStartDay - 1);
+
+        // Use payrollCycleEndDay if set, otherwise fallback to startDay - 1
+        const endDay = payrollCycleEndDay || (payrollCycleStartDay - 1);
+        const endDateObj = new Date(year, month - 1, endDay);
         const endYear = endDateObj.getFullYear();
         const endMonth = endDateObj.getMonth() + 1;
-        const endDay = endDateObj.getDate();
+        const actualEndDay = endDateObj.getDate();
+
         const start = `${startYear}-${String(startMonth).padStart(2, '0')}-${String(payrollCycleStartDay).padStart(2, '0')}`;
-        const end = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`;
+        const end = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(actualEndDay).padStart(2, '0')}`;
         setCycleDates({ startDate: start, endDate: end, label: '' });
       } else {
         const start = `${year}-${String(month).padStart(2, '0')}-01`;
         const lastDay = new Date(year, month, 0).getDate();
-        const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        // For calendar month, respects payrollCycleEndDay if it's less than lastDay
+        const actualEndDay = Math.min(payrollCycleEndDay || 31, lastDay);
+        const end = `${year}-${String(month).padStart(2, '0')}-${String(actualEndDay).padStart(2, '0')}`;
         setCycleDates({ startDate: start, endDate: end, label: '' });
       }
     }
-  }, [year, month, payrollCycleStartDay]);
+  }, [year, month, payrollCycleStartDay, payrollCycleEndDay]);
 
   useEffect(() => {
 
