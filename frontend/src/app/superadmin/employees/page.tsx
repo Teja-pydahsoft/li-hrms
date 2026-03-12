@@ -6207,81 +6207,20 @@ export default function EmployeesPage() {
                   )}
                 </div>
               </div>
-
-              {/* Certificate image/document popup */}
-              {certificatePreviewUrl && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setCertificatePreviewUrl(null)}>
-                  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-                  <div className="relative z-10 max-h-[90vh] max-w-[90vw] rounded-2xl bg-white shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end gap-2 border-b border-slate-200 p-2 dark:border-slate-700">
-                      <button type="button" onClick={() => setCertificatePreviewUrl(null)} className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Close</button>
-                    </div>
-                    <div className="p-2">
-                      <img src={certificatePreviewUrl} alt="Certificate" className="max-h-[80vh] max-w-full rounded-lg object-contain" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-                  {/* Certificate image/document popup */}
-                  {certificatePreviewUrl && (
-                    <CertificatePreviewModal
-                      url={certificatePreviewUrl}
-                      onClose={() => setCertificatePreviewUrl(null)}
-                    />
-                  )}
-                </div>
-              </div>
             </div>
-          )
-        }
+          )}
 
-        {/* Other Modals (History Complete, Left Date, Bulk Process, Comparison) */}
+          {/* Certificate image/document popup */}
+          {certificatePreviewUrl && (
+            <CertificatePreviewModal
+              url={certificatePreviewUrl}
+              onClose={() => setCertificatePreviewUrl(null)}
+            />
+          )}
+
+
+        {/* Modals outside main layout but within return */}
         {historyViewComplete && (
-          <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setHistoryViewComplete(null)} />
-            <div className="relative z-10 flex max-h-[85vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{historyViewComplete.eventLabel}</h3>
-                <button onClick={() => setHistoryViewComplete(null)}>Close</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showLeftDateModal && selectedEmployeeForLeftDate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Left Date Modal Content */}
-            <div className="fixed inset-0 bg-slate-900/60" onClick={() => setShowLeftDateModal(false)} />
-            <div className="relative z-50 rounded-3xl bg-white p-6 dark:bg-slate-950">
-              <h2 className="text-xl font-bold">Resignation</h2>
-              <button onClick={() => setShowLeftDateModal(false)}>Close</button>
-            </div>
-          </div>
-        )}
-
-        {allowEmployeeBulkProcess && showEmployeeUpdateModal && (
-          <EmployeeUpdateModal onClose={() => setShowEmployeeUpdateModal(false)} onSuccess={() => { setShowEmployeeUpdateModal(false); loadEmployees(currentPage); }} />
-        )}
-
-        {allowEmployeeBulkProcess && showBulkAllowancesDeductions && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white p-6 rounded-2xl dark:bg-slate-800">
-              <h3 className="text-xl font-bold">Bulk Update</h3>
-              <button onClick={() => setShowBulkAllowancesDeductions(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
-
-        {selectedUpdateRequest && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <div className="bg-white p-6 rounded-3xl dark:bg-slate-950">
-              <h3 className="text-xl font-bold">Review Update Request</h3>
-              <button onClick={() => setSelectedUpdateRequest(null)}>Close</button>
-            </div>
-          </div>
-        )}
-      </div>
           <HistoryViewCompleteModal
             data={historyViewComplete}
             onClose={() => setHistoryViewComplete(null)}
@@ -6305,76 +6244,77 @@ export default function EmployeesPage() {
             }}
           />
         )}
-      </div >
 
-      {allowEmployeeBulkProcess && showEmployeeUpdateModal && (
-        <EmployeeUpdateModal
-          onClose={() => setShowEmployeeUpdateModal(false)}
-          onSuccess={() => {
-            setShowEmployeeUpdateModal(false);
-            loadEmployees(currentPage);
-          }}
-        />
-      )}
+        {allowEmployeeBulkProcess && showEmployeeUpdateModal && (
+          <EmployeeUpdateModal
+            onClose={() => setShowEmployeeUpdateModal(false)}
+            onSuccess={() => {
+              setShowEmployeeUpdateModal(false);
+              loadEmployees(currentPage);
+            }}
+          />
+        )}
 
-      {allowEmployeeBulkProcess && showBulkAllowancesDeductions && (
-        <BulkAllowancesDeductionsModal
-          onClose={() => setShowBulkAllowancesDeductions(false)}
-          onSuccess={(msg) => setSuccess(msg)}
-          onError={(msg) => setError(msg)}
-          setLoading={setLoading}
-          loadEmployees={loadEmployees}
-          currentPage={currentPage}
-        />
-      )}
+        {allowEmployeeBulkProcess && showBulkAllowancesDeductions && (
+          <BulkAllowancesDeductionsModal
+            onClose={() => setShowBulkAllowancesDeductions(false)}
+            onSuccess={(msg) => setSuccess(msg)}
+            onError={(msg) => setError(msg)}
+            setLoading={setLoading}
+            loadEmployees={loadEmployees}
+            currentPage={currentPage}
+          />
+        )}
 
-      {/* Comparison Modal */}
-      {selectedUpdateRequest && (
-        <UpdateRequestReviewModal
-          request={selectedUpdateRequest}
-          rejectComments={updateRequestRejectComments}
-          setRejectComments={setUpdateRequestRejectComments}
-          processingUpdateRequest={processingUpdateRequest}
-          formSettings={formSettings}
-          getFieldLabel={getFieldLabel}
-          onApprove={handleApproveUpdateRequest}
-          onReject={handleRejectUpdateRequest}
-          onClose={() => setSelectedUpdateRequest(null)}
-        />
-      )}
-      <BankUpdateDialog
-        isOpen={showBankUpdateDialog}
-        onClose={() => setShowBankUpdateDialog(false)}
-        employee={viewingEmployee}
-        onSubmit={async (bankFormData) => {
-          if (!viewingEmployee) return;
-          setSubmittingBankUpdate(true);
-          try {
-            const res = await api.createEmployeeUpdateRequest({
-              requestedChanges: bankFormData,
-              comments: 'Bank detail update request',
-              type: 'bank',
-              employeeId: viewingEmployee._id
-            });
-            if (res.success) {
-              setShowBankUpdateDialog(false);
-              Swal.fire({
-                title: 'Submitted!',
-                text: 'Bank detail update request has been submitted for approval.',
-                icon: 'success',
-                confirmButtonColor: '#4f46e5',
+        {/* Comparison Modal */}
+        {selectedUpdateRequest && (
+          <UpdateRequestReviewModal
+            request={selectedUpdateRequest}
+            rejectComments={updateRequestRejectComments}
+            setRejectComments={setUpdateRequestRejectComments}
+            processingUpdateRequest={processingUpdateRequest}
+            formSettings={formSettings}
+            getFieldLabel={getFieldLabel}
+            onApprove={handleApproveUpdateRequest}
+            onReject={handleRejectUpdateRequest}
+            onClose={() => setSelectedUpdateRequest(null)}
+          />
+        )}
+
+        <BankUpdateDialog
+          isOpen={showBankUpdateDialog}
+          onClose={() => setShowBankUpdateDialog(false)}
+          employee={viewingEmployee}
+          onSubmit={async (bankFormData) => {
+            if (!viewingEmployee) return;
+            setSubmittingBankUpdate(true);
+            try {
+              const res = await api.createEmployeeUpdateRequest({
+                requestedChanges: bankFormData,
+                comments: 'Bank detail update request',
+                type: 'bank',
+                employeeId: viewingEmployee._id
               });
-            } else {
-              alertError(res.error || 'Failed to submit bank update request.');
+              if (res.success) {
+                setShowBankUpdateDialog(false);
+                Swal.fire({
+                  title: 'Submitted!',
+                  text: 'Bank detail update request has been submitted for approval.',
+                  icon: 'success',
+                  confirmButtonColor: '#4f46e5',
+                });
+              } else {
+                alertError(res.error || 'Failed to submit bank update request.');
+              }
+            } catch (err: any) {
+              alertError(err.message || 'An error occurred.');
+            } finally {
+              setSubmittingBankUpdate(false);
             }
-          } catch (err: any) {
-            alertError(err.message || 'An error occurred.');
-          } finally {
-            setSubmittingBankUpdate(false);
-          }
-        }}
-        submitting={submittingBankUpdate}
-      />
+          }}
+          submitting={submittingBankUpdate}
+        />
+      </div>
     </div>
   );
 }
