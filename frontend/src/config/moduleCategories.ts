@@ -13,7 +13,7 @@ export const MODULE_CATEGORIES = [
         name: 'Employee Management',
         icon: '👥',
         modules: [
-            { code: 'EMPLOYEES', label: 'Employees', href: '/employees', verifiable: true },
+            { code: 'EMPLOYEES', label: 'Employees', href: '/employees', verifiable: true, bankable: true },
             { code: 'RESIGNATION', label: 'Resignations', href: '/resignations' },
             { code: 'PROFILE', label: 'My Profile', href: '/profile' }
         ]

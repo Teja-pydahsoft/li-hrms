@@ -1769,6 +1769,8 @@ export default function UsersPage() {
                                   const hasWrite = formData.featureControl?.includes(`${module.code}:write`) || false;
                                   const hasVerify = (module as any).verifiable ? (formData.featureControl?.includes(`${module.code}:verify`) || false) : false;
 
+                                  const hasBank = (module as any).bankable ? (formData.featureControl?.includes(`${module.code}:bank`) || false) : false;
+
                                   const toggleRead = () => {
                                     const currentFeatures = formData.featureControl || [];
                                     const readPerm = `${module.code}:read`;
@@ -1793,6 +1795,15 @@ export default function UsersPage() {
                                     const newFeatures = hasVerify
                                       ? currentFeatures.filter(f => f !== verifyPerm)
                                       : [...currentFeatures, verifyPerm];
+                                    setFormData({ ...formData, featureControl: newFeatures });
+                                  };
+
+                                  const toggleBank = () => {
+                                    const currentFeatures = formData.featureControl || [];
+                                    const bankPerm = `${module.code}:bank`;
+                                    const newFeatures = hasBank
+                                      ? currentFeatures.filter(f => f !== bankPerm)
+                                      : [...currentFeatures, bankPerm];
                                     setFormData({ ...formData, featureControl: newFeatures });
                                   };
 
@@ -2155,6 +2166,8 @@ export default function UsersPage() {
                               {category.modules.map((module) => {
                                 const hasRead = employeeFormData.featureControl?.includes(`${module.code}:read`) || false;
                                 const hasWrite = employeeFormData.featureControl?.includes(`${module.code}:write`) || false;
+                                const hasVerify = (module as any).verifiable ? (employeeFormData.featureControl?.includes(`${module.code}:verify`) || false) : false;
+                                const hasBank = (module as any).bankable ? (employeeFormData.featureControl?.includes(`${module.code}:bank`) || false) : false;
 
                                 const toggleRead = () => {
                                   const currentFeatures = employeeFormData.featureControl || [];
@@ -2171,6 +2184,24 @@ export default function UsersPage() {
                                   const newFeatures = hasWrite
                                     ? currentFeatures.filter(f => f !== writePerm)
                                     : [...currentFeatures, writePerm];
+                                  setEmployeeFormData({ ...employeeFormData, featureControl: newFeatures });
+                                };
+
+                                const toggleVerify = () => {
+                                  const currentFeatures = employeeFormData.featureControl || [];
+                                  const verifyPerm = `${module.code}:verify`;
+                                  const newFeatures = hasVerify
+                                    ? currentFeatures.filter(f => f !== verifyPerm)
+                                    : [...currentFeatures, verifyPerm];
+                                  setEmployeeFormData({ ...employeeFormData, featureControl: newFeatures });
+                                };
+
+                                const toggleBank = () => {
+                                  const currentFeatures = employeeFormData.featureControl || [];
+                                  const bankPerm = `${module.code}:bank`;
+                                  const newFeatures = hasBank
+                                    ? currentFeatures.filter(f => f !== bankPerm)
+                                    : [...currentFeatures, bankPerm];
                                   setEmployeeFormData({ ...employeeFormData, featureControl: newFeatures });
                                 };
 

@@ -825,6 +825,7 @@ export default function EmployeesPage() {
     if (user) {
       setUserRole(user.role);
     }
+
     loadEmployees(1); // Load first page
     loadDivisions();
     loadDepartments();

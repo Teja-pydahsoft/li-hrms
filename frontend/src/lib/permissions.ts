@@ -487,6 +487,25 @@ export function canVerifyFeature(user: User, featureCode: string): boolean {
         user.featureControl.includes(`${featureCode}:verify`);
 }
 
+/**
+ * Check if user has BANK permission for a feature.
+ * Must be explicitly granted with 'feature:bank'.
+ */
+export function canBankUpdateFeature(user: User, featureCode: string): boolean {
+    if (!user) return false;
+    if (!user.featureControl || user.featureControl.length === 0) return true; // Default allow if empty (legacy/role-based)
+
+    return user.featureControl.includes(featureCode) ||
+        user.featureControl.includes(`${featureCode}:bank`);
+}
+
+/**
+ * Specifically for bank details update workflow
+ */
+export function canUpdateBankDetails(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr', 'manager']) && canBankUpdateFeature(user, 'EMPLOYEES');
+}
+
 // ==========================================
 // DATA SCOPE HELPERS
 // ==========================================

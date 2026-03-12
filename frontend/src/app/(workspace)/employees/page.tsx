@@ -13,7 +13,8 @@ import {
   canViewEmployees,
   canEditEmployee,
   canViewApplications as hasViewApplicationsPermission,
-  canVerifyFeature
+  canVerifyFeature,
+  canUpdateBankDetails
 } from '@/lib/permissions';
 import {
   Users,
@@ -225,6 +226,7 @@ export default function EmployeesPage() {
   const [userRole, setUserRole] = useState<string>('');
   const [canViewApplications, setCanViewApplications] = useState(false);
   const [hasVerifyPermission, setHasVerifyPermission] = useState(false);
+  const [hasBankUpdatePermission, setHasBankUpdatePermission] = useState(false);
   /** Role-based feature control when user has none (so permissions respect Settings > Feature Control) */
   const [resolvedFeatureControl, setResolvedFeatureControl] = useState<string[] | null>(null);
   const [showLeftDateModal, setShowLeftDateModal] = useState(false);
@@ -650,6 +652,7 @@ export default function EmployeesPage() {
     if (!userForPermissions) return;
     setCanViewApplications(hasViewApplicationsPermission(userForPermissions as any));
     setHasVerifyPermission(canVerifyFeature(userForPermissions as any, 'EMPLOYEES'));
+    setHasBankUpdatePermission(canUpdateBankDetails(userForPermissions as any));
   }, [userForPermissions]);
 
   // Reset pagination when filters change
@@ -3888,14 +3891,19 @@ export default function EmployeesPage() {
                           { id: 'applyESI', label: 'ESI' },
                           { id: 'applyProfessionTax', label: 'Profession Tax' }
                         ].map((pref) => (
-                          <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                          <label 
+                            key={pref.id} 
+                            title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                            className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
+                          >
                             <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
                             <div
                               onClick={() => {
+                                if (!hasManagePermission) return;
                                 const newVal = !((applicationFormData as any)[pref.id] ?? true);
                                 setApplicationFormData(prev => ({ ...prev, [pref.id]: newVal }));
                               }}
-                              className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
                             >
                               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((applicationFormData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
                             </div>
@@ -3915,14 +3923,19 @@ export default function EmployeesPage() {
                           { id: 'deductPermission', label: 'Permission' },
                           { id: 'deductAbsent', label: 'Absents (extra LOP)' }
                         ].map((pref) => (
-                          <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                          <label 
+                            key={pref.id} 
+                            title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                            className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
+                          >
                             <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
                             <div
                               onClick={() => {
+                                if (!hasManagePermission) return;
                                 const newVal = !((applicationFormData as any)[pref.id] ?? true);
                                 setApplicationFormData(prev => ({ ...prev, [pref.id]: newVal }));
                               }}
-                              className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
                             >
                               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((applicationFormData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
                             </div>
@@ -5079,7 +5092,7 @@ export default function EmployeesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {hasVerifyPermission && (
+                  {hasBankUpdatePermission && (
                     <button
                       type="button"
                       onClick={() => setShowBankUpdateDialog(true)}
@@ -5357,8 +5370,10 @@ export default function EmployeesPage() {
                                 <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
                                 <button
                                   onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                  disabled={!hasManagePermission}
+                                  title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
                                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
-                                    }`}
+                                    } ${!hasManagePermission ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                   <span
                                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
@@ -5386,8 +5401,10 @@ export default function EmployeesPage() {
                                 <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
                                 <button
                                   onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                  disabled={!hasManagePermission}
+                                  title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
                                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
-                                    }`}
+                                    } ${!hasManagePermission ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                   <span
                                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
