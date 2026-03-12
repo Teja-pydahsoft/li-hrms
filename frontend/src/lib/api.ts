@@ -352,9 +352,14 @@ export interface ApiResponse<T> {
     page: number;
     limit: number;
   };
+  // Flat pagination fields for consistency
+  total?: number;
+  page?: number;
+  totalPages?: number;
+  count?: number;
+  stats?: any;
   // For backward compatibility with various response formats
   durations?: any[];
-  count?: number;
   warnings?: string[];
   // For workspace responses
   workspaces?: Workspace[];
@@ -573,6 +578,14 @@ export interface Department {
   divisions?: (string | Division)[];
   designations?: (string | Designation)[];
   divisionDefaults?: { division: string | Division; shifts: (string | Shift)[] }[];
+  applyPF?: boolean;
+  applyESI?: boolean;
+  applyProfessionTax?: boolean;
+  applyAttendanceDeduction?: boolean;
+  deductLateIn?: boolean;
+  deductEarlyOut?: boolean;
+  deductPermission?: boolean;
+  deductAbsent?: boolean;
 }
 
 export interface Division {
@@ -639,6 +652,7 @@ export interface Employee {
   salary_mode?: 'Bank' | 'Cash';
   second_salary?: number;
   paidLeaves?: number;
+  casualLeaves?: number;
   allottedLeaves?: number;
   employeeAllowances?: any[];
   employeeDeductions?: any[];
@@ -651,6 +665,7 @@ export interface Employee {
   created_at?: string;
   updated_at?: string;
   salaryStatus?: 'pending_approval' | 'approved';
+  qualificationStatus?: string;
   // Populated fields (from virtuals or population)
   department?: any;
   division?: any;
@@ -697,6 +712,14 @@ export interface EmployeeApplication extends Partial<Employee> {
   rejectedAt?: string;
   employeeAllowances?: (Allowance & { overrideAmount?: number })[];
   employeeDeductions?: (Deduction & { overrideAmount?: number })[];
+  applyPF?: boolean;
+  applyESI?: boolean;
+  applyProfessionTax?: boolean;
+  applyAttendanceDeduction?: boolean;
+  deductLateIn?: boolean;
+  deductEarlyOut?: boolean;
+  deductPermission?: boolean;
+  deductAbsent?: boolean;
 }
 
 export interface LiveAttendanceEmployee {
@@ -1553,7 +1576,7 @@ export const api = {
     return apiRequest<any>(`/employee-applications/${id}`, { method: 'GET' });
   },
 
-  approveEmployeeApplication: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number }) => {
+  approveEmployeeApplication: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; qualificationStatus?: string; paidLeaves?: number; casualLeaves?: number; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number }) => {
     return apiRequest<any>(`/employee-applications/${id}/approve`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1566,7 +1589,7 @@ export const api = {
     });
   },
 
-  approveEmployeeSalary: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; second_salary?: number; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number }) => {
+  approveEmployeeSalary: async (id: string, data: { approvedSalary?: number; doj?: string; comments?: string; second_salary?: number; qualificationStatus?: string; paidLeaves?: number; casualLeaves?: number; employeeAllowances?: any[]; employeeDeductions?: any[]; ctcSalary?: number; calculatedSalary?: number; applyPF?: boolean; applyESI?: boolean; applyProfessionTax?: boolean; applyAttendanceDeduction?: boolean; deductLateIn?: boolean; deductEarlyOut?: boolean; deductPermission?: boolean; deductAbsent?: boolean; }) => {
     return apiRequest<any>(`/employee-applications/${id}/approve-salary`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1645,6 +1668,18 @@ export const api = {
       method: 'DELETE',
     });
   },
+  reorderFormGroups: async (groupIds: string[]) => {
+    return apiRequest<any>('/employee-applications/form-settings/reorder-groups', {
+      method: 'PUT',
+      body: JSON.stringify({ groupIds }),
+    });
+  },
+  reorderFormFields: async (groupId: string, fieldIds: string[]) => {
+    return apiRequest<any>(`/employee-applications/form-settings/groups/${groupId}/reorder-fields`, {
+      method: 'PUT',
+      body: JSON.stringify({ fieldIds }),
+    });
+  },
 
   // Qualifications management
   updateQualificationsConfig: async (config: { isEnabled?: boolean; enableCertificateUpload?: boolean; defaultRows?: Record<string, unknown>[] }) => {
@@ -1689,6 +1724,13 @@ export const api = {
       method: 'DELETE',
     });
   },
+  reorderQualificationsFields: async (fieldIds: string[]) => {
+    return apiRequest<any>('/employee-applications/form-settings/qualifications/reorder-fields', {
+      method: 'PUT',
+      body: JSON.stringify({ fieldIds }),
+    });
+  },
+
 
   deleteEmployee: async (empNo: string) => {
     return apiRequest<any>(`/employees/${empNo}`, { method: 'DELETE' });
@@ -1707,6 +1749,33 @@ export const api = {
     return apiRequest<any>('/employees/settings', {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+
+  // Employee Profile Update Requests
+  getEmployeeUpdateRequests: async (params?: { status?: string }) => {
+    const query = params?.status ? `?status=${params.status}` : '';
+    return apiRequest<any[]>(`/employee-updates${query}`, { method: 'GET' });
+  },
+
+  createEmployeeUpdateRequest: async (data: { requestedChanges: any; comments?: string; type?: string; employeeId?: string }) => {
+    return apiRequest<any>('/employee-updates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  approveEmployeeUpdateRequest: async (id: string) => {
+    return apiRequest<any>(`/employee-updates/${id}/approve`, {
+      method: 'PUT',
+    });
+  },
+
+  rejectEmployeeUpdateRequest: async (id: string, comments?: string) => {
+    return apiRequest<any>(`/employee-updates/${id}/reject`, {
+      method: 'PUT',
+      body: JSON.stringify({ comments }),
     });
   },
 
@@ -3386,14 +3455,15 @@ export const api = {
     });
   },
 
-  getEmployeesWithPayRegister: async (month: string, departmentId?: string, divisionId?: string, status?: string, page?: number, limit?: number) => {
+  getEmployeesWithPayRegister: async (month: string, departmentId?: string, divisionId?: string, status?: string, page?: number, limit?: number, search?: string) => {
     const query = new URLSearchParams();
     if (departmentId) query.append('departmentId', departmentId);
     if (divisionId) query.append('divisionId', divisionId);
     if (status) query.append('status', status);
     if (page) query.append('page', page.toString());
     if (limit) query.append('limit', limit.toString());
-    return apiRequest<any>(`/pay-register/employees/${month}${query.toString() ? `?${query.toString()}` : ''}`, {
+    if (search) query.append('search', search);
+    return apiRequest<{ data: any[], pagination?: any, success: boolean, message?: string }>(`/pay-register/employees/${month}${query.toString() ? `?${query.toString()}` : ''}`, {
       method: 'GET',
     });
   },
@@ -3429,8 +3499,8 @@ export const api = {
     return blob;
   },
 
-  uploadPayRegisterSummary: async (month: string, data: any[]) => {
-    return apiRequest<any>(`/pay-register/upload-summary/${month}`, {
+  uploadPayRegisterSummary: async (month: string, data: Record<string, unknown>[]) => {
+    return apiRequest<{ successCount: number; failCount: number; errors: string[] }>(`/pay-register/upload-summary/${month}`, {
       method: 'POST',
       body: JSON.stringify({ data }),
     });
@@ -3907,5 +3977,94 @@ export const api = {
     return apiRequest<any>('/settings/leave-policy/init', {
       method: 'POST'
     });
+  },
+
+  // ==========================================
+  // REPORTS API
+  // ==========================================
+
+  getAttendanceReportSummary: async (params: {
+    startDate?: string;
+    endDate?: string;
+    employeeId?: string;
+    departmentId?: string;
+    divisionId?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.startDate) query.append('startDate', params.startDate);
+    if (params.endDate) query.append('endDate', params.endDate);
+    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.departmentId) query.append('departmentId', params.departmentId);
+    if (params.divisionId) query.append('divisionId', params.divisionId);
+    if (params.page) query.append('page', params.page.toString());
+    if (params.limit) query.append('limit', params.limit.toString());
+    if (params.search) query.append('search', params.search);
+
+    return apiRequest<any>(`/attendance/reports/summary?${query.toString()}`, { method: 'GET' });
+  },
+
+  getThumbReports: async (params: {
+    startDate?: string;
+    endDate?: string;
+    employeeId?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.startDate) query.append('startDate', params.startDate);
+    if (params.endDate) query.append('endDate', params.endDate);
+    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.search) query.append('search', params.search);
+    if (params.page) query.append('page', params.page.toString());
+    if (params.limit) query.append('limit', params.limit.toString());
+
+    return apiRequest<any>(`/attendance/reports/thumb?${query.toString()}`, { method: 'GET' });
+  },
+
+  exportAttendanceReport: async (params: {
+    startDate: string;
+    endDate: string;
+    employeeId?: string;
+    search?: string;
+    departmentId?: string;
+    divisionId?: string;
+    strict?: boolean;
+  }) => {
+    const query = new URLSearchParams();
+    query.append('startDate', params.startDate);
+    query.append('endDate', params.endDate);
+    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.search) query.append('search', params.search);
+    if (params.departmentId) query.append('departmentId', params.departmentId);
+    if (params.divisionId) query.append('divisionId', params.divisionId);
+    if (params.strict) query.append('strict', 'true');
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/attendance/reports/export?${query.toString()}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let errorMsg = 'Failed to export report';
+      try {
+        const json = JSON.parse(text);
+        errorMsg = json.message || errorMsg;
+      } catch (e) { }
+      throw new Error(errorMsg);
+    }
+
+    return await response.blob();
   },
 };

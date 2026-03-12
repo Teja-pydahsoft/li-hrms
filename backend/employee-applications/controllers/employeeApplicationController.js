@@ -630,7 +630,8 @@ exports.getApplication = async (req, res) => {
  * Step 2: Verification Helper
  * Creates the employee record and sets status to 'verified'
  */
-const verifySingleApplicationInternal = async (applicationId, approverId) => {
+const verifySingleApplicationInternal = async (applicationId, approver) => {
+  const approverId = approver._id || approver;
   const application = await EmployeeApplication.findById(applicationId);
 
   if (!application) {
@@ -694,7 +695,13 @@ const verifySingleApplicationInternal = async (applicationId, approverId) => {
       emp_no: application.emp_no,
       event: 'employee_verified',
       performedBy: approverId,
-      details: { stage: 2, action: 'Employee record created' },
+      performedByName: approver.name || null,
+      performedByRole: approver.role || null,
+      details: {
+        gross_salary: application.proposedSalary,
+        stage: 2,
+        action: 'Employee record created'
+      },
     }).catch(err => console.error('History log failed:', err.message));
 
   } catch (mongoError) {
@@ -731,8 +738,15 @@ const verifySingleApplicationInternal = async (applicationId, approverId) => {
  * Step 3: Salary Approval Helper
  * Finalizes salary and sets status to 'approved'
  */
-const approveSalaryInternal = async (applicationId, salaryData, approverId) => {
-  const { approvedSalary, doj, comments, employeeAllowances, employeeDeductions, ctcSalary, calculatedSalary, second_salary } = salaryData;
+const approveSalaryInternal = async (applicationId, salaryData, approver) => {
+  const approverId = approver._id || approver;
+  const {
+    approvedSalary, doj, comments, employeeAllowances, employeeDeductions,
+    ctcSalary, calculatedSalary, second_salary,
+    qualifications, qualificationStatus, paidLeaves, casualLeaves,
+    applyProfessionTax, applyESI, applyPF, applyAttendanceDeduction,
+    deductLateIn, deductEarlyOut, deductPermission, deductAbsent
+  } = salaryData;
 
   const application = await EmployeeApplication.findById(applicationId);
   if (!application) throw new Error('Application not found');
@@ -754,6 +768,20 @@ const approveSalaryInternal = async (applicationId, salaryData, approverId) => {
   if (ctcSalary) application.ctcSalary = ctcSalary;
   if (calculatedSalary) application.calculatedSalary = calculatedSalary;
   if (second_salary !== undefined) application.second_salary = second_salary;
+  if (qualifications !== undefined) application.qualifications = qualifications;
+  if (qualificationStatus !== undefined) application.qualificationStatus = qualificationStatus;
+  if (paidLeaves !== undefined) application.paidLeaves = paidLeaves;
+  if (casualLeaves !== undefined) application.casualLeaves = casualLeaves;
+
+  // Deduction Preferences
+  if (applyProfessionTax !== undefined) application.applyProfessionTax = applyProfessionTax;
+  if (applyESI !== undefined) application.applyESI = applyESI;
+  if (applyPF !== undefined) application.applyPF = applyPF;
+  if (applyAttendanceDeduction !== undefined) application.applyAttendanceDeduction = applyAttendanceDeduction;
+  if (deductLateIn !== undefined) application.deductLateIn = deductLateIn;
+  if (deductEarlyOut !== undefined) application.deductEarlyOut = deductEarlyOut;
+  if (deductPermission !== undefined) application.deductPermission = deductPermission;
+  if (deductAbsent !== undefined) application.deductAbsent = deductAbsent;
 
   await application.save();
 
@@ -776,6 +804,20 @@ const approveSalaryInternal = async (applicationId, salaryData, approverId) => {
     if (employeeDeductions) employee.employeeDeductions = employeeDeductions;
     if (ctcSalary) employee.ctcSalary = ctcSalary;
     if (calculatedSalary) employee.calculatedSalary = calculatedSalary;
+    if (qualifications !== undefined) employee.qualifications = qualifications;
+    if (qualificationStatus !== undefined) employee.qualificationStatus = qualificationStatus;
+    if (paidLeaves !== undefined) employee.paidLeaves = paidLeaves;
+    if (casualLeaves !== undefined) employee.casualLeaves = casualLeaves;
+
+    // Deduction Preferences
+    if (applyProfessionTax !== undefined) employee.applyProfessionTax = applyProfessionTax;
+    if (applyESI !== undefined) employee.applyESI = applyESI;
+    if (applyPF !== undefined) employee.applyPF = applyPF;
+    if (applyAttendanceDeduction !== undefined) employee.applyAttendanceDeduction = applyAttendanceDeduction;
+    if (deductLateIn !== undefined) employee.deductLateIn = deductLateIn;
+    if (deductEarlyOut !== undefined) employee.deductEarlyOut = deductEarlyOut;
+    if (deductPermission !== undefined) employee.deductPermission = deductPermission;
+    if (deductAbsent !== undefined) employee.deductAbsent = deductAbsent;
 
     await employee.save();
 
@@ -791,6 +833,8 @@ const approveSalaryInternal = async (applicationId, salaryData, approverId) => {
     emp_no: application.emp_no,
     event: 'salary_approved',
     performedBy: approverId,
+    performedByName: approver.name || null,
+    performedByRole: approver.role || null,
     details: { gross_salary: finalSalary, stage: 3 },
     comments: comments
   }).catch(err => console.error('History log failed:', err.message));
@@ -802,10 +846,10 @@ const approveSalaryInternal = async (applicationId, salaryData, approverId) => {
  * Helper logic for approving a single application (LEGACY SUPPORT / DUAL ACTION)
  * This contains the core logic to be shared between individual and bulk approval
  */
-const approveSingleApplicationInternal = async (applicationId, approvalData, approverId) => {
+const approveSingleApplicationInternal = async (applicationId, approvalData, approver) => {
   // We can opt to make this call both verify and approve salary sequentially for backward compatibility
-  const verifyResult = await verifySingleApplicationInternal(applicationId, approverId);
-  const approveResult = await approveSalaryInternal(applicationId, approvalData, approverId);
+  const verifyResult = await verifySingleApplicationInternal(applicationId, approver);
+  const approveResult = await approveSalaryInternal(applicationId, approvalData, approver);
   return { application: approveResult, results: verifyResult.results, notificationResults: verifyResult.notificationResults };
 };
 
@@ -816,7 +860,7 @@ const approveSingleApplicationInternal = async (applicationId, approvalData, app
  */
 exports.verifyApplication = async (req, res) => {
   try {
-    const result = await verifySingleApplicationInternal(req.params.id, req.user._id);
+    const result = await verifySingleApplicationInternal(req.params.id, req.user);
 
     await result.application.populate([
       { path: 'createdBy', select: 'name email' },
@@ -850,7 +894,7 @@ exports.approveSalary = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
 
-    const application = await approveSalaryInternal(req.params.id, req.body, req.user._id);
+    const application = await approveSalaryInternal(req.params.id, req.body, req.user);
 
     await application.populate([
       { path: 'createdBy', select: 'name email' },
@@ -887,7 +931,7 @@ exports.approveApplication = async (req, res) => {
       });
     }
 
-    const result = await approveSingleApplicationInternal(req.params.id, req.body, req.user._id);
+    const result = await approveSingleApplicationInternal(req.params.id, req.body, req.user);
 
     await result.application.populate([
       { path: 'createdBy', select: 'name email' },
@@ -1002,7 +1046,7 @@ exports.bulkApproveApplications = async (req, res) => {
               doj: bulkSettings.doj,
               comments: bulkSettings.comments,
             };
-            await approveSingleApplicationInternal(appId, approvalData, req.user._id);
+            await approveSingleApplicationInternal(appId, approvalData, req.user);
             results.successCount++;
           } catch (err) {
             results.failCount++;
@@ -1096,6 +1140,8 @@ exports.rejectApplication = async (req, res) => {
       emp_no: application.emp_no,
       event: 'application_rejected',
       performedBy: req.user._id,
+      performedByName: req.user.name || null,
+      performedByRole: req.user.role || null,
       details: { previousStatus: wasEmployeeCreated ? 'verified/approved' : 'pending', employeeDeleted: wasEmployeeCreated },
       comments: comments || null,
     }).catch(err => console.error('History log failed:', err.message));

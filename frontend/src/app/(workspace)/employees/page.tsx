@@ -13,7 +13,8 @@ import {
   canViewEmployees,
   canEditEmployee,
   canViewApplications as hasViewApplicationsPermission,
-  canVerifyFeature
+  canVerifyFeature,
+  canUpdateBankDetails
 } from '@/lib/permissions';
 import {
   Users,
@@ -39,6 +40,7 @@ import {
 import BulkUpload from '@/components/BulkUpload';
 import DynamicEmployeeForm from '@/components/DynamicEmployeeForm';
 import Spinner from '@/components/Spinner';
+import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
 import Swal from 'sweetalert2';
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
@@ -88,6 +90,7 @@ interface Employee {
   employeeAllowances?: any[];
   employeeDeductions?: any[];
   salaryStatus?: 'pending_approval' | 'approved';
+  qualificationStatus?: string;
   profilePhoto?: string;
 }
 
@@ -200,6 +203,8 @@ export default function EmployeesPage() {
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingApplicationID, setEditingApplicationID] = useState<string | null>(null); // Track ID of application being edited
   const [showViewDialog, setShowViewDialog] = useState(false);
+  const [showBankUpdateDialog, setShowBankUpdateDialog] = useState(false);
+  const [submittingBankUpdate, setSubmittingBankUpdate] = useState(false);
   const [formData, setFormData] = useState<Partial<Employee>>(initialFormState);
   const [formSettings, setFormSettings] = useState<any>(null); // To store dynamic settings for mapping
   const [applicationFormData, setApplicationFormData] = useState<Partial<EmployeeApplication & { proposedSalary: number }>>({ ...initialFormState, proposedSalary: 0 });
@@ -221,6 +226,7 @@ export default function EmployeesPage() {
   const [userRole, setUserRole] = useState<string>('');
   const [canViewApplications, setCanViewApplications] = useState(false);
   const [hasVerifyPermission, setHasVerifyPermission] = useState(false);
+  const [hasBankUpdatePermission, setHasBankUpdatePermission] = useState(false);
   /** Role-based feature control when user has none (so permissions respect Settings > Feature Control) */
   const [resolvedFeatureControl, setResolvedFeatureControl] = useState<string[] | null>(null);
   const [showLeftDateModal, setShowLeftDateModal] = useState(false);
@@ -259,6 +265,39 @@ export default function EmployeesPage() {
   const [hasMoreEmployees, setHasMoreEmployees] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const observerTarget = useRef<HTMLDivElement>(null);
+
+  // Deduction Defaults
+  const [defaultStatutory, setDefaultStatutory] = useState(true);
+  const [defaultAttendance, setDefaultAttendance] = useState(true);
+
+  const fetchDeductionDefaults = useCallback(async () => {
+    try {
+      const [statRes, attRes] = await Promise.all([
+        api.getSetting('default_apply_statutory_deductions'),
+        api.getSetting('default_apply_attendance_deductions')
+      ]);
+      if (statRes.success && statRes.data) setDefaultStatutory(!!statRes.data.value);
+      if (attRes.success && attRes.data) setDefaultAttendance(!!attRes.data.value);
+    } catch (err) {
+      console.error('Error fetching deduction defaults:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDeductionDefaults();
+  }, [fetchDeductionDefaults]);
+
+  const initialFormStateWithDefaults = useMemo(() => ({
+    ...initialFormState,
+    applyPF: defaultStatutory,
+    applyESI: defaultStatutory,
+    applyProfessionTax: defaultStatutory,
+    applyAttendanceDeduction: defaultAttendance,
+    deductLateIn: defaultAttendance,
+    deductEarlyOut: defaultAttendance,
+    deductPermission: defaultAttendance,
+    deductAbsent: defaultAttendance,
+  }), [defaultStatutory, defaultAttendance]);
 
   // Helper to extract unique values for a column
   const getUniqueValues = (data: any[], key: string, nestedKey?: string) => {
@@ -613,6 +652,7 @@ export default function EmployeesPage() {
     if (!userForPermissions) return;
     setCanViewApplications(hasViewApplicationsPermission(userForPermissions as any));
     setHasVerifyPermission(canVerifyFeature(userForPermissions as any, 'EMPLOYEES'));
+    setHasBankUpdatePermission(canUpdateBankDetails(userForPermissions as any));
   }, [userForPermissions]);
 
   // Reset pagination when filters change
@@ -1757,6 +1797,33 @@ export default function EmployeesPage() {
     }
   };
 
+  const handleToggleDeductionPreference = async (key: string, value: boolean) => {
+    if (!viewingEmployee) return;
+
+    try {
+      // Optimistic update
+      const updatedEmployee = { ...viewingEmployee, [key]: value };
+      setViewingEmployee(updatedEmployee as Employee);
+
+      const response = await api.updateEmployee(viewingEmployee.emp_no, { [key]: value });
+
+      if (response.success) {
+        // Update the employees list
+        setEmployees(prev => prev.map(emp => emp.emp_no === viewingEmployee.emp_no ? { ...emp, [key]: value } : emp));
+      } else {
+        // Rollback
+        setViewingEmployee(viewingEmployee);
+        // await alertError('Failed to update', response.message || 'Failed to update deduction preference'); // Reverted to original error handling
+        setError(response.message || 'Failed to update deduction preference');
+      }
+    } catch (err: any) {
+      setViewingEmployee(viewingEmployee);
+      // await alertError('Error', err.message || 'An error occurred'); // Reverted to original error handling
+      setError(err.message || 'An error occurred');
+      console.error(err);
+    }
+  };
+
   const handleViewEmployee = async (employee: Employee) => {
     setViewingEmployee(employee);
     setShowViewDialog(true);
@@ -1774,7 +1841,7 @@ export default function EmployeesPage() {
 
   const openCreateDialog = () => {
     setEditingEmployee(null);
-    setFormData(initialFormState);
+    setFormData(initialFormStateWithDefaults);
     setComponentDefaults({ allowances: [], deductions: [] });
     setOverrideAllowances({});
     setOverrideDeductions({});
@@ -1996,13 +2063,25 @@ export default function EmployeesPage() {
         employeeDeductions: buildOverridePayload(approvalComponentDefaults.deductions, approvalOverrideDeductions, approvalOverrideDeductionsBasedOnPresentDays, 'deduction'),
         ctcSalary: approvalSalarySummary.ctcSalary,
         calculatedSalary: approvalSalarySummary.netSalary,
+        applyPF: (approvalData as any).applyPF,
+        applyESI: (approvalData as any).applyESI,
+        applyProfessionTax: (approvalData as any).applyProfessionTax,
+        applyAttendanceDeduction: (approvalData as any).applyAttendanceDeduction,
+        deductLateIn: (approvalData as any).deductLateIn,
+        deductEarlyOut: (approvalData as any).deductEarlyOut,
+        deductPermission: (approvalData as any).deductPermission,
+        deductAbsent: (approvalData as any).deductAbsent,
       });
 
       if (response.success) {
         setSuccess(response.message || 'Salary approved and employee finalized successfully!');
         setShowApprovalDialog(false);
         setSelectedApplication(null);
-        setApprovalData({ approvedSalary: 0, doj: '', comments: '' });
+        setApprovalData({
+          approvedSalary: 0,
+          doj: '',
+          comments: ''
+        });
         loadApplications();
         loadEmployees(); // Reload employees list
       } else {
@@ -2029,7 +2108,11 @@ export default function EmployeesPage() {
         setSuccess('Application rejected successfully!');
         setShowApprovalDialog(false);
         setSelectedApplication(null);
-        setApprovalData({ approvedSalary: 0, doj: '', comments: '' });
+        setApprovalData({
+          approvedSalary: 0,
+          doj: '',
+          comments: ''
+        });
         loadApplications();
       } else {
         setError(response.message || 'Failed to reject application');
@@ -2060,6 +2143,17 @@ export default function EmployeesPage() {
       doj: dojValue,
       comments: '',
     });
+    setFormData(prev => ({
+      ...prev,
+      applyPF: (application as any).applyPF ?? defaultStatutory,
+      applyESI: (application as any).applyESI ?? defaultStatutory,
+      applyProfessionTax: (application as any).applyProfessionTax ?? defaultStatutory,
+      applyAttendanceDeduction: (application as any).applyAttendanceDeduction ?? defaultAttendance,
+      deductLateIn: (application as any).deductLateIn ?? defaultAttendance,
+      deductEarlyOut: (application as any).deductEarlyOut ?? defaultAttendance,
+      deductPermission: (application as any).deductPermission ?? defaultAttendance,
+      deductAbsent: (application as any).deductAbsent ?? defaultAttendance,
+    }));
     setApprovalComponentDefaults({ allowances: [], deductions: [] });
     setApprovalOverrideAllowances({});
     setApprovalOverrideDeductions({});
@@ -2075,7 +2169,7 @@ export default function EmployeesPage() {
   };
 
   const openApplicationDialog = () => {
-    setApplicationFormData({ ...initialFormState, proposedSalary: 0 });
+    setApplicationFormData({ ...initialFormStateWithDefaults, proposedSalary: 0 });
     setComponentDefaults({ allowances: [], deductions: [] });
     setOverrideAllowances({});
     setOverrideDeductions({});
@@ -2222,17 +2316,29 @@ export default function EmployeesPage() {
   const getScopedDepartments = (selectedDivisionId: string) => {
     // Start with departments belonging to the selected division
     const eligibleDepts = departments.filter(d => {
-      if (!selectedDivisionId) return true; // Should ideally wait for division selection
-      // Check if department belongs to division (assuming backend provides this link, 
-      // but typically we filter by checking if the dept has the division in its 'divisions' array
-      // OR if the division has this dept. 
-      // The `divisions` object has `departments` array.
+      if (!selectedDivisionId) return true;
+
+      // Check if department belongs to division
+      // 1. Check division's departments array
       const div = divisions.find(dv => dv._id === selectedDivisionId);
       if (div && div.departments) {
         const divDeptIds = div.departments.map((dd: any) => typeof dd === 'string' ? dd : dd._id);
-        return divDeptIds.includes(d._id);
+        if (divDeptIds.includes(d._id)) return true;
       }
-      return true; // Fallback if no linking found? Or strict false?
+
+      // 2. Fallback: check department's divisions array
+      if ((d as any).divisions) {
+        const deptDivIds = (d as any).divisions.map((dv: any) => typeof dv === 'string' ? dv : dv._id);
+        if (deptDivIds.includes(selectedDivisionId)) return true;
+      }
+
+      // 3. Fallback: check department's division_id (if it's a single assignment)
+      if ((d as any).division_id) {
+        const dDivId = typeof (d as any).division_id === 'string' ? (d as any).division_id : (d as any).division_id._id;
+        if (dDivId === selectedDivisionId) return true;
+      }
+
+      return false;
     });
 
     if (!currentUser || currentUser.dataScope === 'all') return eligibleDepts;
@@ -2273,6 +2379,37 @@ export default function EmployeesPage() {
   const user = auth.getUser();
   const hasViewPermission = userForPermissions ? canViewEmployees(userForPermissions as any) : false;
   const hasManagePermission = userForPermissions ? canEditEmployee(userForPermissions as any) : false; // Write permission for ALL actions
+
+  const handleSubmitBankUpdate = async (bankFormData: any) => {
+    if (!viewingEmployee) return;
+
+    setSubmittingBankUpdate(true);
+    try {
+      const res = await api.createEmployeeUpdateRequest({
+        requestedChanges: bankFormData,
+        comments: 'Bank detail update request',
+        type: 'bank',
+        employeeId: viewingEmployee._id
+      });
+
+      if (res.success) {
+        setSuccess('Bank detail update request submitted successfully. It will be applied after Superadmin approval.');
+        setShowBankUpdateDialog(false);
+        Swal.fire({
+          title: 'Submitted!',
+          text: 'Bank detail update request has been submitted for approval.',
+          icon: 'success',
+          confirmButtonColor: '#4f46e5',
+        });
+      } else {
+        setError(res.error || 'Failed to submit bank update request.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred.');
+    } finally {
+      setSubmittingBankUpdate(false);
+    }
+  };
 
   const RenderFilterHeader = ({
     label,
@@ -2624,6 +2761,12 @@ export default function EmployeesPage() {
                   <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Division</th>
                   {!hideDepartmentColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Department</th>}
                   {activeTab === 'employees' && !hideDesignationColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Designation</th>}
+                  {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
+                    <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
+                  )}
+                  {activeTab === 'employees' && (
+                    <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Cert Status</th>
+                  )}
                   {activeTab === 'applications' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
                   <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Status</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest text-text-secondary">Actions</th>
@@ -2639,7 +2782,14 @@ export default function EmployeesPage() {
                     </td>
                     <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
                     {!hideDepartmentColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
-                    <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
+                    {activeTab === 'employees' && !hideDesignationColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
+                    {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
+                      <td className="px-6 py-4"><div className="h-4 w-20 rounded bg-bg-base" /></td>
+                    )}
+                    {activeTab === 'employees' && (
+                      <td className="px-6 py-4"><div className="h-4 w-20 rounded bg-bg-base" /></td>
+                    )}
+                    {activeTab === 'applications' && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
                     <td className="px-6 py-4"><div className="h-6 w-16 rounded-full bg-bg-base" /></td>
                     <td className="px-6 py-4 text-right"><div className="ml-auto h-8 w-24 rounded bg-bg-base" /></td>
                   </tr>
@@ -2681,7 +2831,10 @@ export default function EmployeesPage() {
                       <RenderFilterHeader
                         label="Division"
                         filterKey="division.name"
-                        options={Array.from(new Set(employees.map(e => e.division?.name || (e.division_id as any)?.name).filter((x) => !!x))) as string[]}
+                        options={Array.from(new Set(employees.map(e => {
+                          const div = divisions.find(d => d._id === (e.division_id || e.division?._id));
+                          return div?.name || e.division?.name || (e.division_id as any)?.name;
+                        }).filter((x) => !!x))) as string[]}
                         currentFilters={employeeFilters}
                         setFilters={setEmployeeFilters}
                       />
@@ -2689,7 +2842,10 @@ export default function EmployeesPage() {
                         <RenderFilterHeader
                           label="Department"
                           filterKey="department.name"
-                          options={Array.from(new Set(employees.map(e => e.department?.name || (e.department_id as any)?.name).filter((x) => !!x))) as string[]}
+                          options={Array.from(new Set(employees.map(e => {
+                            const dept = departments.find(d => d._id === (e.department_id || e.department?._id));
+                            return dept?.name || e.department?.name || (e.department_id as any)?.name;
+                          }).filter((x) => !!x))) as string[]}
                           currentFilters={employeeFilters}
                           setFilters={setEmployeeFilters}
                         />
@@ -2698,7 +2854,22 @@ export default function EmployeesPage() {
                         <RenderFilterHeader
                           label="Designation"
                           filterKey="designation.name"
-                          options={Array.from(new Set(employees.map(e => e.designation?.name || (e.designation_id as any)?.name).filter((x) => !!x))) as string[]}
+                          options={Array.from(new Set(employees.map(e => {
+                            const desig = designations.find(d => d._id === (e.designation_id || e.designation?._id));
+                            return desig?.name || e.designation?.name || (e.designation_id as any)?.name;
+                          }).filter((x) => !!x))) as string[]}
+                          currentFilters={employeeFilters}
+                          setFilters={setEmployeeFilters}
+                        />
+                      )}
+                      {userRole !== 'hod' && userRole !== 'employee' && (
+                        <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
+                      )}
+                      {userRole !== 'hod' && userRole !== 'employee' && (
+                        <RenderFilterHeader
+                          label="Cert Status"
+                          filterKey="qualificationStatus"
+                          options={Array.from(new Set(employees.map(e => e.qualificationStatus).filter((x) => !!x))) as string[]}
                           currentFilters={employeeFilters}
                           setFilters={setEmployeeFilters}
                         />
@@ -2758,6 +2929,24 @@ export default function EmployeesPage() {
                         {!hideDesignationColumn && (
                           <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                             {employee.designation?.name || '-'}
+                          </td>
+                        )}
+                        {userRole !== 'hod' && userRole !== 'employee' && (
+                          <td className="whitespace-nowrap px-6 py-4 text-xs font-black text-text-primary">
+                            {employee.gross_salary ? `₹${employee.gross_salary.toLocaleString()}` : '-'}
+                          </td>
+                        )}
+                        {userRole !== 'hod' && userRole !== 'employee' && (
+                          <td className="whitespace-nowrap px-6 py-4">
+                            <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${employee.qualificationStatus === 'verified'
+                              ? 'bg-status-positive/10 text-status-positive'
+                              : employee.qualificationStatus === 'pending'
+                                ? 'bg-status-warning/10 text-status-warning'
+                                : 'bg-text-secondary/10 text-text-secondary'
+                              }`}>
+                              {employee.qualificationStatus === 'verified' ? <CheckCircle className="w-3 h-3" /> : <LucideClock className="w-3 h-3" />}
+                              {employee.qualificationStatus || 'Not Uploaded'}
+                            </span>
                           </td>
                         )}
                         <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
@@ -2989,8 +3178,26 @@ export default function EmployeesPage() {
                     )}
                     {employee.phone_number && (
                       <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-                        <span className="font-medium">Phone:</span>
                         <span className="font-bold">{employee.phone_number}</span>
+                      </div>
+                    )}
+                    {userRole !== 'hod' && userRole !== 'employee' && employee.gross_salary && (
+                      <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                        <span className="font-medium">Gross Salary:</span>
+                        <span className="font-black text-text-primary">₹{employee.gross_salary.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {userRole !== 'hod' && userRole !== 'employee' && (
+                      <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                        <span className="font-medium">Cert Status:</span>
+                        <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider ${employee.qualificationStatus === 'verified'
+                          ? 'bg-status-positive/10 text-status-positive'
+                          : employee.qualificationStatus === 'pending'
+                            ? 'bg-status-warning/10 text-status-warning'
+                            : 'bg-text-secondary/10 text-text-secondary'
+                          }`}>
+                          {employee.qualificationStatus || 'Not Uploaded'}
+                        </span>
                       </div>
                     )}
                     {employee.leftDate && (
@@ -3220,18 +3427,24 @@ export default function EmployeesPage() {
                         <RenderFilterHeader
                           label="Division"
                           filterKey="division.name"
-                          options={Array.from(new Set(pendingApplications.map(a => (a as any).division?.name || (a.division_id as any)?.name).filter((x) => !!x))) as string[]}
+                          options={Array.from(new Set(pendingApplications.map(a => {
+                            const div = divisions.find(d => d._id === (a.division_id || (a as any).division?._id));
+                            return div?.name || (a as any).division?.name || (a.division_id as any)?.name;
+                          }).filter((x) => !!x))) as string[]}
                           currentFilters={applicationFilters}
                           setFilters={setApplicationFilters}
                         />
                         <RenderFilterHeader
                           label="Department"
                           filterKey="department.name"
-                          options={Array.from(new Set(pendingApplications.map(a => a.department?.name || (a.department_id as any)?.name).filter((x) => !!x))) as string[]}
+                          options={Array.from(new Set(pendingApplications.map(a => {
+                            const dept = departments.find(d => d._id === (a.department_id || a.department?._id));
+                            return dept?.name || a.department?.name || (a.department_id as any)?.name;
+                          }).filter((x) => !!x))) as string[]}
                           currentFilters={applicationFilters}
                           setFilters={setApplicationFilters}
                         />
-                        {userRole !== 'hod' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
+                        {userRole !== 'hod' && userRole !== 'employee' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
                         <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Created By</th>
                         <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest text-text-secondary">Actions</th>
                       </tr>
@@ -3269,7 +3482,7 @@ export default function EmployeesPage() {
                             <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                               {app.department?.name || (app.department_id as { name?: string })?.name || '-'}
                             </td>
-                            {userRole !== 'hod' && (
+                            {userRole !== 'hod' && userRole !== 'employee' && (
                               <td className="whitespace-nowrap px-6 py-4 text-sm font-black text-text-primary">
                                 ₹{app.proposedSalary.toLocaleString()}
                               </td>
@@ -3340,7 +3553,7 @@ export default function EmployeesPage() {
                                 <span className="font-bold">{app.department?.name || (app.department_id as { name?: string })?.name}</span>
                               </div>
                             )}
-                            {userRole !== 'hod' && (
+                            {userRole !== 'hod' && userRole !== 'employee' && (
                               <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                                 <span className="font-medium">Salary:</span>
                                 <span className="font-bold text-text-primary">₹{app.proposedSalary.toLocaleString()}</span>
@@ -3565,8 +3778,8 @@ export default function EmployeesPage() {
                                       min="0"
                                       step="0.01"
                                       value={current === null ? '' : current}
-                                      onChange={(e) => handleOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -3631,8 +3844,8 @@ export default function EmployeesPage() {
                                       min="0"
                                       step="0.01"
                                       value={current === null ? '' : current}
-                                      onChange={(e) => handleOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -3664,6 +3877,74 @@ export default function EmployeesPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Deduction Preferences */}
+                <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                  <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    {/* Statutory Deductions */}
+                    <div>
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                      <div className="space-y-3">
+                        {[
+                          { id: 'applyPF', label: 'PF' },
+                          { id: 'applyESI', label: 'ESI' },
+                          { id: 'applyProfessionTax', label: 'Profession Tax' }
+                        ].map((pref) => (
+                          <label 
+                            key={pref.id} 
+                            title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                            className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
+                          >
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                            <div
+                              onClick={() => {
+                                if (!hasManagePermission) return;
+                                const newVal = !((applicationFormData as any)[pref.id] ?? true);
+                                setApplicationFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                              }}
+                              className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                            >
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((applicationFormData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Attendance Deductions */}
+                    <div>
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                      <div className="space-y-3">
+                        {[
+                          { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                          { id: 'deductLateIn', label: 'Late-ins' },
+                          { id: 'deductEarlyOut', label: 'Early-outs' },
+                          { id: 'deductPermission', label: 'Permission' },
+                          { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                        ].map((pref) => (
+                          <label 
+                            key={pref.id} 
+                            title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                            className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
+                          >
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                            <div
+                              onClick={() => {
+                                if (!hasManagePermission) return;
+                                const newVal = !((applicationFormData as any)[pref.id] ?? true);
+                                setApplicationFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                              }}
+                              className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((applicationFormData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                            >
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((applicationFormData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Actions */}
                 <div className="flex gap-3 pt-2">
@@ -3869,10 +4150,11 @@ export default function EmployeesPage() {
                           type="number"
                           value={approvalData.approvedSalary || ''}
                           onChange={(e) => setApprovalData({ ...approvalData, approvedSalary: Number(e.target.value) })}
+                          onWheel={(e) => e.currentTarget.blur()}
                           required
                           min="0"
                           step="0.01"
-                          className="w-full rounded-xl border-2 border-green-400 bg-white px-4 py-2.5 text-lg font-semibold transition-all focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 dark:border-green-600 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border-2 border-green-400 bg-white px-4 py-2.5 text-lg font-semibold transition-all focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 dark:border-green-600 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                           placeholder="Enter approved salary"
                         />
                         {approvalData.approvedSalary !== selectedApplication.proposedSalary && (
@@ -3891,9 +4173,10 @@ export default function EmployeesPage() {
                           type="number"
                           value={(approvalData as any).second_salary || ''}
                           onChange={(e) => setApprovalData({ ...approvalData, second_salary: Number(e.target.value) } as any)}
+                          onWheel={(e) => e.currentTarget.blur()}
                           min="0"
                           step="0.01"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold transition-all focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                           placeholder="Enter second salary if any"
                         />
                         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -4002,7 +4285,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleApprovalOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4068,7 +4352,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleApprovalOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4100,6 +4385,64 @@ export default function EmployeesPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Deduction Preferences */}
+                <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                  <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    {/* Statutory Deductions */}
+                    <div>
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                      <div className="space-y-3">
+                        {[
+                          { id: 'applyPF', label: 'PF' },
+                          { id: 'applyESI', label: 'ESI' },
+                          { id: 'applyProfessionTax', label: 'Profession Tax' }
+                        ].map((pref) => (
+                          <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                            <div
+                              onClick={() => {
+                                const newVal = !((approvalData as any)[pref.id] ?? true);
+                                setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                              }}
+                              className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                            >
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Attendance Deductions */}
+                    <div>
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                      <div className="space-y-3">
+                        {[
+                          { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                          { id: 'deductLateIn', label: 'Late-ins' },
+                          { id: 'deductEarlyOut', label: 'Early-outs' },
+                          { id: 'deductPermission', label: 'Permission' },
+                          { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                        ].map((pref) => (
+                          <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                            <div
+                              onClick={() => {
+                                const newVal = !((approvalData as any)[pref.id] ?? true);
+                                setApprovalData(prev => ({ ...prev, [pref.id]: newVal }));
+                              }}
+                              className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((approvalData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                            >
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((approvalData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Comments */}
                 <div>
@@ -4254,9 +4597,10 @@ export default function EmployeesPage() {
                         name="paidLeaves"
                         value={formData.paidLeaves ?? 0}
                         onChange={handleInputChange}
+                        onWheel={(e) => e.currentTarget.blur()}
                         min="0"
                         step="0.5"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                         placeholder="0"
                       />
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -4272,9 +4616,10 @@ export default function EmployeesPage() {
                         name="allottedLeaves"
                         value={formData.allottedLeaves ?? 0}
                         onChange={handleInputChange}
+                        onWheel={(e) => e.currentTarget.blur()}
                         min="0"
                         step="0.5"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner"
                         placeholder="0"
                       />
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -4372,7 +4717,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('allowance', item, e.target.value)}
-                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-green-200 bg-white px-2 py-1 text-[11px] text-green-900 focus:border-green-400 focus:outline-none dark:border-green-800 dark:bg-green-950 dark:text-green-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4438,7 +4784,8 @@ export default function EmployeesPage() {
                                       step="0.01"
                                       value={current === null ? '' : current}
                                       onChange={(e) => handleOverrideChange('deduction', item, e.target.value)}
-                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-green-950 dark:text-green-100"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      className="w-24 rounded border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 focus:border-red-400 focus:outline-none dark:border-red-800 dark:bg-red-950 dark:text-red-100 no-spinner"
                                     />
                                   </div>
                                 </div>
@@ -4529,18 +4876,26 @@ export default function EmployeesPage() {
                     const div = divisions.find(d => d.name.toLowerCase().trim() === rowDivName.toLowerCase());
                     if (!div) return [];
 
-                    // Prefer division.departments (populated by API) so dropdown shows departments correctly
-                    const divDepts = (div as any).departments;
-                    if (divDepts && Array.isArray(divDepts) && divDepts.length > 0) {
-                      return divDepts.map((d: any) => ({
-                        value: typeof d === 'object' && d?.name ? d.name : (departments.find(dept => dept._id === (typeof d === 'string' ? d : d._id))?.name || String(d)),
-                        label: typeof d === 'object' && d?.name ? d.name : (departments.find(dept => dept._id === (typeof d === 'string' ? d : d._id))?.name || String(d))
-                      }));
-                    }
-                    // Fallback: filter departments by department.divisions containing this division
-                    return departments
-                      .filter(dept => (dept as any).divisions?.some((d: any) => String(typeof d === 'string' ? d : d._id) === String(div._id)))
-                      .map(d => ({ value: d.name, label: d.name }));
+                    // Mirror the robust logic from getScopedDepartments
+                    return departments.filter(d => {
+                      // 1. Check division's departments array
+                      if (div.departments) {
+                        const divDeptIds = div.departments.map((dd: any) => typeof dd === 'string' ? dd : dd._id);
+                        if (divDeptIds.includes(d._id)) return true;
+                      }
+
+                      // 2. Check department's divisions array
+                      if ((d as any).divisions) {
+                        const deptDivIds = (d as any).divisions.map((dv: any) => typeof dv === 'string' ? dv : dv._id);
+                        if (deptDivIds.includes(div._id)) return true;
+                      }
+
+                      // 3. Check department's division_id
+                      const dDivId = (d as any).division_id?._id || (d as any).division_id;
+                      if (dDivId && String(dDivId) === String(div._id)) return true;
+
+                      return false;
+                    }).map(d => ({ value: d.name, label: d.name }));
                   }
                 };
               }
@@ -4745,15 +5100,13 @@ export default function EmployeesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {hasManagePermission && (
+                  {hasBankUpdatePermission && (
                     <button
-                      onClick={() => {
-                        setShowViewDialog(false);
-                        handleEdit(viewingEmployee);
-                      }}
-                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400"
+                      type="button"
+                      onClick={() => setShowBankUpdateDialog(true)}
+                      className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-black uppercase tracking-widest text-indigo-700 transition hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/20 dark:text-slate-400"
                     >
-                      Edit
+                      Update Bank Details
                     </button>
                   )}
                   <button
@@ -4797,6 +5150,16 @@ export default function EmployeesPage() {
                       <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Designation</label>
                       <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.designation?.name || '-'}</p>
                     </div>
+                    {userRole !== 'hod' && userRole !== 'employee' && (
+                      <>
+                        <div>
+                          <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Certificate Status</label>
+                          <p className={`mt-1 text-sm font-bold ${viewingEmployee.qualificationStatus === 'verified' ? 'text-green-600' : viewingEmployee.qualificationStatus === 'pending' ? 'text-orange-500' : 'text-slate-600'}`}>
+                            {viewingEmployee.qualificationStatus || 'Not Uploaded'}
+                          </p>
+                        </div>
+                      </>
+                    )}
                     <div>
                       <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Date of Joining</label>
                       <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.doj ? new Date(viewingEmployee.doj).toLocaleDateString() : '-'}</p>
@@ -5000,30 +5363,39 @@ export default function EmployeesPage() {
                     <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
                       Controls which statutory and attendance deductions apply to this employee during payroll. Disabled items are not calculated (amount 0).
                     </p>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                       <div>
-                        <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Statutory</p>
-                        <div className="space-y-2">
+                        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Statutory</p>
+                        <div className="space-y-3">
                           {[
                             { key: 'applyProfessionTax', label: 'Profession Tax' },
                             { key: 'applyESI', label: 'ESI' },
                             { key: 'applyPF', label: 'PF' },
                           ].map(({ key, label }) => {
-                            const enabled = (viewingEmployee as any)[key] !== false;
+                            const isEnabled = (viewingEmployee as any)[key] !== false;
                             return (
-                              <div key={key} className="flex items-center justify-between">
-                                <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
-                                  {enabled ? 'Enabled' : 'Disabled'}
-                                </span>
+                              <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                <button
+                                  onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                  disabled={!hasManagePermission}
+                                  title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                    } ${!hasManagePermission ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                      }`}
+                                  />
+                                </button>
                               </div>
                             );
                           })}
                         </div>
                       </div>
                       <div>
-                        <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Attendance deduction</p>
-                        <div className="space-y-2">
+                        <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Attendance deduction</p>
+                        <div className="space-y-3">
                           {[
                             { key: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
                             { key: 'deductLateIn', label: 'Late-ins' },
@@ -5031,13 +5403,22 @@ export default function EmployeesPage() {
                             { key: 'deductPermission', label: 'Permission' },
                             { key: 'deductAbsent', label: 'Absents (extra LOP)' },
                           ].map(({ key, label }) => {
-                            const enabled = (viewingEmployee as any)[key] !== false;
+                            const isEnabled = (viewingEmployee as any)[key] !== false;
                             return (
-                              <div key={key} className="flex items-center justify-between">
-                                <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
-                                  {enabled ? 'Enabled' : 'Disabled'}
-                                </span>
+                              <div key={key} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+                                <button
+                                  onClick={() => handleToggleDeductionPreference(key, !isEnabled)}
+                                  disabled={!hasManagePermission}
+                                  title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
+                                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'
+                                    } ${!hasManagePermission ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-6' : 'translate-x-1'
+                                      }`}
+                                  />
+                                </button>
                               </div>
                             );
                           })}
@@ -5459,15 +5840,21 @@ export default function EmployeesPage() {
                   </div>
                   <div>
                     <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Division</label>
-                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">{(viewingApplication.division_id as any)?.name || (viewingApplication as any).division?.name || '-'}</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">
+                      {divisions.find(d => d._id === (getEntityId(viewingApplication.division_id) || getEntityId((viewingApplication as any).division)))?.name || (viewingApplication.division_id as any)?.name || (viewingApplication as any).division?.name || '-'}
+                    </p>
                   </div>
                   <div>
                     <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Department</label>
-                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">{(viewingApplication.department_id as any)?.name || viewingApplication.department?.name || '-'}</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">
+                      {departments.find(d => d._id === (getEntityId(viewingApplication.department_id) || getEntityId((viewingApplication as any).department)))?.name || (viewingApplication.department_id as any)?.name || (viewingApplication as any).department?.name || '-'}
+                    </p>
                   </div>
                   <div>
                     <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Designation</label>
-                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">{(viewingApplication.designation_id as any)?.name || viewingApplication.designation?.name || '-'}</p>
+                    <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">
+                      {designations.find(d => d._id === (getEntityId(viewingApplication.designation_id) || getEntityId((viewingApplication as any).designation)))?.name || (viewingApplication.designation_id as any)?.name || (viewingApplication as any).designation?.name || '-'}
+                    </p>
                   </div>
                   {userRole !== 'hod' && (
                     <div>
@@ -5582,6 +5969,13 @@ export default function EmployeesPage() {
           </div>
         </div>
       )}
-    </div>
+        <BankUpdateDialog
+          isOpen={showBankUpdateDialog}
+          onClose={() => setShowBankUpdateDialog(false)}
+          employee={viewingEmployee}
+          onSubmit={handleSubmitBankUpdate}
+          submitting={submittingBankUpdate}
+        />
+      </div>
   );
 }

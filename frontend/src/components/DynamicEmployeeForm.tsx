@@ -265,15 +265,29 @@ export default function DynamicEmployeeForm({
       // Filter departments based on selected division if division_id is set
       let filteredDepartments = departments;
       if (formData.division_id) {
-        const selectedDivision = (divisions as any[]).find(d => d._id === formData.division_id);
-        if (selectedDivision && selectedDivision.departments) {
-          const linkedDeptIds = selectedDivision.departments.map((d: any) => typeof d === 'string' ? d : d._id);
-          filteredDepartments = departments.filter(d => linkedDeptIds.includes(d._id));
-        } else {
-          // If division is selected but has no departments linked, show nothing or all?
-          // Usually, if division is selected, we should restrict.
-          filteredDepartments = [];
-        }
+        const selDivId = String(formData.division_id?._id || formData.division_id);
+        const selectedDivision = (divisions as any[]).find(d => String(d._id) === selDivId);
+
+        // Mirror the robust logic from page.tsx to ensure consistency
+        filteredDepartments = departments.filter(d => {
+          // 1. Check division's departments array
+          if (selectedDivision?.departments) {
+            const divDeptIds = selectedDivision.departments.map((dd: any) => typeof dd === 'string' ? dd : dd._id);
+            if (divDeptIds.includes(d._id)) return true;
+          }
+
+          // 2. Check department's divisions array
+          if ((d as any).divisions) {
+            const deptDivIds = (d as any).divisions.map((dv: any) => typeof dv === 'string' ? dv : dv._id);
+            if (deptDivIds.includes(selDivId)) return true;
+          }
+
+          // 3. Check department's division_id
+          const dDivId = (d as any).division_id?._id || (d as any).division_id;
+          if (dDivId && String(dDivId) === selDivId) return true;
+
+          return false;
+        });
       }
 
       return (
@@ -387,13 +401,14 @@ export default function DynamicEmployeeForm({
               type="number"
               value={value || ''}
               onChange={(e) => handleFieldChange(actualFieldId, parseFloat(e.target.value) || 0)}
+              onWheel={(e) => e.currentTarget.blur()}
               placeholder={field.placeholder}
               required={field.isRequired}
               min={field.validation?.min}
               max={field.validation?.max}
               step={field.id === 'proposedSalary' ? '0.01' : '1'}
               disabled={isViewMode}
-              className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
+              className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
                 }`}
             />
             {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
@@ -531,12 +546,13 @@ export default function DynamicEmployeeForm({
                                 const newItem = { ...item, [nestedField.id]: parseFloat(e.target.value) || 0 };
                                 handleArrayItemChange(field.id, index, newItem);
                               }}
+                              onWheel={(e) => e.currentTarget.blur()}
                               placeholder={nestedField.placeholder}
                               required={nestedField.isRequired}
                               min={nestedField.validation?.min}
                               max={nestedField.validation?.max}
                               disabled={isViewMode}
-                              className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${nestedError ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
+                              className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner ${nestedError ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
                                 }`}
                             />
                           ) : nestedField.type === 'select' ? (
@@ -572,9 +588,10 @@ export default function DynamicEmployeeForm({
                       const newValue = field.itemType === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
                       handleArrayItemChange(field.id, index, newValue);
                     }}
+                    onWheel={(e) => field.itemType === 'number' && e.currentTarget.blur()}
                     placeholder={field.placeholder}
                     disabled={isViewMode}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className={`w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${field.itemType === 'number' ? 'no-spinner' : ''}`}
                   />
                 )}
               </div>
@@ -755,12 +772,13 @@ export default function DynamicEmployeeForm({
                               [nestedField.id]: parseFloat(e.target.value) || 0,
                             });
                           }}
+                          onWheel={(e) => e.currentTarget.blur()}
                           placeholder={nestedField.placeholder}
                           required={nestedField.isRequired}
                           min={nestedField.validation?.min}
                           max={nestedField.validation?.max}
                           disabled={isViewMode}
-                          className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${nestedError ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
+                          className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 no-spinner ${nestedError ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
                             }`}
                         />
                       ) : nestedField.type === 'date' ? (
@@ -995,7 +1013,7 @@ export default function DynamicEmployeeForm({
     }
 
     const qualFields = settings.qualifications.fields
-      .filter((f) => f.isEnabled !== false)
+      .filter((f) => f.isEnabled !== false && f.id !== 's_no')
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
     if (qualFields.length === 0) {
@@ -1072,8 +1090,8 @@ export default function DynamicEmployeeForm({
     const renderQualificationValueSpan = (value: any, field: QualificationsField) => {
       const display =
         field.type === 'boolean' ? (value ? 'Yes' : 'No')
-        : field.type === 'date' && value && field.id === 'month_year_of_pass' ? String(value).slice(0, 7)
-        : value != null && value !== '' ? String(value) : '—';
+          : field.type === 'date' && value && field.id === 'month_year_of_pass' ? String(value).slice(0, 7)
+            : value != null && value !== '' ? String(value) : '—';
       return <span className="text-slate-700 dark:text-slate-300">{display}</span>;
     };
 

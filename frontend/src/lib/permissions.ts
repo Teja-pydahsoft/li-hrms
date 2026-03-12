@@ -81,6 +81,8 @@ export const PAGE_PERMISSIONS: Record<string, UserRole[]> = {
     '/confused-shifts': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/holidays': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
     '/resignations': ['sub_admin', 'hr', 'hod', 'manager', 'employee'],
+    '/divisions': ['sub_admin', 'hr'],
+    '/employee-updates': ['sub_admin', 'hr'],
     '/superadmin/holidays': ['sub_admin', 'hr', 'manager'],
     '/superadmin/manual-deductions': ['sub_admin', 'hr', 'super_admin'],
 };
@@ -249,6 +251,30 @@ export function canViewDepartmentSettings(user: User): boolean {
 
 export function canManageDepartmentSettings(user: User): boolean {
     return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTAL_SETTINGS');
+}
+
+// ==========================================
+// DIVISION MANAGEMENT PERMISSIONS
+// ==========================================
+
+export function canViewDivisions(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr']) && canViewFeature(user, 'DIVISIONS');
+}
+
+export function canManageDivisions(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr']) && canManageFeature(user, 'DIVISIONS');
+}
+
+// ==========================================
+// EMPLOYEE UPDATES PERMISSIONS
+// ==========================================
+
+export function canViewEmployeeUpdates(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr']) && canViewFeature(user, 'EMPLOYEE_UPDATES');
+}
+
+export function canManageEmployeeUpdates(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr']) && canManageFeature(user, 'EMPLOYEE_UPDATES');
 }
 
 // ==========================================
@@ -459,6 +485,25 @@ export function canVerifyFeature(user: User, featureCode: string): boolean {
 
     return user.featureControl.includes(featureCode) ||
         user.featureControl.includes(`${featureCode}:verify`);
+}
+
+/**
+ * Check if user has BANK permission for a feature.
+ * Must be explicitly granted with 'feature:bank'.
+ */
+export function canBankUpdateFeature(user: User, featureCode: string): boolean {
+    if (!user) return false;
+    if (!user.featureControl || user.featureControl.length === 0) return true; // Default allow if empty (legacy/role-based)
+
+    return user.featureControl.includes(featureCode) ||
+        user.featureControl.includes(`${featureCode}:bank`);
+}
+
+/**
+ * Specifically for bank details update workflow
+ */
+export function canUpdateBankDetails(user: User): boolean {
+    return hasAnyRole(user, ['sub_admin', 'hr', 'manager']) && canBankUpdateFeature(user, 'EMPLOYEES');
 }
 
 // ==========================================

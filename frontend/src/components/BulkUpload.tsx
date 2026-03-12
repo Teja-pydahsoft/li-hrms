@@ -527,10 +527,11 @@ export default function BulkUpload({
                                             col.type === 'number' ? (e.target.value ? Number(e.target.value) : null) : e.target.value
                                           )
                                         }
+                                        onWheel={(e) => col.type === 'number' && e.currentTarget.blur()}
                                         className={`w-full rounded-lg border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-1 ${cellError
                                           ? 'border-red-400 focus:border-red-400 focus:ring-red-400'
                                           : 'border-slate-200 focus:border-blue-400 focus:ring-blue-400 dark:border-slate-700'
-                                          } dark:bg-slate-900 dark:text-slate-100`}
+                                          } dark:bg-slate-900 dark:text-slate-100 ${col.type === 'number' ? 'no-spinner' : ''}`}
                                       />
                                     )}
                                     {cellError && (

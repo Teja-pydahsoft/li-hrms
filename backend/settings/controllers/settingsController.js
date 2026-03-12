@@ -35,13 +35,18 @@ exports.getSetting = async (req, res) => {
   try {
     const setting = await Settings.findOne({ key: req.params.key });
 
-        if (!setting) {
+    if (!setting) {
       // Return default values for known payroll settings to avoid 404 errors on first load
       const defaults = {
         'include_missing_employee_components': true,
         'enable_absent_deduction': false,
         'lop_days_per_absent': 1,
-        'allow_employee_bulk_process': false
+        'allow_employee_bulk_process': false,
+        'payroll_cycle_start_day': '1',
+        'payroll_cycle_end_day': '31'
+        'qualification_statuses': ['Partial', 'Not Certified', 'Certified'],
+        'default_apply_statutory_deductions': true,
+        'default_apply_attendance_deductions': true,
       };
 
       if (defaults[req.params.key] !== undefined) {

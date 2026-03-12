@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/auth';
 import Spinner from '@/components/Spinner';
-import { User, Mail, Phone, Briefcase, Calendar, Shield, Key, Building, MapPin } from 'lucide-react';
+import { User, Mail, Phone, Briefcase, Calendar, Shield, Key, Building, MapPin, X, RefreshCw, AlertTriangle, Check, Clock } from 'lucide-react';
 
 interface UserProfile {
   _id: string;
@@ -61,6 +61,14 @@ export default function ProfilePage() {
   // Toast notifications
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // Profile Update Request state
+  const [updateConfig, setUpdateConfig] = useState<any>(null);
+  const [formGroups, setFormGroups] = useState<any[]>([]);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestedChanges, setRequestedChanges] = useState<any>({});
+  const [requestComments, setRequestComments] = useState('');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+
   useEffect(() => {
     fetchUserProfile();
   }, []);
@@ -101,6 +109,64 @@ export default function ProfilePage() {
       setToast({ type: 'error', message: 'Failed to load profile' });
     } finally {
       setLoading(false);
+    }
+
+    // Fetch Profile Update Configuration
+    try {
+      const configRes = await api.getSetting('profile_update_request_config');
+      if (configRes.success && configRes.data) {
+        setUpdateConfig(configRes.data.value);
+      }
+
+      const formRes = await api.getFormSettings();
+      if (formRes.success && formRes.data) {
+        setFormGroups(formRes.data.groups);
+      }
+    } catch (err) {
+      console.error('Error fetching update config:', err);
+    }
+  };
+
+  const handleSubmitUpdateRequest = async () => {
+    if (Object.keys(requestedChanges).length === 0) {
+      setToast({ type: 'error', message: 'No changes requested' });
+      return;
+    }
+
+    setSubmittingRequest(true);
+    // Filter only fields that have actually changed
+    const filteredChanges: any = {};
+    Object.keys(requestedChanges).forEach(key => {
+      const currentValue = (user as any)?.[key] || (employee as any)?.[key] || (employee as any)?.dynamicFields?.[key];
+      // Compare as strings to handle null/undefined/empty string cases simply
+      if (String(requestedChanges[key] || '') !== String(currentValue || '')) {
+        filteredChanges[key] = requestedChanges[key];
+      }
+    });
+
+    if (Object.keys(filteredChanges).length === 0) {
+      setToast({ type: 'error', message: 'Please modify at least one field to request an update.' });
+      setSubmittingRequest(false);
+      return;
+    }
+
+    try {
+      const response = await api.createEmployeeUpdateRequest({
+        requestedChanges: filteredChanges,
+        comments: requestComments
+      });
+      if (response.success) {
+        setToast({ type: 'success', message: 'Update request submitted successfully' });
+        setShowRequestModal(false);
+        setRequestedChanges({});
+        setRequestComments('');
+      } else {
+        setToast({ type: 'error', message: response.message || 'Failed to submit request' });
+      }
+    } catch (error: any) {
+      setToast({ type: 'error', message: error.message || 'Failed to submit request' });
+    } finally {
+      setSubmittingRequest(false);
     }
   };
 
@@ -387,14 +453,15 @@ export default function ProfilePage() {
                     <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                       Personal Information
                     </h3>
-                    {!isEditing ? (
+                    {!isEditing && user.role !== 'employee' && (
                       <button
                         onClick={() => setIsEditing(true)}
                         className="text-sm font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-lg transition-colors"
                       >
                         Edit Details
                       </button>
-                    ) : (
+                    )}
+                    {isEditing && (
                       <div className="flex gap-2">
                         <button
                           onClick={() => {
@@ -492,9 +559,32 @@ export default function ProfilePage() {
               {/* EMPLOYMENT TAB */}
               {activeTab === 'employment' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 animate-in fade-in zoom-in-95 duration-300">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-8">
-                    Employment Records
-                  </h3>
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                      Employment Records
+                    </h3>
+                    {user.role === 'employee' && updateConfig?.enabled && (
+                      <button
+                        onClick={() => {
+                          // Pre-fill requestedChanges with current values
+                          const initialChanges: any = {};
+                          updateConfig.requestableFields.forEach((fieldId: string) => {
+                            const value = (user as any)?.[fieldId] || (employee as any)?.[fieldId] || (employee as any)?.dynamicFields?.[fieldId];
+                            if (value !== undefined) initialChanges[fieldId] = value;
+                          });
+                          if (updateConfig.allowQualifications && employee?.blood_group) {
+                            // Qualifications handles specially
+                          }
+                          setRequestedChanges(initialChanges);
+                          setShowRequestModal(true);
+                        }}
+                        className="text-sm font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-4 py-2 rounded-lg transition-colors border border-emerald-100 flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        Request Update
+                      </button>
+                    )}
+                  </div>
 
                   {employee ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
@@ -540,6 +630,34 @@ export default function ProfilePage() {
                           <span className="text-base font-medium text-slate-800">{employee.reporting_manager?.employee_name || '—'}</span>
                         </div>
                       </div>
+                      {/* Requestable Fields Display Area */}
+                      {user.role === 'employee' && updateConfig?.enabled && (
+                        <div className="md:col-span-2 pt-8 mt-8 border-t border-slate-100">
+                          <h4 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Requestable Profile Details</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                            {updateConfig.requestableFields.map((fieldId: string, idx: number) => {
+                              // Find field label from formGroups
+                              let label = fieldId;
+                              formGroups.forEach(g => {
+                                const f = g.fields.find((f: any) => f.id === fieldId);
+                                if (f) label = f.label;
+                              });
+
+                              const value = (user as any)?.[fieldId] || (employee as any)?.[fieldId] || (employee as any)?.dynamicFields?.[fieldId];
+
+                              return (
+                                <div key={`${fieldId}-${idx}`} className="group">
+                                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{label}</label>
+                                  <div className="text-base font-medium text-slate-800 flex items-center justify-between group-hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                                    <span>{typeof value === 'object' ? JSON.stringify(value) : (value || '—')}</span>
+                                    <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-tight bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 opacity-0 group-hover:opacity-100 transition-opacity">Editable</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="text-center py-12 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
@@ -656,14 +774,118 @@ export default function ProfilePage() {
             scrollbar-width: none;
         }
       `}</style>
-    </div>
+
+      {/* Request Update Modal */}
+      {
+        showRequestModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Request Profile Update</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Your request will be sent to the administrator for approval.</p>
+                </div>
+                <button
+                  onClick={() => setShowRequestModal(false)}
+                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* Requestable Fields */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {formGroups.map((group, groupIdx) => {
+                    const allowedFieldsInGroup = group.fields.filter((f: any) => updateConfig?.requestableFields?.includes(f.id));
+                    if (allowedFieldsInGroup.length === 0) return null;
+
+                    return (
+                      <div key={group._id || `group-${groupIdx}`} className="md:col-span-2 space-y-4">
+                        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">{group.name}</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {allowedFieldsInGroup.map((field: any, fieldIdx: number) => (
+                            <div key={field.id || `field-${fieldIdx}`} className="space-y-1.5">
+                              <label className="text-[11px] font-bold text-slate-600 uppercase tracking-tight">{field.label}</label>
+                              {field.type === 'select' || field.type === 'dropdown' ? (
+                                <select
+                                  value={requestedChanges[field.id] || ''}
+                                  onChange={(e) => setRequestedChanges({ ...requestedChanges, [field.id]: e.target.value })}
+                                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                                >
+                                  <option value="">Select Option</option>
+                                  {field.options?.map((opt: any, optIdx: number) => (
+                                    <option key={`${opt.value}-${optIdx}`} value={opt.value}>{opt.label}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={field.type === 'date' ? 'date' : field.type === 'number' ? 'number' : 'text'}
+                                  value={requestedChanges[field.id] || ''}
+                                  onChange={(e) => setRequestedChanges({ ...requestedChanges, [field.id]: e.target.value })}
+                                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                                  placeholder={`Enter ${field.label}...`}
+                                />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Qualifications Section */}
+                  {updateConfig?.allowQualifications && (
+                    <div className="md:col-span-2 space-y-4">
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">Qualifications</h4>
+                      <p className="text-xs text-slate-500 italic">Please describe the education or certification changes you wish to request.</p>
+                      <textarea
+                        value={requestedChanges.qualifications || ''}
+                        onChange={(e) => setRequestedChanges({ ...requestedChanges, qualifications: e.target.value })}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none transition-all min-h-[100px]"
+                        placeholder="e.g. Added MBA degree from XYZ University, 2024..."
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* General Comments */}
+                <div className="pt-6 border-t border-slate-100">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-tight mb-2 block">Reason / Additional Comments</label>
+                  <textarea
+                    value={requestComments}
+                    onChange={(e) => setRequestComments(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all min-h-[80px]"
+                    placeholder="Explain why you are requesting these changes..."
+                  />
+                </div>
+              </div>
+
+              <div className="px-8 py-6 bg-slate-50 flex items-center justify-between">
+                <button
+                  onClick={() => setShowRequestModal(false)}
+                  className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-2 hover:bg-slate-200 rounded-lg transition-colors"
+                  disabled={submittingRequest}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmitUpdateRequest}
+                  disabled={submittingRequest || Object.keys(requestedChanges).length === 0}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-8 rounded-xl text-sm shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center gap-2"
+                >
+                  {submittingRequest ? <Spinner className="w-4 h-4 !text-white" /> : <Mail className="w-4 h-4" />}
+                  {submittingRequest ? 'Submitting...' : 'Submit Request'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+    </div >
   );
 }
 
-// Simple icons for things not imported from Lucide (added inside component via Lucide imports where possible)
-// But wait, I imported Lucide for everything.
-// Need to import AlertTriangle, Check, Clock.
-import { AlertTriangle, Check, Clock } from 'lucide-react';
 
 
 

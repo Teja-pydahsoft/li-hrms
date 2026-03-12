@@ -33,15 +33,17 @@ const calculateHoursWorked = (inTime) => {
 // @desc    Get live attendance report
 // @route   GET /api/attendance/reports/live
 // @access  Private (Super Admin only)
-// @desc    Get live attendance report
-// @route   GET /api/attendance/reports/live
-// @access  Private (Super Admin only)
 exports.getLiveAttendanceReport = async (req, res) => {
   try {
     const { date, division, department, shift } = req.query;
 
     // Use current date if not provided
     const targetDate = date ? date : formatDate(new Date());
+
+    // ── Detect processing mode ──────────────────────────────────────────────────
+    const AttendanceSettings = require('../model/AttendanceSettings');
+    const settings = await AttendanceSettings.getSettings();
+    const isMultiShift = settings?.processingMode?.mode === 'multi_shift';
 
     // 1. Build employee base query
     const employeeQuery = { is_active: { $ne: false } };
@@ -74,7 +76,7 @@ exports.getLiveAttendanceReport = async (req, res) => {
       })
       .lean();
 
-    // 3. Departmental Stats aggregation (using Employee collection to include those without attendance)
+    // 3. Departmental Stats aggregation
     const aggMatch = { is_active: { $ne: false } };
     if (division) aggMatch.division_id = division;
     if (department) aggMatch.department_id = department;
@@ -106,13 +108,7 @@ exports.getLiveAttendanceReport = async (req, res) => {
 
     const departmentStats = divDeptStats.reduce((acc, item) => {
       const key = `${item.divisionId}_${item.id}`;
-      acc[key] = {
-        ...item,
-        working: 0,
-        completed: 0,
-        present: 0,
-        absent: 0
-      };
+      acc[key] = { ...item, working: 0, completed: 0, present: 0, absent: 0 };
       return acc;
     }, {});
 
@@ -126,72 +122,181 @@ exports.getLiveAttendanceReport = async (req, res) => {
       const employee = empNo ? employeeMap[empNo] : null;
       if (!employee) return;
 
-      // Extract shift info (preferring last segment if it exist)
-      const lastSegment = record.shifts && record.shifts.length > 0 ? record.shifts[record.shifts.length - 1] : null;
-      const shiftDoc = lastSegment?.shiftId;
-
-      // Filter by shift if requested
-      if (shift && shiftDoc?._id?.toString() !== shift) return;
-
-      const employeeData = {
-        id: employee._id,
-        empNo: employee.emp_no,
-        name: employee.employee_name,
-        department: employee.department_id?.name || 'N/A',
-        designation: employee.designation_id?.name || 'N/A',
-        division: employee.division_id?.name || 'N/A',
-        shift: shiftDoc?.name || 'Manual/Unknown',
-        shiftStartTime: shiftDoc?.startTime || null,
-        shiftEndTime: shiftDoc?.endTime || null,
-        inTime: lastSegment?.inTime || record.inTime || null,
-        outTime: lastSegment?.outTime || record.outTime || null,
-        status: record.status,
-        date: record.date,
-        isLate: record.isLateIn || false,
-        lateMinutes: record.lateInMinutes || 0,
-        isEarlyOut: record.isEarlyOut || false,
-        earlyOutMinutes: record.earlyOutMinutes || 0,
-        otHours: record.extraHours || 0,
-        hoursWorked: 0
-      };
-
-      const hasIn = !!employeeData.inTime;
-      const hasOut = !!employeeData.outTime;
-
-      // Update Shift Stats
-      const sId = shiftDoc?._id?.toString() || 'manual';
-      if (!shiftStats[sId]) {
-        shiftStats[sId] = { name: shiftDoc?.name || 'Manual/Unknown', working: 0, completed: 0 };
-      }
-
-      // Update Department Stats
       const divId = employee.division_id?._id?.toString() || 'null';
       const deptId = employee.department_id?._id?.toString() || 'null';
       const dKey = `${divId}_${deptId}`;
-      if (departmentStats[dKey]) {
-        departmentStats[dKey].present++;
-      }
 
-      if (hasIn && !hasOut) {
-        employeeData.hoursWorked = calculateHoursWorked(employeeData.inTime);
-        employeeData.statusText = 'Working';
-        currentlyWorking.push(employeeData);
-        shiftStats[sId].working++;
-        if (departmentStats[dKey]) departmentStats[dKey].working++;
-      } else if (hasIn && hasOut) {
-        const diff = new Date(employeeData.outTime) - new Date(employeeData.inTime);
-        employeeData.hoursWorked = diff / (1000 * 60 * 60);
-        employeeData.statusText = 'Completed';
-        completedShift.push(employeeData);
-        shiftStats[sId].completed++;
-        if (departmentStats[dKey]) departmentStats[dKey].completed++;
+      // ────────────────────────────────────────────────────────────────────────
+      // MULTI-SHIFT MODE: iterate over every shift segment
+      // ────────────────────────────────────────────────────────────────────────
+      if (isMultiShift && record.shifts && record.shifts.length > 0) {
+        const segments = record.shifts;
+
+        // Shift-level filter: if user filtered by specific shift, only include records
+        // where at least one segment matches
+        if (shift) {
+          const hasMatchingShift = segments.some(seg => seg.shiftId?._id?.toString() === shift);
+          if (!hasMatchingShift) return;
+        }
+
+        // Mark the employee as present in dept stats (once)
+        if (departmentStats[dKey]) departmentStats[dKey].present++;
+
+        // Build per-segment data
+        // Note: segmentDetails is built from the (possibly filtered) list, so we store
+        // the computed sId on each item to avoid re-indexing into record.shifts later.
+        const segmentDetails = segments
+          .filter(seg => !shift || seg.shiftId?._id?.toString() === shift)
+          .map((seg, idx) => {
+            const shiftDoc = seg.shiftId; // populated Shift doc (or null)
+            const hasIn = !!seg.inTime;
+            const hasOut = !!seg.outTime;
+            let hoursWorked = 0;
+            if (hasIn && hasOut) {
+              hoursWorked = (new Date(seg.outTime) - new Date(seg.inTime)) / (1000 * 60 * 60);
+            } else if (hasIn) {
+              hoursWorked = calculateHoursWorked(seg.inTime);
+            }
+
+            // sId computed here so we can reference it in the shiftStats update below
+            const sId = shiftDoc?._id?.toString() || 'manual';
+            // Fall back to seg.shiftName (stored directly on the model) when populate didn't resolve
+            const shiftName = shiftDoc?.name || seg.shiftName || `Shift ${seg.shiftNumber || idx + 1}`;
+            if (!shiftStats[sId]) {
+              shiftStats[sId] = { name: shiftName, working: 0, completed: 0 };
+            }
+
+            return {
+              // Use shiftNumber from the model (1-indexed, reliable) rather than filtered-array position
+              segmentIndex: seg.shiftNumber || idx + 1,
+              shift: shiftName,
+              shiftStartTime: shiftDoc?.startTime || seg.shiftStartTime || null,
+              shiftEndTime: shiftDoc?.endTime || seg.shiftEndTime || null,
+              inTime: seg.inTime || null,
+              outTime: seg.outTime || null,
+              hoursWorked,
+              isActive: hasIn && !hasOut,
+              isComplete: hasIn && hasOut,
+              // Keep sId so the shiftStats loop below can use it directly
+              _sId: sId,
+              isLate: seg.isLateIn || false,
+              lateMinutes: seg.lateInMinutes || 0,
+              isEarlyOut: seg.isEarlyOut || false,
+              earlyOutMinutes: seg.earlyOutMinutes || 0,
+            };
+          });
+
+        // Build the composite employee entry
+        const hasActiveSegment = segmentDetails.some(s => s.isActive);
+        const hasCompletedSegment = segmentDetails.some(s => s.isComplete);
+        const allComplete = segmentDetails.every(s => s.isComplete) && !hasActiveSegment;
+
+        const totalHours = segmentDetails.reduce((sum, s) => sum + s.hoursWorked, 0);
+
+        // For the first/primary IN-time (used for sorting), use first segment that has inTime
+        const firstSegmentWithIn = segmentDetails.find(s => s.inTime);
+        const lastSegmentWithOut = [...segmentDetails].reverse().find(s => s.outTime);
+
+        // Update shift stats – use each segment's own _sId, NOT record.shifts[i]
+        segmentDetails.forEach(seg => {
+          const sIdKey = seg._sId;
+          if (!shiftStats[sIdKey]) shiftStats[sIdKey] = { name: seg.shift, working: 0, completed: 0 };
+          if (seg.isActive) shiftStats[sIdKey].working++;
+          if (seg.isComplete) shiftStats[sIdKey].completed++;
+        });
+
+        const employeeData = {
+          id: employee._id,
+          empNo: employee.emp_no,
+          name: employee.employee_name,
+          department: employee.department_id?.name || 'N/A',
+          designation: employee.designation_id?.name || 'N/A',
+          division: employee.division_id?.name || 'N/A',
+          shift: segmentDetails.map(s => s.shift).join(' → '),
+          inTime: firstSegmentWithIn?.inTime || null,
+          outTime: lastSegmentWithOut?.outTime || null,
+          hoursWorked: totalHours,
+          status: record.status,
+          date: record.date,
+          isLate: record.isLateIn || false,
+          lateMinutes: record.lateInMinutes || 0,
+          isEarlyOut: record.isEarlyOut || false,
+          earlyOutMinutes: record.earlyOutMinutes || 0,
+          otHours: record.extraHours || 0,
+          // Multi-shift specific
+          isMultiShift: true,
+          shiftCount: segmentDetails.length,
+          segments: segmentDetails,
+        };
+
+        if (hasActiveSegment && !allComplete) {
+          currentlyWorking.push(employeeData);
+          if (departmentStats[dKey]) departmentStats[dKey].working++;
+        } else if (allComplete || hasCompletedSegment) {
+          completedShift.push(employeeData);
+          if (departmentStats[dKey]) departmentStats[dKey].completed++;
+        }
+
+      } else {
+        // ────────────────────────────────────────────────────────────────────
+        // SINGLE-SHIFT MODE (original logic)
+        // ────────────────────────────────────────────────────────────────────
+        const lastSegment = record.shifts && record.shifts.length > 0 ? record.shifts[record.shifts.length - 1] : null;
+        const shiftDoc = lastSegment?.shiftId;
+
+        // Filter by shift if requested
+        if (shift && shiftDoc?._id?.toString() !== shift) return;
+
+        const employeeData = {
+          id: employee._id,
+          empNo: employee.emp_no,
+          name: employee.employee_name,
+          department: employee.department_id?.name || 'N/A',
+          designation: employee.designation_id?.name || 'N/A',
+          division: employee.division_id?.name || 'N/A',
+          shift: shiftDoc?.name || 'Manual/Unknown',
+          shiftStartTime: shiftDoc?.startTime || null,
+          shiftEndTime: shiftDoc?.endTime || null,
+          inTime: lastSegment?.inTime || record.inTime || null,
+          outTime: lastSegment?.outTime || record.outTime || null,
+          status: record.status,
+          date: record.date,
+          isLate: record.isLateIn || false,
+          lateMinutes: record.lateInMinutes || 0,
+          isEarlyOut: record.isEarlyOut || false,
+          earlyOutMinutes: record.earlyOutMinutes || 0,
+          otHours: record.extraHours || 0,
+          hoursWorked: 0,
+          isMultiShift: false,
+          segments: null,
+        };
+
+        const hasIn = !!employeeData.inTime;
+        const hasOut = !!employeeData.outTime;
+
+        const sId = shiftDoc?._id?.toString() || 'manual';
+        if (!shiftStats[sId]) shiftStats[sId] = { name: shiftDoc?.name || 'Manual/Unknown', working: 0, completed: 0 };
+
+        if (departmentStats[dKey]) departmentStats[dKey].present++;
+
+        if (hasIn && !hasOut) {
+          employeeData.hoursWorked = calculateHoursWorked(employeeData.inTime);
+          currentlyWorking.push(employeeData);
+          shiftStats[sId].working++;
+          if (departmentStats[dKey]) departmentStats[dKey].working++;
+        } else if (hasIn && hasOut) {
+          const diff = new Date(employeeData.outTime) - new Date(employeeData.inTime);
+          employeeData.hoursWorked = diff / (1000 * 60 * 60);
+          completedShift.push(employeeData);
+          shiftStats[sId].completed++;
+          if (departmentStats[dKey]) departmentStats[dKey].completed++;
+        }
       }
     });
 
     // 5. Finalize summaries
     const totalPresent = currentlyWorking.length + completedShift.length;
 
-    // Sort and finalize department stats
     const finalDepartmentBreakdown = Object.values(departmentStats).map(dept => ({
       ...dept,
       absent: Math.max(0, dept.totalEmployees - dept.present)
@@ -204,6 +309,7 @@ exports.getLiveAttendanceReport = async (req, res) => {
       success: true,
       data: {
         date: targetDate,
+        isMultiShift,
         summary: {
           currentlyWorking: currentlyWorking.length,
           completedShift: completedShift.length,
@@ -214,7 +320,7 @@ exports.getLiveAttendanceReport = async (req, res) => {
           departmentBreakdown: finalDepartmentBreakdown
         },
         currentlyWorking: currentlyWorking.sort((a, b) => new Date(b.inTime) - new Date(a.inTime)),
-        completedShift: completedShift.sort((a, b) => new Date(b.outTime) - new Date(a.outTime))
+        completedShift: completedShift.sort((a, b) => new Date(b.outTime || b.inTime) - new Date(a.outTime || a.inTime))
       }
     });
 
@@ -227,6 +333,8 @@ exports.getLiveAttendanceReport = async (req, res) => {
     });
   }
 };
+
+
 
 // @desc    Get filter options for live attendance report
 // @route   GET /api/attendance/reports/live/filters

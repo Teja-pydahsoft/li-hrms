@@ -75,6 +75,11 @@ const employeeSchema = new mongoose.Schema(
       // Old format: "B.Tech, MBA" (string)
       // New format: [{ degree: "B.Tech", qualified_year: 2020 }, { degree: "MBA", qualified_year: 2022 }] (array)
     },
+    qualificationStatus: {
+      type: String,
+      default: 'Partial',
+      trim: true,
+    },
     experience: {
       type: Number,
       default: null,

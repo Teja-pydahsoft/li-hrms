@@ -5,14 +5,16 @@ import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { api, apiRequest, Employee, Division } from '@/lib/api';
 import { toast } from 'react-toastify';
-import ArrearsPayrollSection from '@/components/Arrears/ArrearsPayrollSection';
-import Spinner from '@/components/Spinner';
 import * as XLSX from 'xlsx';
-import Swal from 'sweetalert2';
+import Spinner from '@/components/Spinner';
+import { parseFile } from '@/lib/bulkUpload';
+import ArrearsPayrollSection from '@/components/Arrears/ArrearsPayrollSection';
+import DeductionsPayrollSection from '@/components/ManualDeductions/DeductionsPayrollSection';
 import {
   canGeneratePayslips,
   canViewPayRegister,
-  canManagePayRegister
+  canManagePayRegister,
+  User as PermissionsUser
 } from '@/lib/permissions';
 import { auth } from '@/lib/auth';
 import { Search } from 'lucide-react';
@@ -98,7 +100,7 @@ interface PayRegisterSummary {
 interface Shift {
   _id: string;
   name: string;
-  payableShifts: number;
+  payableShifts?: number;
 }
 
 type TableType = 'all' | 'present' | 'absent' | 'leaves' | 'od' | 'ot' | 'extraHours' | 'shifts';
@@ -131,6 +133,7 @@ export default function PayRegisterPage() {
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [calculatingId, setCalculatingId] = useState<string | null>(null);
   const [selectedArrears, setSelectedArrears] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
+  const [selectedDeductions, setSelectedDeductions] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
   const [calculatingJobId, setCalculatingJobId] = useState<string | null>(null);
   // Removed unused calculationProgress state
   const [bulkCalculating, setBulkCalculating] = useState(false);
@@ -192,10 +195,10 @@ export default function PayRegisterPage() {
 
   // Permission Checks
   // Casting to any to avoid strict type mismatch between AuthContext User and Permissions User
-  const user = auth.getUser() as any;
-  const hasManagePermission = user ? canManagePayRegister(user) : false;
-  const hasGeneratePermission = user ? canGeneratePayslips(user) : false;
-  const hasViewPermission = user ? canViewPayRegister(user) : false;
+  const user = auth.getUser();
+  const hasManagePermission = user ? canManagePayRegister(user as unknown as PermissionsUser) : false;
+  const hasGeneratePermission = user ? canGeneratePayslips(user as unknown as PermissionsUser) : false;
+  const hasViewPermission = user ? canViewPayRegister(user as unknown as PermissionsUser) : false;
 
   const normalizeHalfDay = (
     half?: Partial<DailyRecord['firstHalf']>,
@@ -211,7 +214,7 @@ export default function PayRegisterPage() {
     ];
 
     // Validate statusFallback
-    const validFallback = allowedStatuses.includes(statusFallback as any)
+    const validFallback = allowedStatuses.includes(statusFallback as DailyRecord['firstHalf']['status'])
       ? (statusFallback as DailyRecord['firstHalf']['status'])
       : 'absent';
 
@@ -342,7 +345,11 @@ export default function PayRegisterPage() {
     try {
       const response = await api.getShifts();
       if (response.success && response.data) {
-        setShifts(response.data.map((s: any) => ({ ...s, payableShifts: s.payableShifts || 0 })));
+        setShifts(response.data.map((s: any) => ({
+          _id: s._id,
+          name: s.name,
+          payableShifts: (s as any).payableShifts || 0
+        })));
       }
     } catch (err) {
       console.error('Error loading shifts:', err);
@@ -392,41 +399,32 @@ export default function PayRegisterPage() {
       const targetDivId = selectedDivision && selectedDivision.trim() !== '' ? selectedDivision : undefined;
 
       const limit = PAGE_SIZE;
-      const response = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, undefined, pageToLoad, limit);
+      const rawResponse = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, searchQuery, pageToLoad, limit);
+      const response = rawResponse as any;
 
       if (response.success) {
-        const payRegisterList = response.data || [];
+        const payRegisterList = (response.data as PayRegisterSummary[]) || [];
 
-        const respAny = response as any;
-        if (respAny.startDate) setPayrollStartDate(respAny.startDate);
-        if (respAny.endDate) setPayrollEndDate(respAny.endDate);
+        if (response.startDate) setPayrollStartDate(String(response.startDate));
+        if (response.endDate) setPayrollEndDate(String(response.endDate));
 
         if (append) {
-          setPayRegisters(prev => [...prev, ...payRegisterList]);
+          setPayRegisters((prev: PayRegisterSummary[]) => [...prev, ...payRegisterList]);
         } else {
           setPayRegisters(payRegisterList);
         }
 
-        if (response.pagination) {
-          setPaginationTotal((response.pagination as any).total ?? 0);
-          setPaginationTotalPages((response.pagination as any).totalPages ?? 1);
-          setHasMore(pageToLoad < (response.pagination as any).totalPages);
+        const pagination = response.pagination;
+        if (pagination) {
+          setPaginationTotal(pagination.total ?? 0);
+          setPaginationTotalPages(pagination.totalPages ?? 1);
+          setHasMore(pageToLoad < pagination.totalPages);
         } else {
           setHasMore(payRegisterList.length === limit);
         }
 
         if (payRegisterList.length === 0 && !append) {
           toast.info('No employees found for this selection');
-        }
-      } else {
-        console.error('[Pay Register] API call failed:', response);
-        if (!append) {
-          setPayRegisters([]);
-          setPaginationTotal(0);
-          setPaginationTotalPages(1);
-        }
-        if (response.message) {
-          toast.error(response.message);
         }
       }
     } catch (error: unknown) {
@@ -476,9 +474,10 @@ export default function PayRegisterPage() {
       await Promise.all(syncPromises);
       await loadPayRegisters();
       toast.success('All pay registers synced successfully');
-    } catch (err: any) {
-      console.error('Error syncing pay registers:', err);
-      toast.error(err.message || 'Failed to sync pay registers');
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error('Error syncing pay registers:', error);
+      toast.error(error.message || 'Failed to sync pay registers');
     } finally {
       setSyncing(false);
     }
@@ -522,6 +521,149 @@ export default function PayRegisterPage() {
     }
   };
 
+  const handleCalculatePayrollForAll = async () => {
+    if (!payRegisters || payRegisters.length === 0) {
+      toast.info('No employees to calculate payroll for.');
+      return;
+    }
+    setBulkCalculating(true);
+    toast.info('Calculating payroll for listed employees...', { autoClose: 2000 });
+
+    try {
+      const requestData = {
+        month: monthStr,
+        divisionId: selectedDivision === '' ? undefined : selectedDivision,
+        departmentId: selectedDepartment === '' ? undefined : selectedDepartment,
+        strategy: payrollStrategy,
+        search: searchQuery // Pass search query to bulk calculation if supported
+      };
+
+      const response = await api.calculatePayrollBulk(requestData);
+
+      if (response.success) {
+        if (response.status === 'queued' || response.jobId) {
+          setCalculatingJobId(response.jobId || null);
+          toast.info('Bulk payroll calculation has been queued. You can track progress below.');
+          return;
+        }
+
+        const { successCount, failCount, batchIds } = response.data;
+
+        if (failCount === 0) {
+          toast.success('Payroll calculated successfully for all employees');
+        } else {
+          toast.warning(`Calculation completed with ${failCount} failures`);
+        }
+
+        // Redirect logic based on batches created
+        const uniqueBatchIds = Array.from(new Set(batchIds as string[]));
+        if (uniqueBatchIds.length === 1) {
+          toast.info('Redirecting to Batch Details...');
+          setTimeout(() => {
+            router.push(`/workspace/payments/${uniqueBatchIds[0]}`);
+          }, 1500);
+        } else if (uniqueBatchIds.length > 1) {
+          toast.info('Redirecting to Payments List...');
+          setTimeout(() => {
+            router.push('/workspace/payments');
+          }, 1500);
+        } else if (successCount > 0) {
+          await downloadPayrollExcel();
+        }
+      } else {
+        toast.error(response.message || 'Bulk calculation failed');
+      }
+    } catch (error: any) {
+      console.error('[Bulk Calculate] Error:', error);
+      toast.error(error?.message || 'Failed to calculate payroll');
+    } finally {
+      setBulkCalculating(false);
+    }
+  };
+
+  const handleDownloadSummary = async () => {
+    try {
+      setDownloadingTemplate(true);
+      const data = payRegisters.map((pr) => {
+        const emp = typeof pr.employeeId === 'object' ? pr.employeeId : null;
+        return {
+          'Employee No': emp?.emp_no || pr.emp_no,
+          'Name': emp?.employee_name || '',
+          'Present Days': pr.totals.totalPresentDays || 0,
+          'Absent Days': pr.totals.totalAbsentDays || 0,
+          'Paid Leave Days': pr.totals.totalPaidLeaveDays || 0,
+          'Unpaid Leave Days': pr.totals.totalUnpaidLeaveDays || 0,
+          'LOP Days': pr.totals.totalLopDays || 0,
+          'OD Days': pr.totals.totalODDays || 0,
+          'OT Hours': pr.totals.totalOTHours || 0,
+          'Payable Shifts': pr.totals.totalPayableShifts || 0,
+          'Weekly Offs': pr.totals.totalWeeklyOffs || 0,
+          'Holidays': pr.totals.totalHolidays || 0,
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Payroll Summary');
+      XLSX.writeFile(wb, `Payroll_Summary_Template_${monthStr}.xlsx`);
+      toast.success('Template downloaded successfully');
+    } catch (err: any) {
+      console.error('Error downloading template:', err);
+      toast.error('Failed to download template');
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  };
+
+  const handleUploadSummaryFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadingSummary(true);
+      const results = await parseFile(file);
+
+      // Send to backend
+      const rawResponse = await apiRequest('/payroll/upload-summary', {
+        method: 'POST',
+        body: JSON.stringify({
+          month: monthStr,
+          data: results
+        })
+      });
+      const response = rawResponse as any;
+
+      if (response.success) {
+        setUploadResults({
+          success: response.data?.successCount || 0,
+          failed: response.data?.failCount || 0,
+          total: (results as any).length,
+          errors: response.data?.errors || []
+        });
+        toast.success(`Upload complete: ${response.data?.successCount || 0} successful, ${response.data?.failCount || 0} failed`);
+        loadPayRegisters();
+      } else {
+        toast.error(response.message || 'Failed to upload summary');
+      }
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error('Error uploading summary:', error);
+      toast.error(error.message || 'Failed to parse file');
+    } finally {
+      setUploadingSummary(false);
+      // Reset input
+      e.target.value = '';
+    }
+  };
+
+  const handleArrearsSelected = (arrears: Array<{ id: string, amount: number, employeeId?: string }>) => {
+    setSelectedArrears(arrears);
+  };
+
+  const handleDeductionsSelected = (deductions: Array<{ id: string, amount: number, employeeId?: string }>) => {
+    setSelectedDeductions(deductions);
+  };
+
   const handleSaveDate = async () => {
     if (!editingRecord) return;
 
@@ -531,7 +673,7 @@ export default function PayRegisterPage() {
       // First, ensure pay register exists - create if it doesn't
       try {
         await api.getPayRegister(editingRecord.employeeId, monthStr);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // If pay register doesn't exist, create it
         console.log('[Pay Register] Creating pay register for employee:', editingRecord.employeeId);
         await api.createPayRegister(editingRecord.employeeId, monthStr);
@@ -785,8 +927,9 @@ export default function PayRegisterPage() {
       } else {
         toast.error(response.message || 'Failed to request permission');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Error asking for permission');
+    } catch (error: unknown) {
+      const err = error as Error;
+      toast.error(err.message || 'Error asking for permission');
     }
   };
 
@@ -809,89 +952,15 @@ export default function PayRegisterPage() {
       a.remove();
       window.URL.revokeObjectURL(url);
       toast.success('Payroll Excel ready');
-    } catch (err: any) {
-      console.error('Error exporting payroll:', err);
-      toast.error(err.message || 'Failed to export payroll Excel');
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error('Error exporting payroll:', error);
+      toast.error(error.message || 'Failed to export payroll Excel');
     } finally {
       setExportingExcel(false);
     }
   };
 
-  const handleCalculatePayrollForAll = async () => {
-    if (!payRegisters || payRegisters.length === 0) {
-      toast.info('No employees to calculate payroll for.');
-      return;
-    }
-    const params = payrollStrategy === 'new' ? '?strategy=new' : '?strategy=legacy';
-    let successCount = 0;
-    let failCount = 0;
-    const batchIds = new Set<string>(); // Store unique batch IDs
-
-    setBulkCalculating(true);
-    toast.info('Calculating payroll for listed employees...');
-    try {
-      for (const pr of payRegisters) {
-        const employeeId = typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId;
-
-        // Filter arrears for this specific employee
-        // Now using the employeeId stored in selectedArrears items
-        const employeeArrears = selectedArrears.filter((arrear: any) => {
-          return arrear.employeeId === employeeId;
-        });
-
-        try {
-          const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears);
-          if (response && response.data && response.data.batchId) {
-            batchIds.add(response.data.batchId);
-          }
-          successCount += 1;
-        } catch (err) {
-          failCount += 1;
-          console.error(`Error calculating payroll for employee ${employeeId}:`, err);
-        }
-      }
-
-      if (failCount === 0) {
-        toast.success(`Payroll calculated for ${successCount} employees`);
-      } else {
-        toast.error(`Calculated ${successCount}, failed ${failCount}`);
-      }
-
-      // Redirect logic based on batches created
-      if (batchIds.size === 1) {
-        // Single batch -> Redirect to that batch
-        const batchId = Array.from(batchIds)[0];
-        toast.info('Redirecting to Batch Details...');
-        setTimeout(() => {
-          router.push(`/superadmin/payments/${batchId}`);
-        }, 1500);
-      } else if (batchIds.size > 1) {
-        // Multiple batches -> Redirect to list
-        toast.info('Redirecting to Payments List...');
-        setTimeout(() => {
-          router.push('/superadmin/payments');
-        }, 1500);
-      }
-      else if (successCount > 0) {
-        // No batches but legacy/success -> Download Excel
-        const listedEmployeeIds = payRegisters.map((pr) =>
-          typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId
-        );
-        await downloadPayrollExcel(listedEmployeeIds);
-      } else {
-        toast.warning('Calculation failed for all employees. Nothing to export.');
-      }
-
-    } catch (error) {
-      console.error('Error in bulk payroll calculation:', error);
-    } finally {
-      setBulkCalculating(false);
-    }
-  };
-
-  const handleArrearsSelected = (arrears: Array<{ id: string, amount: number, employeeId?: string }>) => {
-    setSelectedArrears(arrears);
-  };
 
   return (
     <div className="relative min-h-screen">
@@ -940,7 +1009,7 @@ export default function PayRegisterPage() {
                     if (!selectedDivision) return true;
                     // Standardize access to division_id
                     if (typeof dept === 'object' && 'division_id' in dept) {
-                      const divId = (dept.division_id as any)?._id || dept.division_id;
+                      const divId = (dept.division_id as { _id: string })?._id || dept.division_id;
                       return divId === selectedDivision;
                     }
                     return true;
@@ -1189,1133 +1258,640 @@ export default function PayRegisterPage() {
           </div>
         )}
 
-        {/* Bulk Summary Upload Modal - hidden per request; button removed */}
-        {false && showUploadModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-xl w-full p-6 border border-slate-200 dark:border-slate-700">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Bulk Summary Upload</h3>
-                <button
-                  onClick={() => {
-                    setShowUploadModal(false);
-                    setUploadResults(null);
-                  }}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
 
-              {!uploadResults ? (
-                <>
-                  <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                    <p className="text-sm text-blue-700 dark:text-blue-300 flex items-start gap-2">
-                      <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      Upload an Excel file with monthly totals. The system will match employees by code and distribute counts across working days.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-10 hover:border-blue-500 transition-colors bg-slate-50 dark:bg-slate-900/50 mb-6">
-                    <input
-                      type="file"
-                      id="summaryExcel"
-                      className="hidden"
-                      accept=".xlsx, .xls"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-
-                        setUploadingSummary(true);
-                        try {
-                          const reader = new FileReader();
-                          reader.onload = async (evt) => {
-                            try {
-                              const bstr = evt.target?.result;
-                              const wb = XLSX.read(bstr, { type: 'binary' });
-                              const wsname = wb.SheetNames[0];
-                              const ws = wb.Sheets[wsname];
-                              const data = XLSX.utils.sheet_to_json(ws);
-
-                              const monthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-                              const response = await apiRequest<{ success: number; failed: number; total: number; errors: string[] }>(
-                                `/pay-register/upload-summary/${monthStr}`,
-                                {
-                                  method: 'POST',
-                                  body: JSON.stringify({ data })
-                                }
-                              );
-
-                              if (response.success && response.data) {
-                                setUploadResults(response.data);
-                                Swal.fire({
-                                  icon: 'success',
-                                  title: 'Uploaded',
-                                  text: "Upload processed successfully!",
-                                  timer: 2000,
-                                  showConfirmButton: false,
-                                  toast: true,
-                                  position: 'top-end'
-                                });
-                                loadPayRegisters(); // Refresh table
-                              } else {
-                                Swal.fire({
-                                  icon: 'error',
-                                  title: 'Upload Failed',
-                                  text: response.error || "Failed to process upload",
-                                });
-                              }
-                            } catch (err: any) {
-                              Swal.fire({
-                                icon: 'error',
-                                title: 'Error',
-                                text: err.message || "Error parsing file",
-                              });
-                            } finally {
-                              setUploadingSummary(false);
-                            }
-                          };
-                          reader.readAsBinaryString(file);
-                        } catch (err) {
-                          setUploadingSummary(false);
-                        }
-                      }}
-                    />
-                    <label htmlFor="summaryExcel" className="cursor-pointer flex flex-col items-center gap-3">
-                      <div className="h-12 w-12 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
-                        {uploadingSummary ? (
-                          <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                        ) : (
-                          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                          </svg>
-                        )}
-                      </div>
-                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                        {uploadingSummary ? "Processing file..." : "Click to select Excel file"}
-                      </span>
-                    </label>
-                  </div>
-
-                  <div className="flex justify-between items-center">
-                    <button
-                      onClick={async () => {
-                        setDownloadingTemplate(true);
-                        try {
-                          const monthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-                          const targetDeptId = selectedDepartment && selectedDepartment.trim() !== '' ? selectedDepartment : undefined;
-                          const targetDivId = selectedDivision && selectedDivision.trim() !== '' ? selectedDivision : undefined;
-
-                          const response = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, undefined, 1, -1);
-
-                          if (response.success) {
-                            const allEmployees = response.data || [];
-                            const headers = ["Employee Code", "Employee Name", "Department", "Division", "Total Present", "Total Absent", "Paid Leaves", "LOP Count", "Total OD", "Total Extra Days", "Total OT Hours", "Holidays", "Lates"];
-                            const sampleData = allEmployees.map((pr: any) => ({
-                              "Employee Code": typeof pr.employeeId === 'object' ? pr.employeeId.emp_no : pr.emp_no,
-                              "Employee Name": typeof pr.employeeId === 'object' ? pr.employeeId.employee_name : '',
-                              "Department": (typeof pr.employeeId === 'object' && pr.employeeId.department_id) ? (pr.employeeId.department_id as any).name : '',
-                              "Division": (typeof pr.employeeId === 'object' && pr.employeeId.division_id) ? (pr.employeeId.division_id as any).name : '',
-                              "Total Present": 0,
-                              "Total Absent": 0,
-                              "Paid Leaves": 0,
-                              "LOP Count": 0,
-                              "Total OD": 0,
-                              "Total Extra Days": 0,
-                              "Total OT Hours": 0,
-                              "Holidays": 0,
-                              "Lates": 0
-                            }));
-
-                            const ws = XLSX.utils.json_to_sheet(sampleData);
-                            const wb = XLSX.utils.book_new();
-                            XLSX.utils.book_append_sheet(wb, ws, "Attendance Summary");
-                            XLSX.writeFile(wb, `Payroll_Summary_Template_${monthStr}.xlsx`);
-                            Swal.fire({
-                              icon: 'success',
-                              title: 'Template Ready',
-                              text: `Template downloaded with ${allEmployees.length} employees`,
-                              timer: 2000,
-                              showConfirmButton: false,
-                              toast: true,
-                              position: 'top-end'
-                            });
-                          } else {
-                            Swal.fire({
-                              icon: 'error',
-                              title: 'Fetch Failed',
-                              text: response.message || "Failed to fetch employees for template",
-                            });
-                          }
-                        } catch (err: any) {
-                          console.error('Error downloading template:', err);
-                          Swal.fire({
-                            icon: 'error',
-                            title: 'Generation Failed',
-                            text: err.message || 'Error generating template',
-                          });
-                        } finally {
-                          setDownloadingTemplate(false);
-                        }
-                      }}
-                      disabled={downloadingTemplate}
-                      className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                    >
-                      <svg className={`w-4 h-4 ${downloadingTemplate ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        {downloadingTemplate ? (
-                          <>
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </>
-                        ) : (
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        )}
-                      </svg>
-                      {downloadingTemplate ? "Generating..." : "Download Template"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="animate-fade-in">
-                  <div className="grid grid-cols-3 gap-4 mb-6">
-                    <div className="bg-slate-50 dark:bg-slate-900 p-4 rounded-lg text-center border border-slate-200 dark:border-slate-700">
-                      <div className="text-2xl font-bold text-slate-800 dark:text-white">{uploadResults?.total}</div>
-                      <div className="text-xs text-slate-500 uppercase">Total Rows</div>
-                    </div>
-                    <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg text-center border border-green-100 dark:border-green-800">
-                      <div className="text-2xl font-bold text-green-600">{uploadResults?.success}</div>
-                      <div className="text-xs text-green-500 uppercase tracking-wider">Success</div>
-                    </div>
-                    <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg text-center border border-red-100 dark:border-red-800">
-                      <div className="text-2xl font-bold text-red-600">{uploadResults?.failed}</div>
-                      <div className="text-xs text-red-500 uppercase tracking-wider">Failed</div>
-                    </div>
-                  </div>
-
-                  {uploadResults?.errors?.length ? (
-                    <div className="mb-6">
-                      <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Error Details:</h4>
-                      <div className="max-h-40 overflow-y-auto bg-slate-50 dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <ul className="space-y-1">
-                          {(uploadResults?.errors ?? []).map((err, i) => (
-                            <li key={i} className="text-xs text-red-500">• {err}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <button
-                    onClick={() => {
-                      setShowUploadModal(false);
-                      setUploadResults(null);
-                    }}
-                    className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-all shadow-lg"
-                  >
-                    Done
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Summary Table */}
-      {!loading && payRegisters.length > 0 && (
-        <div className="mt-1 mb-8 rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-lg dark:border-slate-700 dark:bg-slate-900/80 overflow-x-auto">
-          <div className="p-4">
-            <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-3">Monthly Summary</h3>
-            <table className="w-full border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
-                  <th className="sticky left-0 z-10 w-[180px] border-r border-slate-200 bg-slate-50 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                    Employee
-                  </th>
-                  {[
-                    'Total Present',
-                    'Total Absent',
-                    'Total Leaves',
-                    'Paid Leaves',
-                    'LOP Count',
-                    'Total OD',
-                    'Total OT Hours',
-                    'Total Extra Days',
-                    'Lates',
-                    'Holidays & Weekoffs',
-                    'Present Days',
-                    'Payable Shifts',
-                    'Month Days',
-                    'Counted Days',
-                  ].map((label) => (
-                    <th
-                      key={label}
-                      className="border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 last:border-r-0"
-                    >
-                      {label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                {getSummaryRows().map((row) => {
-                  const employee = typeof row.pr.employeeId === 'object' ? row.pr.employeeId : null;
-                  const empNo =
-                    typeof row.pr.employeeId === 'object' ? row.pr.employeeId.emp_no : row.pr.emp_no;
-                  const empName = typeof row.pr.employeeId === 'object' ? row.pr.employeeId.employee_name : '';
-                  const department =
-                    typeof row.pr.employeeId === 'object' && row.pr.employeeId.department_id
-                      ? typeof row.pr.employeeId.department_id === 'object'
-                        ? row.pr.employeeId.department_id.name
-                        : ''
-                      : '';
-                  const leftDate = employee && 'leftDate' in employee ? (employee as any).leftDate : null;
-                  const leftDateStr = leftDate ? (typeof leftDate === 'string' ? new Date(leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '') : '';
-                  return (
-                    <tr key={row.pr._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                        <div>
-                          <div className="font-semibold truncate">{empName}</div>
-                          <div className="text-[9px] text-slate-500 dark:text-slate-400 truncate">
-                            {empNo}
-                            {department && ` • ${department}`}
-                          </div>
-                          {leftDateStr && (
-                            <div className="text-[9px] text-amber-600 dark:text-amber-400 font-medium mt-0.5" title="Left in this payroll period">
-                              Left {leftDateStr}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="text-center px-2 py-2">{row.present.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.absent.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.leave.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-medium text-green-600 dark:text-green-400">{row.paidLeave.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-medium text-red-600 dark:text-red-400">{row.lop.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.od.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.ot.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.extra.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-bold text-amber-600 dark:text-amber-400">{row.lateCount}</td>
-                      <td className="text-center px-2 py-2">{row.holidayAndWeekoffs.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-medium text-green-600 dark:text-green-400" title="Includes OD days">{row.present.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2 font-bold text-slate-700 dark:text-slate-300">{row.payableShifts.toFixed(1)}</td>
-                      <td className="text-center px-2 py-2">{row.monthDays}</td>
-                      <td
-                        className={`text-center px-2 py-2 font-semibold ${row.matchesMonth
-                          ? 'text-green-700 dark:text-green-400'
-                          : 'text-red-700 dark:text-red-400'
-                          }`}
-                      >
-                        {row.countedDays.toFixed(1)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {/* Pagination below Summary table */}
-          {paginationTotalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 p-4 border-t border-slate-200 dark:border-slate-700">
-              <button
-                type="button"
-                onClick={() => { setPage(p => Math.max(1, p - 1)); loadPayRegisters(Math.max(1, page - 1), false); }}
-                disabled={page <= 1 || loading}
-                className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                Page {page} of {paginationTotalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => { setPage(p => Math.min(paginationTotalPages, p + 1)); loadPayRegisters(Math.min(paginationTotalPages, page + 1), false); }}
-                disabled={page >= paginationTotalPages || loading}
-                className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Table Tabs */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow mb-8 overflow-hidden">
-        <div className="border-b border-slate-200 dark:border-slate-700">
-          <nav className="flex w-full">
-            {[
-              { id: 'all' as TableType, label: 'All', color: 'slate' },
-              { id: 'present' as TableType, label: 'Present', color: 'green' },
-              { id: 'absent' as TableType, label: 'Absent', color: 'red' },
-              { id: 'leaves' as TableType, label: 'Leaves', color: 'yellow' },
-              { id: 'od' as TableType, label: 'OD', color: 'blue' },
-              { id: 'ot' as TableType, label: 'OT', color: 'orange' },
-              { id: 'extraHours' as TableType, label: 'Extra Hours', color: 'purple' },
-              { id: 'shifts' as TableType, label: 'Shifts', color: 'indigo' },
-            ].map((tab) => {
-              // Count employees with data in this table type
-              const count = payRegisters.filter(pr => {
-                if (tab.id === 'all') return true;
-                if (!pr.dailyRecords || pr.dailyRecords.length === 0) return false;
-                switch (tab.id) {
-                  case 'present':
-                    return pr.dailyRecords.some(r => r.status === 'present' || r.firstHalf.status === 'present' || r.secondHalf.status === 'present');
-                  case 'absent':
-                    return pr.dailyRecords.some(r => r.status === 'absent' || r.firstHalf.status === 'absent' || r.secondHalf.status === 'absent');
-                  case 'leaves':
-                    return pr.dailyRecords.some(r => r.status === 'leave' || r.firstHalf.status === 'leave' || r.secondHalf.status === 'leave');
-                  case 'od':
-                    return pr.dailyRecords.some(r => r.status === 'od' || r.isOD || r.firstHalf.status === 'od' || r.secondHalf.status === 'od' || r.firstHalf.isOD || r.secondHalf.isOD);
-                  case 'ot':
-                  case 'extraHours':
-                    return pr.dailyRecords.some(r => r.otHours > 0 || r.firstHalf.otHours > 0 || r.secondHalf.otHours > 0);
-                  case 'shifts':
-                    return pr.dailyRecords.some(r => r.shiftId !== null || r.shiftName !== null || r.firstHalf.shiftId !== null || r.secondHalf.shiftId !== null);
-                  default:
-                    return true;
-                }
-              }).length;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTable(tab.id)}
-                  className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-1 sm:px-6 py-2.5 sm:py-3 text-[10px] sm:text-sm font-medium border-b-2 transition-colors ${activeTable === tab.id
-                    ? `border-${tab.color}-500 text-${tab.color}-600 dark:text-${tab.color}-400 bg-${tab.color}-50/30 dark:bg-${tab.color}-900/10`
-                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'
-                    }`}
-                >
-                  <span className="whitespace-nowrap">{tab.label}</span>
-                  <span className="px-1.5 py-0.5 text-[9px] sm:text-xs bg-slate-100 dark:bg-slate-700 rounded-full">
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Grid Table View - Similar to Attendance Page */}
-        {loading ? (
-          <div className="flex items-center justify-center min-h-[400px]">
-            <Spinner />
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-xl dark:border-slate-700 dark:bg-slate-900/80">
-            <div className="overflow-x-auto">
+        {/* Summary Table */}
+        {!loading && payRegisters.length > 0 && (
+          <div className="mt-1 mb-8 rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-lg dark:border-slate-700 dark:bg-slate-900/80 overflow-x-auto">
+            <div className="p-4">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-3">Monthly Summary</h3>
               <table className="w-full border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
                     <th className="sticky left-0 z-10 w-[180px] border-r border-slate-200 bg-slate-50 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                       Employee
                     </th>
-                    {daysArray.map((day) => (
+                    {[
+                      'Total Present',
+                      'Total Absent',
+                      'Total Leaves',
+                      'Paid Leaves',
+                      'LOP Count',
+                      'Total OD',
+                      'Total OT Hours',
+                      'Total Extra Days',
+                      'Lates',
+                      'Holidays & Weekoffs',
+                      'Present Days',
+                      'Payable Shifts',
+                      'Month Days',
+                      'Counted Days',
+                    ].map((label) => (
                       <th
-                        key={day}
-                        className={`w-[calc((100%-180px-${activeTable === 'leaves' ? '320px' : activeTable === 'all' ? '480px' : '80px'})/${daysArray.length})] border-r border-slate-200 px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300`}
+                        key={label}
+                        className="border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 last:border-r-0"
                       >
-                        {parseInt(day.split('-')[2])}
+                        {label}
                       </th>
                     ))}
-                    {/* Dynamic columns based on active tab */}
-                    {activeTable === 'all' && (
-                      <>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20" title="OD days are included in present days">
-                          Present Days
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50">
-                          Payable Shifts
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-gray-100 dark:bg-slate-700/50">
-                          Week Offs
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-purple-50 dark:bg-purple-900/20">
-                          Holidays
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50/80 dark:bg-green-900/30">
-                          Paid Leaves
-                        </th>
-                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20" title="Payable Shifts + Week Offs + Holidays + Paid Leaves">
-                          Paid Days
-                        </th>
-                      </>
-                    )}
-                    {activeTable === 'present' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20">
-                        Total Present Days
-                      </th>
-                    )}
-                    {activeTable === 'absent' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-red-50 dark:bg-red-900/20">
-                        Total Absent Days
-                      </th>
-                    )}
-                    {activeTable === 'leaves' && (
-                      <>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-yellow-50 dark:bg-yellow-900/20">
-                          Total Leaves
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20">
-                          Paid Leaves
-                        </th>
-                        <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-red-50 dark:bg-red-900/20">
-                          LOP
-                        </th>
-                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-orange-50 dark:bg-orange-900/20">
-                          Without Pay
-                        </th>
-                      </>
-                    )}
-                    {activeTable === 'od' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20">
-                        Total OD Days
-                      </th>
-                    )}
-                    {activeTable === 'ot' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-orange-50 dark:bg-orange-900/20">
-                        Total OT Hours
-                      </th>
-                    )}
-                    {activeTable === 'extraHours' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-purple-50 dark:bg-purple-900/20">
-                        Total Extra Hours
-                      </th>
-                    )}
-                    {activeTable === 'shifts' && (
-                      <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-indigo-50 dark:bg-indigo-900/20">
-                        Total Shifts
-                      </th>
-                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                  {getFilteredPayRegisters().length === 0 ? (
-                    <tr>
-                      <td colSpan={daysArray.length + (activeTable === 'leaves' ? 4 : activeTable === 'all' ? 6 : 1)} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No records found{activeTable !== 'all' ? ` for ${activeTable === 'shifts' ? 'shifts' : activeTable} table` : ''}
-                      </td>
-                    </tr>
-                  ) : (
-                    getFilteredPayRegisters().map((pr) => {
-                      const employee = typeof pr.employeeId === 'object' ? pr.employeeId : null;
-                      const employeeId = typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId;
-                      const emp_no = typeof pr.employeeId === 'object' ? pr.employeeId.emp_no : pr.emp_no;
-                      const employee_name = typeof pr.employeeId === 'object' ? pr.employeeId.employee_name : '';
-                      const department = typeof pr.employeeId === 'object' && pr.employeeId.department_id
-                        ? (typeof pr.employeeId.department_id === 'object' ? pr.employeeId.department_id.name : '')
+                  {getSummaryRows().map((row) => {
+                    const employee = typeof row.pr.employeeId === 'object' ? row.pr.employeeId : null;
+                    const empNo =
+                      typeof row.pr.employeeId === 'object' ? row.pr.employeeId.emp_no : row.pr.emp_no;
+                    const empName = typeof row.pr.employeeId === 'object' ? row.pr.employeeId.employee_name : '';
+                    const department =
+                      typeof row.pr.employeeId === 'object' && row.pr.employeeId.department_id
+                        ? typeof row.pr.employeeId.department_id === 'object'
+                          ? row.pr.employeeId.department_id.name
+                          : ''
                         : '';
-                      const leftDateDaily = employee && 'leftDate' in employee ? (employee as any).leftDate : null;
-                      const leftDateStrDaily = leftDateDaily ? (typeof leftDateDaily === 'string' ? new Date(leftDateDaily).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '') : '';
-
-                      // Create a map of daily records for quick lookup
-                      const dailyRecordsMap = new Map(pr.dailyRecords.map(r => [r.date, r]));
-
-                      const deptId = employee && employee.department_id
-                        ? (typeof employee.department_id === 'object' ? employee.department_id._id : employee.department_id)
-                        : '';
-
-                      const batchInfo = deptId ? departmentBatchStatus.get(deptId) : null;
-                      const batchStatus = batchInfo?.status || 'pending';
-                      const hasPermission = batchInfo?.permissionGranted || false;
-
-                      const isPastMonth = new Date(year, month - 1, 1).getTime() < new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
-
-                      // Locked if Approved/Frozen/Complete AND no permission
-                      // OR if it is a past month (strict modification lock)
-                      const isLocked = (['approved', 'freeze', 'complete'].includes(batchStatus) && !hasPermission) || isPastMonth;
-                      const isFrozenOrComplete = ['freeze', 'complete'].includes(batchStatus);
-
-                      return (
-                        <tr key={pr._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                          <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <div className="font-semibold truncate flex-1 flex items-center gap-1">
-                                  {employee_name}
-                                  {leftDateStrDaily && (
-                                    <span className="text-[9px] text-amber-600 dark:text-amber-400 font-medium" title="Left in this payroll period">(Left {leftDateStrDaily})</span>
-                                  )}
-                                  {isLocked && (
-                                    <span title={`Payroll ${batchStatus}`} className="text-slate-400">
-                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
-                                        <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
-                                      </svg>
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex gap-2">
-                                  {isPastMonth && !pr.payrollId ? (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (employee) handleCalculatePayroll(employee);
-                                      }}
-                                      className={`rounded-md px-2 py-1 text-[9px] font-semibold text-white shadow-sm transition-all hover:shadow-md bg-amber-500 hover:bg-amber-600 ${(!hasManagePermission || (calculatingId === employeeId)) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                      title="Calculate Payroll"
-                                      disabled={!hasManagePermission || calculatingId === employeeId}
-                                    >
-                                      {calculatingId === employeeId ? '...' : 'Calculate'}
-                                    </button>
-                                  ) : (
-                                    <>
-                                      {hasViewPermission && (
-                                        <Link
-                                          href={`/payroll-transactions?search=${employee?.emp_no || employeeId}&month=${monthStr}`}
-                                          onClick={(e) => e.stopPropagation()}
-                                          className="rounded-md px-2 py-1 text-[9px] font-semibold text-white shadow-sm transition-all hover:shadow-md bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 inline-block"
-                                          title="View Payslip"
-                                        >
-                                          Payslip
-                                        </Link>
-                                      )}
-                                    </>
-                                  )}
-
-                                  {!isFrozenOrComplete && (
-                                    <div />
-                                  )}
-                                </div>
-                              </div>
-                              <div className="text-[9px] text-slate-500 dark:text-slate-400 truncate mt-1">
-                                {emp_no}
-                                {department && ` • ${department}`}
-                              </div>
+                    const leftDate = employee && 'leftDate' in employee ? (employee as any).leftDate : null;
+                    const leftDateStr = leftDate ? (typeof leftDate === 'string' ? new Date(leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '') : '';
+                    return (
+                      <tr key={row.pr._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                          <div>
+                            <div className="font-semibold truncate">{empName}</div>
+                            <div className="text-[9px] text-slate-500 dark:text-slate-400 truncate">
+                              {empNo}
+                              {department && ` • ${department}`}
                             </div>
-                          </td>
-                          {daysArray.map((day) => {
-                            const dateStr = day;
-                            const record = dailyRecordsMap.get(dateStr) || null;
-                            const shouldShow = shouldShowInTable(record, activeTable);
-                            const displayStatus = getStatusDisplay(record);
-                            const bgColor = getCellBackgroundColor(record, activeTable);
-
-                            return (
-                              <td
-                                key={day}
-                                onClick={() => {
-                                  if (employee && !isLocked && hasManagePermission) {
-                                    if (record) {
-                                      handleDateClick(employee, dateStr, record);
-                                    } else {
-                                      // Create empty record for editing if no record exists
-                                      const emptyRecord: DailyRecord = {
-                                        date: dateStr,
-                                        firstHalf: {
-                                          status: 'absent',
-                                          leaveType: null,
-                                          leaveNature: null,
-                                          isOD: false,
-                                          otHours: 0,
-                                          shiftId: null,
-                                          remarks: null,
-                                        },
-                                        secondHalf: {
-                                          status: 'absent',
-                                          leaveType: null,
-                                          leaveNature: null,
-                                          isOD: false,
-                                          otHours: 0,
-                                          shiftId: null,
-                                          remarks: null,
-                                        },
-                                        status: 'absent',
-                                        leaveType: null,
-                                        leaveNature: null,
-                                        isOD: false,
-                                        isSplit: false,
-                                        shiftId: null,
-                                        shiftName: null,
-                                        otHours: 0,
-                                        remarks: null,
-                                      };
-                                      handleDateClick(employee, dateStr, emptyRecord);
-                                    }
-                                  }
-                                }}
-                                className={`border-r border-slate-200 px-1 py-1.5 text-center dark:border-slate-700
-                                ${employee && !isLocked && hasManagePermission ? 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800' : 'cursor-not-allowed opacity-75 bg-slate-50 dark:bg-slate-800/50'} 
-                                ${bgColor}`}
-                              >
-                                {shouldShow && record ? (
-                                  <div className="space-y-0.5">
-                                    {activeTable === 'shifts' ? (
-                                      <>
-                                        {record.shiftName ? (
-                                          <div className="font-semibold text-[9px] text-indigo-700 dark:text-indigo-300" title={record.shiftName}>
-                                            {record.shiftName.length > 8 ? record.shiftName.substring(0, 8) + '...' : record.shiftName}
-                                          </div>
-                                        ) : (
-                                          <div className="font-semibold text-[9px] text-slate-500">-</div>
-                                        )}
-                                        {record.isSplit && (
-                                          <div className="text-[7px] opacity-75 text-slate-500">
-                                            {record.firstHalf.shiftId ? '1st' : ''}
-                                            {record.firstHalf.shiftId && record.secondHalf.shiftId ? '/' : ''}
-                                            {record.secondHalf.shiftId ? '2nd' : ''}
-                                          </div>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <div className="font-semibold text-[9px]">{displayStatus}</div>
-                                        {record.isSplit && (
-                                          <div className="text-[8px] opacity-75">
-                                            {record.firstHalf.status.charAt(0).toUpperCase()}/{record.secondHalf.status.charAt(0).toUpperCase()}
-                                          </div>
-                                        )}
-                                        {activeTable === 'all' && (record.isLate || record.isEarlyOut) && (
-                                          <div className="text-[7px] font-medium text-amber-600 dark:text-amber-400 mt-0.5" title={[record.isLate && 'Late', record.isEarlyOut && 'Early out'].filter(Boolean).join(', ')}>
-                                            {record.isLate && 'L'}
-                                            {record.isLate && record.isEarlyOut && ' '}
-                                            {record.isEarlyOut && 'E'}
-                                          </div>
-                                        )}
-                                        {record.otHours > 0 && (activeTable === 'ot' || activeTable === 'extraHours' || activeTable === 'all') && (
-                                          <div className="text-[8px] font-semibold text-blue-600 dark:text-blue-300">{record.otHours}h</div>
-                                        )}
-                                        {record.shiftName && activeTable === 'all' && (
-                                          <div className="text-[8px] opacity-75 truncate" title={record.shiftName}>{record.shiftName.substring(0, 3)}</div>
-                                        )}
-                                      </>
-                                    )}
-                                    {record.isManuallyEdited && (
-                                      <div className="text-[7px] text-indigo-600 dark:text-indigo-400" title="Manually Edited">✎</div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <span className="text-slate-400 text-[9px]">-</span>
-                                )}
-                              </td>
-                            );
-                          })}
-                          {/* Dynamic columns based on active tab */}
-                          {activeTable === 'all' && (() => {
-                            const payable = pr.totals?.totalPayableShifts ?? 0;
-                            const weekOffs = pr.totals?.totalWeeklyOffs ?? 0;
-                            const holidays = pr.totals?.totalHolidays ?? 0;
-                            const paidLeaves = pr.totals?.totalPaidLeaveDays ?? 0;
-                            const paidDays = payable + weekOffs + holidays + paidLeaves;
-                            return (
-                              <>
-                                <td className="border-r border-slate-200 bg-green-50 dark:bg-green-900/20 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:text-green-300" title="Includes OD days">
-                                  {(pr.totals?.totalPresentDays ?? 0).toFixed(1)}
-                                </td>
-                                <td className="border-r border-slate-200 bg-slate-50 dark:bg-slate-800 px-2 py-2 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 dark:bg-slate-700/50">
-                                  {payable.toFixed(1)}
-                                </td>
-                                <td className="border-r border-slate-200 bg-gray-50 dark:bg-slate-700/50 px-2 py-2 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                                  {weekOffs.toFixed(1)}
-                                </td>
-                                <td className="border-r border-slate-200 bg-purple-50 dark:bg-purple-900/20 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:text-purple-300">
-                                  {holidays.toFixed(1)}
-                                </td>
-                                <td className="border-r border-slate-200 bg-green-50/80 dark:bg-green-900/30 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:text-green-400">
-                                  {paidLeaves.toFixed(1)}
-                                </td>
-                                <td className="border-r-0 border-slate-200 bg-blue-50 dark:bg-blue-900/20 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:text-blue-300" title="Payable + Week Offs + Holidays + Paid Leaves">
-                                  {paidDays.toFixed(1)}
-                                </td>
-                              </>
-                            );
-                          })()}
-                          {activeTable === 'present' && (
-                            <td className="border-r-0 border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300">
-                              {pr.totals.totalPresentDays.toFixed(1)}
-                            </td>
-                          )}
-                          {activeTable === 'absent' && (
-                            <td className="border-r-0 border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300">
-                              {pr.totals.totalAbsentDays.toFixed(1)}
-                            </td>
-                          )}
-                          {activeTable === 'leaves' && (
-                            <>
-                              <td className="border-r border-slate-200 bg-yellow-50 px-2 py-2 text-center text-[11px] font-bold text-yellow-700 dark:border-slate-700 dark:bg-yellow-900/20 dark:text-yellow-300">
-                                {pr.totals.totalLeaveDays.toFixed(1)}
-                              </td>
-                              <td className="border-r border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300">
-                                {pr.totals.totalPaidLeaveDays.toFixed(1)}
-                              </td>
-                              <td className="border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300">
-                                {pr.totals.totalLopDays.toFixed(1)}
-                              </td>
-                              <td className="border-r-0 border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300">
-                                {pr.totals.totalUnpaidLeaveDays.toFixed(1)}
-                              </td>
-                            </>
-                          )}
-                          {activeTable === 'od' && (
-                            <td className="border-r-0 border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:border-slate-700 dark:bg-blue-900/20 dark:text-blue-300">
-                              {pr.totals.totalODDays.toFixed(1)}
-                            </td>
-                          )}
-                          {activeTable === 'ot' && (
-                            <td className="border-r-0 border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300">
-                              {pr.totals.totalOTHours.toFixed(1)}
-                            </td>
-                          )}
-                          {activeTable === 'extraHours' && (
-                            <td className="border-r-0 border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:border-slate-700 dark:bg-purple-900/20 dark:text-purple-300">
-                              {pr.totals.totalOTHours.toFixed(1)}
-                            </td>
-                          )}
-                          {activeTable === 'shifts' && (
-                            <td className="border-r-0 border-slate-200 bg-indigo-50 px-2 py-2 text-center text-[11px] font-bold text-indigo-700 dark:border-slate-700 dark:bg-indigo-900/20 dark:text-indigo-300">
-                              {pr.dailyRecords.filter(r => r.shiftId !== null || r.shiftName !== null || r.firstHalf.shiftId !== null || r.secondHalf.shiftId !== null).length}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })
-                  )}
+                            {leftDateStr && (
+                              <div className="text-[9px] text-amber-600 dark:text-amber-400 font-medium mt-0.5" title="Left in this payroll period">
+                                Left {leftDateStr}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="text-center px-2 py-2">{row.present.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.absent.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.leave.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2 font-medium text-green-600 dark:text-green-400">{row.paidLeave.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2 font-medium text-red-600 dark:text-red-400">{row.lop.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.od.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.ot.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.extra.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2 font-bold text-amber-600 dark:text-amber-400">{row.lateCount}</td>
+                        <td className="text-center px-2 py-2">{row.holidayAndWeekoffs.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2 font-medium text-green-600 dark:text-green-400" title="Includes OD days">{row.present.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2 font-bold text-slate-700 dark:text-slate-300">{row.payableShifts.toFixed(1)}</td>
+                        <td className="text-center px-2 py-2">{row.monthDays}</td>
+                        <td
+                          className={`text-center px-2 py-2 font-semibold ${row.matchesMonth
+                            ? 'text-green-700 dark:text-green-400'
+                            : 'text-red-700 dark:text-red-400'
+                            }`}
+                        >
+                          {row.countedDays.toFixed(1)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+            {/* Pagination below Summary table */}
+            {paginationTotalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 p-4 border-t border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => { setPage(p => Math.max(1, p - 1)); loadPayRegisters(Math.max(1, page - 1), false); }}
+                  disabled={page <= 1 || loading}
+                  className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                  Page {page} of {paginationTotalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { setPage(p => Math.min(paginationTotalPages, p + 1)); loadPayRegisters(Math.min(paginationTotalPages, page + 1), false); }}
+                  disabled={page >= paginationTotalPages || loading}
+                  className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
-      </div>
 
-      {/* Edit Modal - Tab-specific dialogs */}
-      {
-        showEditModal && editingRecord && (
-          <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-slate-200 dark:border-slate-700">
-              <div className="p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                    Edit: {editingRecord.date} - {editingRecord.employee.employee_name}
-                  </h2>
+        {/* Table Tabs */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow mb-8 overflow-hidden">
+          <div className="border-b border-slate-200 dark:border-slate-700">
+            <nav className="flex w-full">
+              {[
+                { id: 'all' as TableType, label: 'All', color: 'slate' },
+                { id: 'present' as TableType, label: 'Present', color: 'green' },
+                { id: 'absent' as TableType, label: 'Absent', color: 'red' },
+                { id: 'leaves' as TableType, label: 'Leaves', color: 'yellow' },
+                { id: 'od' as TableType, label: 'OD', color: 'blue' },
+                { id: 'ot' as TableType, label: 'OT', color: 'orange' },
+                { id: 'extraHours' as TableType, label: 'Extra Hours', color: 'purple' },
+                { id: 'shifts' as TableType, label: 'Shifts', color: 'indigo' },
+              ].map((tab) => {
+                // Count employees with data in this table type
+                const count = payRegisters.filter(pr => {
+                  if (tab.id === 'all') return true;
+                  if (!pr.dailyRecords || pr.dailyRecords.length === 0) return false;
+                  switch (tab.id) {
+                    case 'present':
+                      return pr.dailyRecords.some(r => r.status === 'present' || r.firstHalf.status === 'present' || r.secondHalf.status === 'present');
+                    case 'absent':
+                      return pr.dailyRecords.some(r => r.status === 'absent' || r.firstHalf.status === 'absent' || r.secondHalf.status === 'absent');
+                    case 'leaves':
+                      return pr.dailyRecords.some(r => r.status === 'leave' || r.firstHalf.status === 'leave' || r.secondHalf.status === 'leave');
+                    case 'od':
+                      return pr.dailyRecords.some(r => r.status === 'od' || r.isOD || r.firstHalf.status === 'od' || r.secondHalf.status === 'od' || r.firstHalf.isOD || r.secondHalf.isOD);
+                    case 'ot':
+                    case 'extraHours':
+                      return pr.dailyRecords.some(r => r.otHours > 0 || r.firstHalf.otHours > 0 || r.secondHalf.otHours > 0);
+                    case 'shifts':
+                      return pr.dailyRecords.some(r => r.shiftId !== null || r.shiftName !== null || r.firstHalf.shiftId !== null || r.secondHalf.shiftId !== null);
+                    default:
+                      return true;
+                  }
+                }).length;
+                return (
                   <button
-                    onClick={() => setShowEditModal(false)}
-                    className="text-slate-400 hover:text-slate-600"
+                    key={tab.id}
+                    onClick={() => setActiveTable(tab.id)}
+                    className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-1 sm:px-6 py-2.5 sm:py-3 text-[10px] sm:text-sm font-medium border-b-2 transition-colors ${activeTable === tab.id
+                      ? `border-${tab.color}-500 text-${tab.color}-600 dark:text-${tab.color}-400 bg-${tab.color}-50/30 dark:bg-${tab.color}-900/10`
+                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'
+                      }`}
                   >
-                    ✕
+                    <span className="whitespace-nowrap">{tab.label}</span>
+                    <span className="px-1.5 py-0.5 text-[9px] sm:text-xs bg-slate-100 dark:bg-slate-700 rounded-full">
+                      {count}
+                    </span>
                   </button>
-                </div>
+                );
+              })}
+            </nav>
+          </div>
 
-                <div className="space-y-6">
-                  {/* Half-Day Mode Toggle */}
-                  <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isHalfDayMode}
-                        onChange={(e) => {
-                          setIsHalfDayMode(e.target.checked);
-                          if (!e.target.checked) {
-                            // When disabling half-day mode, sync both halves to the same status
-                            const currentStatus = editData.status || editData.firstHalf?.status || 'absent';
-                            setEditData({
-                              ...editData,
-                              status: currentStatus,
-                              firstHalf: normalizeHalfDay(editData.firstHalf, currentStatus as any),
-                              secondHalf: normalizeHalfDay(editData.secondHalf, currentStatus as any),
-                              isSplit: false,
-                            });
-                          } else {
-                            setEditData({
-                              ...editData,
-                              isSplit: true,
-                            });
-                          }
-                        }}
-                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                        Enable Half-Day Mode
-                      </span>
-                    </label>
-                    {isHalfDayMode && (
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        (Edit first and second half separately)
-                      </span>
+          {/* Grid Table View - Similar to Attendance Page */}
+          {loading ? (
+            <div className="flex items-center justify-center min-h-[400px]">
+              <Spinner />
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-xl dark:border-slate-700 dark:bg-slate-900/80">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+                      <th className="sticky left-0 z-10 w-[180px] border-r border-slate-200 bg-slate-50 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        Employee
+                      </th>
+                      {daysArray.map((day) => (
+                        <th
+                          key={day}
+                          className={`w-[calc((100%-180px-${activeTable === 'leaves' ? '320px' : activeTable === 'all' ? '480px' : '80px'})/${daysArray.length})] border-r border-slate-200 px-1 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300`}
+                        >
+                          {parseInt(day.split('-')[2])}
+                        </th>
+                      ))}
+                      {/* Dynamic columns based on active tab */}
+                      {activeTable === 'all' && (
+                        <>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20" title="OD days are included in present days">
+                            Present Days
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50">
+                            Payable Shifts
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-gray-100 dark:bg-slate-700/50">
+                            Week Offs
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-purple-50 dark:bg-purple-900/20">
+                            Holidays
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50/80 dark:bg-green-900/30">
+                            Paid Leaves
+                          </th>
+                          <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20" title="Payable Shifts + Week Offs + Holidays + Paid Leaves">
+                            Paid Days
+                          </th>
+                        </>
+                      )}
+                      {activeTable === 'present' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20">
+                          Total Present Days
+                        </th>
+                      )}
+                      {activeTable === 'absent' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-red-50 dark:bg-red-900/20">
+                          Total Absent Days
+                        </th>
+                      )}
+                      {activeTable === 'leaves' && (
+                        <>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-yellow-50 dark:bg-yellow-900/20">
+                            Total Leaves
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-green-50 dark:bg-green-900/20">
+                            Paid Leaves
+                          </th>
+                          <th className="w-[80px] border-r border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-red-50 dark:bg-red-900/20">
+                            LOP
+                          </th>
+                          <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-orange-50 dark:bg-orange-900/20">
+                            Without Pay
+                          </th>
+                        </>
+                      )}
+                      {activeTable === 'od' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20">
+                          Total OD Days
+                        </th>
+                      )}
+                      {activeTable === 'ot' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-orange-50 dark:bg-orange-900/20">
+                          Total OT Hours
+                        </th>
+                      )}
+                      {activeTable === 'extraHours' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-purple-50 dark:bg-purple-900/20">
+                          Total Extra Hours
+                        </th>
+                      )}
+                      {activeTable === 'shifts' && (
+                        <th className="w-[80px] border-r-0 border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:text-slate-300 bg-indigo-50 dark:bg-indigo-900/20">
+                          Total Shifts
+                        </th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {getFilteredPayRegisters().length === 0 ? (
+                      <tr>
+                        <td colSpan={daysArray.length + (activeTable === 'leaves' ? 4 : activeTable === 'all' ? 6 : 1)} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                          No records found{activeTable !== 'all' ? ` for ${activeTable === 'shifts' ? 'shifts' : activeTable} table` : ''}
+                        </td>
+                      </tr>
+                    ) : (
+                      getFilteredPayRegisters().map((pr) => {
+                        const employee = typeof pr.employeeId === 'object' ? pr.employeeId : null;
+                        const employeeId = typeof pr.employeeId === 'object' ? pr.employeeId._id : pr.employeeId;
+                        const emp_no = typeof pr.employeeId === 'object' ? pr.employeeId.emp_no : pr.emp_no;
+                        const employee_name = typeof pr.employeeId === 'object' ? pr.employeeId.employee_name : '';
+                        const department = typeof pr.employeeId === 'object' && pr.employeeId.department_id
+                          ? (typeof pr.employeeId.department_id === 'object' ? pr.employeeId.department_id.name : '')
+                          : '';
+                        const leftDateDaily = employee && 'leftDate' in employee ? (employee as any).leftDate : null;
+                        const leftDateStrDaily = leftDateDaily ? (typeof leftDateDaily === 'string' ? new Date(leftDateDaily).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '') : '';
+
+                        // Create a map of daily records for quick lookup
+                        const dailyRecordsMap = new Map(pr.dailyRecords.map(r => [r.date, r]));
+
+                        const deptId = employee && employee.department_id
+                          ? (typeof employee.department_id === 'object' ? employee.department_id._id : employee.department_id)
+                          : '';
+
+                        const batchInfo = deptId ? departmentBatchStatus.get(deptId) : null;
+                        const batchStatus = batchInfo?.status || 'pending';
+                        const hasPermission = batchInfo?.permissionGranted || false;
+
+                        const isPastMonth = new Date(year, month - 1, 1).getTime() < new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+
+                        // Locked if Approved/Frozen/Complete AND no permission
+                        // OR if it is a past month (strict modification lock)
+                        const isLocked = (['approved', 'freeze', 'complete'].includes(batchStatus) && !hasPermission) || isPastMonth;
+                        const isFrozenOrComplete = ['freeze', 'complete'].includes(batchStatus);
+
+                        return (
+                          <tr key={pr._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <div className="font-semibold truncate flex-1 flex items-center gap-1">
+                                    {employee_name}
+                                    {leftDateStrDaily && (
+                                      <span className="text-[9px] text-amber-600 dark:text-amber-400 font-medium" title="Left in this payroll period">(Left {leftDateStrDaily})</span>
+                                    )}
+                                    {isLocked && (
+                                      <span title={`Payroll ${batchStatus}`} className="text-slate-400">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                                          <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
+                                        </svg>
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {isPastMonth && !pr.payrollId ? (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (employee) handleCalculatePayroll(employee);
+                                        }}
+                                        className={`rounded-md px-2 py-1 text-[9px] font-semibold text-white shadow-sm transition-all hover:shadow-md bg-amber-500 hover:bg-amber-600 ${(!hasManagePermission || (calculatingId === employeeId)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        title="Calculate Payroll"
+                                        disabled={!hasManagePermission || calculatingId === employeeId}
+                                      >
+                                        {calculatingId === employeeId ? '...' : 'Calculate'}
+                                      </button>
+                                    ) : (
+                                      <>
+                                        {hasViewPermission && (
+                                          <Link
+                                            href={`/payroll-transactions?search=${employee?.emp_no || employeeId}&month=${monthStr}`}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="rounded-md px-2 py-1 text-[9px] font-semibold text-white shadow-sm transition-all hover:shadow-md bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 inline-block"
+                                            title="View Payslip"
+                                          >
+                                            Payslip
+                                          </Link>
+                                        )}
+                                      </>
+                                    )}
+
+                                    {!isFrozenOrComplete && (
+                                      <div />
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="text-[9px] text-slate-500 dark:text-slate-400 truncate mt-1">
+                                  {emp_no}
+                                  {department && ` • ${department}`}
+                                </div>
+                              </div>
+                            </td>
+                            {daysArray.map((day) => {
+                              const dateStr = day;
+                              const record = dailyRecordsMap.get(dateStr) || null;
+                              const shouldShow = shouldShowInTable(record, activeTable);
+                              const displayStatus = getStatusDisplay(record);
+                              const bgColor = getCellBackgroundColor(record, activeTable);
+
+                              return (
+                                <td
+                                  key={day}
+                                  onClick={() => {
+                                    if (employee && !isLocked && hasManagePermission) {
+                                      if (record) {
+                                        handleDateClick(employee, dateStr, record);
+                                      } else {
+                                        // Create empty record for editing if no record exists
+                                        const emptyRecord: DailyRecord = {
+                                          date: dateStr,
+                                          firstHalf: {
+                                            status: 'absent',
+                                            leaveType: null,
+                                            leaveNature: null,
+                                            isOD: false,
+                                            otHours: 0,
+                                            shiftId: null,
+                                            remarks: null,
+                                          },
+                                          secondHalf: {
+                                            status: 'absent',
+                                            leaveType: null,
+                                            leaveNature: null,
+                                            isOD: false,
+                                            otHours: 0,
+                                            shiftId: null,
+                                            remarks: null,
+                                          },
+                                          status: 'absent',
+                                          leaveType: null,
+                                          leaveNature: null,
+                                          isOD: false,
+                                          isSplit: false,
+                                          shiftId: null,
+                                          shiftName: null,
+                                          otHours: 0,
+                                          remarks: null,
+                                        };
+                                        handleDateClick(employee, dateStr, emptyRecord);
+                                      }
+                                    }
+                                  }}
+                                  className={`border-r border-slate-200 px-1 py-1.5 text-center dark:border-slate-700
+                                ${employee && !isLocked && hasManagePermission ? 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800' : 'cursor-not-allowed opacity-75 bg-slate-50 dark:bg-slate-800/50'} 
+                                ${bgColor}`}
+                                >
+                                  {shouldShow && record ? (
+                                    <div className="space-y-0.5">
+                                      {activeTable === 'shifts' ? (
+                                        <>
+                                          {record.shiftName ? (
+                                            <div className="font-semibold text-[9px] text-indigo-700 dark:text-indigo-300" title={record.shiftName}>
+                                              {record.shiftName.length > 8 ? record.shiftName.substring(0, 8) + '...' : record.shiftName}
+                                            </div>
+                                          ) : (
+                                            <div className="font-semibold text-[9px] text-slate-500">-</div>
+                                          )}
+                                          {record.isSplit && (
+                                            <div className="text-[7px] opacity-75 text-slate-500">
+                                              {record.firstHalf.shiftId ? '1st' : ''}
+                                              {record.firstHalf.shiftId && record.secondHalf.shiftId ? '/' : ''}
+                                              {record.secondHalf.shiftId ? '2nd' : ''}
+                                            </div>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="font-semibold text-[9px]">{displayStatus}</div>
+                                          {record.isSplit && (
+                                            <div className="text-[8px] opacity-75">
+                                              {record.firstHalf.status.charAt(0).toUpperCase()}/{record.secondHalf.status.charAt(0).toUpperCase()}
+                                            </div>
+                                          )}
+                                          {activeTable === 'all' && (record.isLate || record.isEarlyOut) && (
+                                            <div className="text-[7px] font-medium text-amber-600 dark:text-amber-400 mt-0.5" title={[record.isLate && 'Late', record.isEarlyOut && 'Early out'].filter(Boolean).join(', ')}>
+                                              {record.isLate && 'L'}
+                                              {record.isLate && record.isEarlyOut && ' '}
+                                              {record.isEarlyOut && 'E'}
+                                            </div>
+                                          )}
+                                          {record.otHours > 0 && (activeTable === 'ot' || activeTable === 'extraHours' || activeTable === 'all') && (
+                                            <div className="text-[8px] font-semibold text-blue-600 dark:text-blue-300">{record.otHours}h</div>
+                                          )}
+                                          {record.shiftName && activeTable === 'all' && (
+                                            <div className="text-[8px] opacity-75 truncate" title={record.shiftName}>{record.shiftName.substring(0, 3)}</div>
+                                          )}
+                                        </>
+                                      )}
+                                      {record.isManuallyEdited && (
+                                        <div className="text-[7px] text-indigo-600 dark:text-indigo-400" title="Manually Edited">✎</div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 text-[9px]">-</span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                            {/* Dynamic columns based on active tab */}
+                            {activeTable === 'all' && (() => {
+                              const payable = pr.totals?.totalPayableShifts ?? 0;
+                              const weekOffs = pr.totals?.totalWeeklyOffs ?? 0;
+                              const holidays = pr.totals?.totalHolidays ?? 0;
+                              const paidLeaves = pr.totals?.totalPaidLeaveDays ?? 0;
+                              const paidDays = payable + weekOffs + holidays + paidLeaves;
+                              return (
+                                <>
+                                  <td className="border-r border-slate-200 bg-green-50 dark:bg-green-900/20 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:text-green-300" title="Includes OD days">
+                                    {(pr.totals?.totalPresentDays ?? 0).toFixed(1)}
+                                  </td>
+                                  <td className="border-r border-slate-200 bg-slate-50 dark:bg-slate-800 px-2 py-2 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 dark:bg-slate-700/50">
+                                    {payable.toFixed(1)}
+                                  </td>
+                                  <td className="border-r border-slate-200 bg-gray-50 dark:bg-slate-700/50 px-2 py-2 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                                    {weekOffs.toFixed(1)}
+                                  </td>
+                                  <td className="border-r border-slate-200 bg-purple-50 dark:bg-purple-900/20 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:text-purple-300">
+                                    {holidays.toFixed(1)}
+                                  </td>
+                                  <td className="border-r border-slate-200 bg-green-50/80 dark:bg-green-900/30 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:text-green-400">
+                                    {paidLeaves.toFixed(1)}
+                                  </td>
+                                  <td className="border-r-0 border-slate-200 bg-blue-50 dark:bg-blue-900/20 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:text-blue-300" title="Payable + Week Offs + Holidays + Paid Leaves">
+                                    {paidDays.toFixed(1)}
+                                  </td>
+                                </>
+                              );
+                            })()}
+                            {activeTable === 'present' && (
+                              <td className="border-r-0 border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300">
+                                {pr.totals.totalPresentDays.toFixed(1)}
+                              </td>
+                            )}
+                            {activeTable === 'absent' && (
+                              <td className="border-r-0 border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300">
+                                {pr.totals.totalAbsentDays.toFixed(1)}
+                              </td>
+                            )}
+                            {activeTable === 'leaves' && (
+                              <>
+                                <td className="border-r border-slate-200 bg-yellow-50 px-2 py-2 text-center text-[11px] font-bold text-yellow-700 dark:border-slate-700 dark:bg-yellow-900/20 dark:text-yellow-300">
+                                  {pr.totals.totalLeaveDays.toFixed(1)}
+                                </td>
+                                <td className="border-r border-slate-200 bg-green-50 px-2 py-2 text-center text-[11px] font-bold text-green-700 dark:border-slate-700 dark:bg-green-900/20 dark:text-green-300">
+                                  {pr.totals.totalPaidLeaveDays.toFixed(1)}
+                                </td>
+                                <td className="border-r border-slate-200 bg-red-50 px-2 py-2 text-center text-[11px] font-bold text-red-700 dark:border-slate-700 dark:bg-red-900/20 dark:text-red-300">
+                                  {pr.totals.totalLopDays.toFixed(1)}
+                                </td>
+                                <td className="border-r-0 border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300">
+                                  {pr.totals.totalUnpaidLeaveDays.toFixed(1)}
+                                </td>
+                              </>
+                            )}
+                            {activeTable === 'od' && (
+                              <td className="border-r-0 border-slate-200 bg-blue-50 px-2 py-2 text-center text-[11px] font-bold text-blue-700 dark:border-slate-700 dark:bg-blue-900/20 dark:text-blue-300">
+                                {pr.totals.totalODDays.toFixed(1)}
+                              </td>
+                            )}
+                            {activeTable === 'ot' && (
+                              <td className="border-r-0 border-slate-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-bold text-orange-700 dark:border-slate-700 dark:bg-orange-900/20 dark:text-orange-300">
+                                {pr.totals.totalOTHours.toFixed(1)}
+                              </td>
+                            )}
+                            {activeTable === 'extraHours' && (
+                              <td className="border-r-0 border-slate-200 bg-purple-50 px-2 py-2 text-center text-[11px] font-bold text-purple-700 dark:border-slate-700 dark:bg-purple-900/20 dark:text-purple-300">
+                                {pr.totals.totalOTHours.toFixed(1)}
+                              </td>
+                            )}
+                            {activeTable === 'shifts' && (
+                              <td className="border-r-0 border-slate-200 bg-indigo-50 px-2 py-2 text-center text-[11px] font-bold text-indigo-700 dark:border-slate-700 dark:bg-indigo-900/20 dark:text-indigo-300">
+                                {pr.dailyRecords.filter(r => r.shiftId !== null || r.shiftName !== null || r.firstHalf.shiftId !== null || r.secondHalf.shiftId !== null).length}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })
                     )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Edit Modal - Tab-specific dialogs */}
+        {
+          showEditModal && editingRecord && (
+            <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50">
+              <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-slate-200 dark:border-slate-700">
+                <div className="p-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                      Edit: {editingRecord.date} - {editingRecord.employee.employee_name}
+                    </h2>
+                    <button
+                      onClick={() => setShowEditModal(false)}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
                   </div>
 
-                  {/* First Half - Only show if half-day mode is enabled */}
-                  {isHalfDayMode && (
-                    <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">First Half</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            Status
-                          </label>
-                          <select
-                            value={editData.firstHalf?.status || 'absent'}
-                            onChange={(e) => setEditData({
-                              ...editData,
-                              firstHalf: {
-                                ...editData.firstHalf!,
-                                status: e.target.value as any,
-                                leaveType: e.target.value === 'leave' ? (editData.firstHalf?.leaveType || null) : null,
-                                leaveNature: e.target.value === 'leave' ? (editData.firstHalf?.leaveNature || null) : null,
-                                isOD: e.target.value === 'od',
-                              },
-                            })}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          >
-                            <option value="present">Present</option>
-                            <option value="absent">Absent</option>
-                            <option value="leave">Leave</option>
-                            <option value="od">OD</option>
-                            <option value="holiday">Holiday</option>
-                            <option value="week_off">Week Off</option>
-                          </select>
-                        </div>
-                        {editData.firstHalf?.status === 'leave' && (
-                          <>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Type
-                              </label>
-                              <select
-                                value={editData.firstHalf?.leaveType || ''}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  firstHalf: {
-                                    ...editData.firstHalf!,
-                                    leaveType: e.target.value,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="">Select Leave Type</option>
-                                {leaveTypes.map((lt) => (
-                                  <option key={lt.code} value={lt.code}>
-                                    {lt.name} ({lt.code})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Nature
-                              </label>
-                              <select
-                                value={editData.firstHalf?.leaveNature || 'paid'}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  firstHalf: {
-                                    ...editData.firstHalf!,
-                                    leaveNature: e.target.value as any,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="paid">Paid</option>
-                                <option value="lop">LOP (Loss of Pay)</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            OT Hours
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            value={editData.firstHalf?.otHours || 0}
-                            onChange={(e) => setEditData({
-                              ...editData,
-                              firstHalf: {
-                                ...editData.firstHalf!,
-                                otHours: parseFloat(e.target.value) || 0,
-                              },
-                            })}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            Shift
-                          </label>
-                          <select
-                            value={editData.shiftId || ''}
-                            onChange={(e) => {
-                              const shift = shifts.find((s) => s._id === e.target.value);
+                  <div className="space-y-6">
+                    {/* Half-Day Mode Toggle */}
+                    <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isHalfDayMode}
+                          onChange={(e) => {
+                            setIsHalfDayMode(e.target.checked);
+                            if (!e.target.checked) {
+                              // When disabling half-day mode, sync both halves to the same status
+                              const currentStatus = editData.status || editData.firstHalf?.status || 'absent';
                               setEditData({
                                 ...editData,
-                                shiftId: e.target.value || null,
-                                shiftName: shift?.name || null,
-                                firstHalf: {
-                                  ...editData.firstHalf!,
-                                  shiftId: e.target.value || null,
-                                },
-                                secondHalf: {
-                                  ...editData.secondHalf!,
-                                  shiftId: e.target.value || null,
-                                },
+                                status: currentStatus,
+                                firstHalf: normalizeHalfDay(editData.firstHalf, currentStatus as any),
+                                secondHalf: normalizeHalfDay(editData.secondHalf, currentStatus as any),
+                                isSplit: false,
                               });
-                            }}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          >
-                            <option value="">Select Shift</option>
-                            {shifts.map((shift) => (
-                              <option key={shift._id} value={shift._id}>
-                                {shift.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
+                            } else {
+                              setEditData({
+                                ...editData,
+                                isSplit: true,
+                              });
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                          Enable Half-Day Mode
+                        </span>
+                      </label>
+                      {isHalfDayMode && (
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          (Edit first and second half separately)
+                        </span>
+                      )}
                     </div>
-                  )}
 
-                  {/* Second Half - Only show if half-day mode is enabled */}
-                  {isHalfDayMode && (
-                    <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">Second Half</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            Status
-                          </label>
-                          <select
-                            value={editData.secondHalf?.status || 'absent'}
-                            onChange={(e) => setEditData({
-                              ...editData,
-                              secondHalf: {
-                                ...editData.secondHalf!,
-                                status: e.target.value as any,
-                                leaveType: e.target.value === 'leave' ? (editData.secondHalf?.leaveType || null) : null,
-                                leaveNature: e.target.value === 'leave' ? (editData.secondHalf?.leaveNature || null) : null,
-                                isOD: e.target.value === 'od',
-                              },
-                            })}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          >
-                            <option value="present">Present</option>
-                            <option value="absent">Absent</option>
-                            <option value="leave">Leave</option>
-                            <option value="od">OD</option>
-                            <option value="holiday">Holiday</option>
-                            <option value="week_off">Week Off</option>
-                          </select>
-                        </div>
-                        {editData.secondHalf?.status === 'leave' && (
-                          <>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Type
-                              </label>
-                              <select
-                                value={editData.secondHalf?.leaveType || ''}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  secondHalf: {
-                                    ...editData.secondHalf!,
-                                    leaveType: e.target.value,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="">Select Leave Type</option>
-                                {leaveTypes.map((lt) => (
-                                  <option key={lt.code} value={lt.code}>
-                                    {lt.name} ({lt.code})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Nature
-                              </label>
-                              <select
-                                value={editData.secondHalf?.leaveNature || 'paid'}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  secondHalf: {
-                                    ...editData.secondHalf!,
-                                    leaveNature: e.target.value as any,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="paid">Paid</option>
-                                <option value="lop">LOP (Loss of Pay)</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            OT Hours
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            value={editData.secondHalf?.otHours || 0}
-                            onChange={(e) => setEditData({
-                              ...editData,
-                              secondHalf: {
-                                ...editData.secondHalf!,
-                                otHours: parseFloat(e.target.value) || 0,
-                              },
-                            })}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Full Day Fields - Show when NOT in half-day mode OR for specific tabs */}
-                  {!isHalfDayMode && (
-                    <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">
-                        {activeTable === 'all' ? 'Day Status' :
-                          activeTable === 'present' ? 'Present Status' :
-                            activeTable === 'absent' ? 'Absent Status' :
-                              activeTable === 'leaves' ? 'Leave Details' :
-                                activeTable === 'od' ? 'OD Details' :
-                                  activeTable === 'ot' || activeTable === 'extraHours' ? 'OT Hours' :
-                                    'Full Day'}
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {(activeTable === 'all' || activeTable === 'present' || activeTable === 'absent' || activeTable === 'leaves' || activeTable === 'od') && (
+                    {/* First Half - Only show if half-day mode is enabled */}
+                    {isHalfDayMode && (
+                      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+                        <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">First Half</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                               Status
                             </label>
                             <select
-                              value={editData.status || 'absent'}
-                              onChange={(e) => {
-                                const newStatus = e.target.value as any;
-                                setEditData({
-                                  ...editData,
-                                  status: newStatus,
-                                  firstHalf: {
-                                    ...editData.firstHalf!,
-                                    status: newStatus,
-                                    leaveType: newStatus === 'leave' ? (editData.firstHalf?.leaveType || null) : null,
-                                    leaveNature: newStatus === 'leave' ? (editData.firstHalf?.leaveNature || null) : null,
-                                    isOD: newStatus === 'od',
-                                  },
-                                  secondHalf: {
-                                    ...editData.secondHalf!,
-                                    status: newStatus,
-                                    leaveType: newStatus === 'leave' ? (editData.secondHalf?.leaveType || null) : null,
-                                    leaveNature: newStatus === 'leave' ? (editData.secondHalf?.leaveNature || null) : null,
-                                    isOD: newStatus === 'od',
-                                  },
-                                  leaveType: newStatus === 'leave' ? (editData.leaveType || null) : null,
-                                  leaveNature: newStatus === 'leave' ? (editData.leaveNature || null) : null,
-                                  isOD: newStatus === 'od',
-                                  isSplit: false,
-                                });
-                              }}
+                              value={editData.firstHalf?.status || 'absent'}
+                              onChange={(e) => setEditData({
+                                ...editData,
+                                firstHalf: {
+                                  ...editData.firstHalf!,
+                                  status: e.target.value as any,
+                                  leaveType: e.target.value === 'leave' ? (editData.firstHalf?.leaveType || null) : null,
+                                  leaveNature: e.target.value === 'leave' ? (editData.firstHalf?.leaveNature || null) : null,
+                                  isOD: e.target.value === 'od',
+                                },
+                              })}
                               className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
                             >
                               <option value="present">Present</option>
@@ -2326,233 +1902,602 @@ export default function PayRegisterPage() {
                               <option value="week_off">Week Off</option>
                             </select>
                           </div>
-                        )}
-                        {editData.status === 'leave' && (activeTable === 'leaves' || !isHalfDayMode) && (
-                          <>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Type
-                              </label>
-                              <select
-                                value={editData.leaveType || ''}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  leaveType: e.target.value,
-                                  firstHalf: {
-                                    ...editData.firstHalf!,
-                                    leaveType: e.target.value,
-                                  },
-                                  secondHalf: {
-                                    ...editData.secondHalf!,
-                                    leaveType: e.target.value,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="">Select Leave Type</option>
-                                {leaveTypes.map((lt) => (
-                                  <option key={lt.code} value={lt.code}>
-                                    {lt.name} ({lt.code})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Leave Nature
-                              </label>
-                              <select
-                                value={editData.leaveNature || 'paid'}
-                                onChange={(e) => setEditData({
-                                  ...editData,
-                                  leaveNature: e.target.value as any,
-                                  firstHalf: {
-                                    ...editData.firstHalf!,
-                                    leaveNature: e.target.value as any,
-                                  },
-                                  secondHalf: {
-                                    ...editData.secondHalf!,
-                                    leaveNature: e.target.value as any,
-                                  },
-                                })}
-                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                              >
-                                <option value="paid">Paid</option>
-                                <option value="lop">LOP (Loss of Pay)</option>
-                                <option value="without_pay">Without Pay</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-                        {/* Shift field for full day */}
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                            Shift
-                          </label>
-                          <select
-                            value={editData.shiftId || ''}
-                            onChange={(e) => {
-                              const shift = shifts.find((s) => s._id === e.target.value);
-                              setEditData({
+                          {editData.firstHalf?.status === 'leave' && (
+                            <>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Type
+                                </label>
+                                <select
+                                  value={editData.firstHalf?.leaveType || ''}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    firstHalf: {
+                                      ...editData.firstHalf!,
+                                      leaveType: e.target.value,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="">Select Leave Type</option>
+                                  {leaveTypes.map((lt) => (
+                                    <option key={lt.code} value={lt.code}>
+                                      {lt.name} ({lt.code})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Nature
+                                </label>
+                                <select
+                                  value={editData.firstHalf?.leaveNature || 'paid'}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    firstHalf: {
+                                      ...editData.firstHalf!,
+                                      leaveNature: e.target.value as any,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="paid">Paid</option>
+                                  <option value="lop">LOP (Loss of Pay)</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                              OT Hours
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={editData.firstHalf?.otHours || 0}
+                              onChange={(e) => setEditData({
                                 ...editData,
-                                shiftId: e.target.value || null,
-                                shiftName: shift?.name || null,
                                 firstHalf: {
                                   ...editData.firstHalf!,
+                                  otHours: parseFloat(e.target.value) || 0,
+                                },
+                              })}
+                              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                              Shift
+                            </label>
+                            <select
+                              value={editData.shiftId || ''}
+                              onChange={(e) => {
+                                const shift = shifts.find((s) => s._id === e.target.value);
+                                setEditData({
+                                  ...editData,
                                   shiftId: e.target.value || null,
+                                  shiftName: shift?.name || null,
+                                  firstHalf: {
+                                    ...editData.firstHalf!,
+                                    shiftId: e.target.value || null,
+                                  },
+                                  secondHalf: {
+                                    ...editData.secondHalf!,
+                                    shiftId: e.target.value || null,
+                                  },
+                                });
+                              }}
+                              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                            >
+                              <option value="">Select Shift</option>
+                              {shifts.map((shift) => (
+                                <option key={shift._id} value={shift._id}>
+                                  {shift.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Second Half - Only show if half-day mode is enabled */}
+                    {isHalfDayMode && (
+                      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+                        <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">Second Half</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                              Status
+                            </label>
+                            <select
+                              value={editData.secondHalf?.status || 'absent'}
+                              onChange={(e) => setEditData({
+                                ...editData,
+                                secondHalf: {
+                                  ...editData.secondHalf!,
+                                  status: e.target.value as any,
+                                  leaveType: e.target.value === 'leave' ? (editData.secondHalf?.leaveType || null) : null,
+                                  leaveNature: e.target.value === 'leave' ? (editData.secondHalf?.leaveNature || null) : null,
+                                  isOD: e.target.value === 'od',
+                                },
+                              })}
+                              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                            >
+                              <option value="present">Present</option>
+                              <option value="absent">Absent</option>
+                              <option value="leave">Leave</option>
+                              <option value="od">OD</option>
+                              <option value="holiday">Holiday</option>
+                              <option value="week_off">Week Off</option>
+                            </select>
+                          </div>
+                          {editData.secondHalf?.status === 'leave' && (
+                            <>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Type
+                                </label>
+                                <select
+                                  value={editData.secondHalf?.leaveType || ''}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    secondHalf: {
+                                      ...editData.secondHalf!,
+                                      leaveType: e.target.value,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="">Select Leave Type</option>
+                                  {leaveTypes.map((lt) => (
+                                    <option key={lt.code} value={lt.code}>
+                                      {lt.name} ({lt.code})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Nature
+                                </label>
+                                <select
+                                  value={editData.secondHalf?.leaveNature || 'paid'}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    secondHalf: {
+                                      ...editData.secondHalf!,
+                                      leaveNature: e.target.value as any,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="paid">Paid</option>
+                                  <option value="lop">LOP (Loss of Pay)</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                              OT Hours
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={editData.secondHalf?.otHours || 0}
+                              onChange={(e) => setEditData({
+                                ...editData,
+                                secondHalf: {
+                                  ...editData.secondHalf!,
+                                  otHours: parseFloat(e.target.value) || 0,
+                                },
+                              })}
+                              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Full Day Fields - Show when NOT in half-day mode OR for specific tabs */}
+                    {!isHalfDayMode && (
+                      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+                        <h3 className="text-lg font-semibold mb-3 text-slate-900 dark:text-white">
+                          {activeTable === 'all' ? 'Day Status' :
+                            activeTable === 'present' ? 'Present Status' :
+                              activeTable === 'absent' ? 'Absent Status' :
+                                activeTable === 'leaves' ? 'Leave Details' :
+                                  activeTable === 'od' ? 'OD Details' :
+                                    activeTable === 'ot' || activeTable === 'extraHours' ? 'OT Hours' :
+                                      'Full Day'}
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {(activeTable === 'all' || activeTable === 'present' || activeTable === 'absent' || activeTable === 'leaves' || activeTable === 'od') && (
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                Status
+                              </label>
+                              <select
+                                value={editData.status || 'absent'}
+                                onChange={(e) => {
+                                  const newStatus = e.target.value as any;
+                                  setEditData({
+                                    ...editData,
+                                    status: newStatus,
+                                    firstHalf: {
+                                      ...editData.firstHalf!,
+                                      status: newStatus,
+                                      leaveType: newStatus === 'leave' ? (editData.firstHalf?.leaveType || null) : null,
+                                      leaveNature: newStatus === 'leave' ? (editData.firstHalf?.leaveNature || null) : null,
+                                      isOD: newStatus === 'od',
+                                    },
+                                    secondHalf: {
+                                      ...editData.secondHalf!,
+                                      status: newStatus,
+                                      leaveType: newStatus === 'leave' ? (editData.secondHalf?.leaveType || null) : null,
+                                      leaveNature: newStatus === 'leave' ? (editData.secondHalf?.leaveNature || null) : null,
+                                      isOD: newStatus === 'od',
+                                    },
+                                    leaveType: newStatus === 'leave' ? (editData.leaveType || null) : null,
+                                    leaveNature: newStatus === 'leave' ? (editData.leaveNature || null) : null,
+                                    isOD: newStatus === 'od',
+                                    isSplit: false,
+                                  });
+                                }}
+                                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                              >
+                                <option value="present">Present</option>
+                                <option value="absent">Absent</option>
+                                <option value="leave">Leave</option>
+                                <option value="od">OD</option>
+                                <option value="holiday">Holiday</option>
+                                <option value="week_off">Week Off</option>
+                              </select>
+                            </div>
+                          )}
+                          {editData.status === 'leave' && (activeTable === 'leaves' || !isHalfDayMode) && (
+                            <>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Type
+                                </label>
+                                <select
+                                  value={editData.leaveType || ''}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    leaveType: e.target.value,
+                                    firstHalf: {
+                                      ...editData.firstHalf!,
+                                      leaveType: e.target.value,
+                                    },
+                                    secondHalf: {
+                                      ...editData.secondHalf!,
+                                      leaveType: e.target.value,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="">Select Leave Type</option>
+                                  {leaveTypes.map((lt) => (
+                                    <option key={lt.code} value={lt.code}>
+                                      {lt.name} ({lt.code})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                                  Leave Nature
+                                </label>
+                                <select
+                                  value={editData.leaveNature || 'paid'}
+                                  onChange={(e) => setEditData({
+                                    ...editData,
+                                    leaveNature: e.target.value as any,
+                                    firstHalf: {
+                                      ...editData.firstHalf!,
+                                      leaveNature: e.target.value as any,
+                                    },
+                                    secondHalf: {
+                                      ...editData.secondHalf!,
+                                      leaveNature: e.target.value as any,
+                                    },
+                                  })}
+                                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                                >
+                                  <option value="paid">Paid</option>
+                                  <option value="lop">LOP (Loss of Pay)</option>
+                                  <option value="without_pay">Without Pay</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+                          {/* Shift field for full day */}
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                              Shift
+                            </label>
+                            <select
+                              value={editData.shiftId || ''}
+                              onChange={(e) => {
+                                const shift = shifts.find((s) => s._id === e.target.value);
+                                setEditData({
+                                  ...editData,
+                                  shiftId: e.target.value || null,
+                                  shiftName: shift?.name || null,
+                                  firstHalf: {
+                                    ...editData.firstHalf!,
+                                    shiftId: e.target.value || null,
+                                  },
+                                  secondHalf: {
+                                    ...editData.secondHalf!,
+                                    shiftId: e.target.value || null,
+                                  },
+                                });
+                              }}
+                              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                            >
+                              <option value="">Select Shift</option>
+                              {shifts.map((shift) => (
+                                <option key={shift._id} value={shift._id}>
+                                  {shift.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Full Day OT Hours - Show for OT/Extra Hours tabs or when not in half-day mode */}
+                    {(activeTable === 'ot' || activeTable === 'extraHours' || !isHalfDayMode) && (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                          {isHalfDayMode ? 'Total OT Hours (First + Second Half)' : 'Total OT Hours (Full Day)'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={editData.otHours || 0}
+                          onChange={(e) => {
+                            const otValue = parseFloat(e.target.value) || 0;
+                            if (isHalfDayMode) {
+                              // Distribute OT hours equally between halves
+                              setEditData({
+                                ...editData,
+                                otHours: otValue,
+                                firstHalf: {
+                                  ...editData.firstHalf!,
+                                  otHours: otValue / 2,
                                 },
                                 secondHalf: {
                                   ...editData.secondHalf!,
-                                  shiftId: e.target.value || null,
+                                  otHours: otValue / 2,
                                 },
                               });
-                            }}
-                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                          >
-                            <option value="">Select Shift</option>
-                            {shifts.map((shift) => (
-                              <option key={shift._id} value={shift._id}>
-                                {shift.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                            } else {
+                              setEditData({
+                                ...editData,
+                                otHours: otValue,
+                                firstHalf: {
+                                  ...editData.firstHalf!,
+                                  otHours: otValue,
+                                },
+                                secondHalf: {
+                                  ...editData.secondHalf!,
+                                  otHours: otValue,
+                                },
+                              });
+                            }
+                          }}
+                          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
+                        />
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Full Day OT Hours - Show for OT/Extra Hours tabs or when not in half-day mode */}
-                  {(activeTable === 'ot' || activeTable === 'extraHours' || !isHalfDayMode) && (
+                    {/* Remarks */}
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        {isHalfDayMode ? 'Total OT Hours (First + Second Half)' : 'Total OT Hours (Full Day)'}
+                        Remarks
                       </label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={editData.otHours || 0}
-                        onChange={(e) => {
-                          const otValue = parseFloat(e.target.value) || 0;
-                          if (isHalfDayMode) {
-                            // Distribute OT hours equally between halves
-                            setEditData({
-                              ...editData,
-                              otHours: otValue,
-                              firstHalf: {
-                                ...editData.firstHalf!,
-                                otHours: otValue / 2,
-                              },
-                              secondHalf: {
-                                ...editData.secondHalf!,
-                                otHours: otValue / 2,
-                              },
-                            });
-                          } else {
-                            setEditData({
-                              ...editData,
-                              otHours: otValue,
-                              firstHalf: {
-                                ...editData.firstHalf!,
-                                otHours: otValue,
-                              },
-                              secondHalf: {
-                                ...editData.secondHalf!,
-                                otHours: otValue,
-                              },
-                            });
-                          }
-                        }}
+                      <textarea
+                        value={editData.remarks || ''}
+                        onChange={(e) => setEditData({
+                          ...editData,
+                          remarks: e.target.value,
+                        })}
+                        rows={3}
                         className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
                       />
                     </div>
-                  )}
-
-                  {/* Remarks */}
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                      Remarks
-                    </label>
-                    <textarea
-                      value={editData.remarks || ''}
-                      onChange={(e) => setEditData({
-                        ...editData,
-                        remarks: e.target.value,
-                      })}
-                      rows={3}
-                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 dark:text-white"
-                    />
                   </div>
-                </div>
 
-                <div className="flex justify-end gap-3 mt-6">
-                  <button
-                    onClick={handleSaveDate}
-                    disabled={saving[editingRecord.employeeId]}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {saving[editingRecord.employeeId] ? 'Saving...' : 'Save'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowEditModal(false);
-                      setEditingRecord(null);
-                      setIsHalfDayMode(false);
-                    }}
-                    className="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
-                  >
-                    Cancel
-                  </button>
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      onClick={handleSaveDate}
+                      disabled={saving[editingRecord.employeeId]}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {saving[editingRecord.employeeId] ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowEditModal(false);
+                        setEditingRecord(null);
+                        setIsHalfDayMode(false);
+                      }}
+                      className="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
+          )
+        }
+
+        {/* Pagination - below Daily table */}
+        {paginationTotalPages > 1 && !loading && payRegisters.length > 0 && (
+          <div className="flex items-center justify-center gap-2 py-4 my-4 border-t border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => { setPage(p => Math.max(1, p - 1)); loadPayRegisters(Math.max(1, page - 1), false); }}
+              disabled={page <= 1 || loading}
+              className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              Page {page} of {paginationTotalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => { setPage(p => Math.min(paginationTotalPages, p + 1)); loadPayRegisters(Math.min(paginationTotalPages, page + 1), false); }}
+              disabled={page >= paginationTotalPages || loading}
+              className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
           </div>
-        )
-      }
+        )}
 
-      {/* Pagination - below Daily table */}
-      {paginationTotalPages > 1 && !loading && payRegisters.length > 0 && (
-        <div className="flex items-center justify-center gap-2 py-4 my-4 border-t border-slate-200 dark:border-slate-700">
-          <button
-            type="button"
-            onClick={() => { setPage(p => Math.max(1, p - 1)); loadPayRegisters(Math.max(1, page - 1), false); }}
-            disabled={page <= 1 || loading}
-            className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Previous
-          </button>
-          <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
-            Page {page} of {paginationTotalPages}
-          </span>
-          <button
-            type="button"
-            onClick={() => { setPage(p => Math.min(paginationTotalPages, p + 1)); loadPayRegisters(Math.min(paginationTotalPages, page + 1), false); }}
-            disabled={page >= paginationTotalPages || loading}
-            className="h-8 px-3 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
+        {/* Arrears Section - Placed at the bottom of the page */}
+        <div className="mt-8 bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4 text-slate-900 dark:text-white">Arrears for Payroll</h2>
+          <div className="mb-4">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              The following arrears are approved but not fully settled. All arrears are selected by default.
+              You can deselect or adjust the amount to be included in this month&apos;s payroll processing.
+            </p>
+          </div>
+          {/* Arrears Selection Section */}
+          <ArrearsPayrollSection
+            month={month}
+            year={year}
+            departmentId={selectedDepartment}
+            onArrearsSelected={handleArrearsSelected}
+          />
         </div>
-      )}
 
-      {/* Arrears Section - Placed at the bottom of the page */}
-      <div className="mt-8 bg-white dark:bg-slate-800 rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4 text-slate-900 dark:text-white">Arrears for Payroll</h2>
-        <div className="mb-4">
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            The following arrears are approved but not fully settled. All arrears are selected by default.
-            You can deselect or adjust the amount to be included in this month&apos;s payroll processing.
-          </p>
+        <div className="mt-8 bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4 text-slate-900 dark:text-white">Manual Deductions for Payroll</h2>
+          <div className="mb-4">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              The following manual deductions are recorded but not fully settled. All deductions are selected by default.
+              You can deselect or adjust the amount to be included in this month&apos;s payroll processing.
+            </p>
+          </div>
+          <DeductionsPayrollSection
+            month={monthStr}
+            year={year}
+            divisionId={selectedDivision || undefined}
+            departmentId={selectedDepartment || undefined}
+            onDeductionsSelected={handleDeductionsSelected}
+          />
         </div>
-        {/* Arrears Selection Section */}
-        <ArrearsPayrollSection
-          month={month}
-          year={year}
-          departmentId={selectedDepartment}
-          onArrearsSelected={handleArrearsSelected}
-        />
+
+        {/* Summary Upload Modal */}
+        {showUploadModal && (
+          <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowUploadModal(false)} />
+            <div className="relative z-[1200] w-full max-w-lg overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+              <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Bulk Upload Summary</h2>
+                <button onClick={() => setShowUploadModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-600 dark:text-slate-400">
+                  You can download the summary Excel file based on your current filters, update the data, and upload it back.
+                </p>
+
+                <div className="grid grid-cols-1 gap-4">
+                  {/* Download Button */}
+                  <button
+                    onClick={handleDownloadSummary}
+                    className="flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50/50 hover:bg-blue-50 hover:border-blue-400 transition-all group"
+                  >
+                    <div className="mb-3 p-3 rounded-full bg-blue-100 text-blue-600 group-hover:scale-110 transition-transform">
+                      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </div>
+                    <span className="font-semibold text-blue-900 dark:text-blue-300">Download Summary Excel</span>
+                    <span className="text-xs text-blue-600 dark:text-blue-400 mt-1">Based on current filters</span>
+                  </button>
+
+                  {/* Upload Button */}
+                  <label className="flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 hover:border-indigo-400 transition-all group cursor-pointer">
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".xlsx, .xls"
+                      onChange={handleUploadSummaryFile}
+                      disabled={uploadingSummary}
+                    />
+                    <div className="mb-3 p-3 rounded-full bg-indigo-100 text-indigo-600 group-hover:scale-110 transition-transform">
+                      {uploadingSummary ? (
+                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                      ) : (
+                        <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className="font-semibold text-indigo-900 dark:text-indigo-300">
+                      {uploadingSummary ? 'Uploading...' : 'Upload Summary Excel'}
+                    </span>
+                    <span className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">Excel file only (.xlsx, .xls)</span>
+                  </label>
+                </div>
+
+                {uploadResults && (
+                  <div className="mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <h4 className="font-semibold text-slate-900 dark:text-slate-100 mb-2">Upload Results</h4>
+                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="p-2 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400">
+                        <div className="font-bold">{uploadResults.success}</div>
+                        <div>Success</div>
+                      </div>
+                      <div className="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
+                        <div className="font-bold">{uploadResults.failed}</div>
+                        <div>Failed</div>
+                      </div>
+                      <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-400">
+                        <div className="font-bold">{uploadResults.total}</div>
+                        <div>Total</div>
+                      </div>
+                    </div>
+                    {uploadResults.errors.length > 0 && (
+                      <div className="mt-4 max-h-32 overflow-y-auto">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Error Logistics</div>
+                        <ul className="space-y-1">
+                          {uploadResults.errors.map((err, i) => (
+                            <li key={i} className="text-[10px] text-red-500 bg-red-50/50 dark:bg-red-900/10 p-1.5 rounded border border-red-100 dark:border-red-900/30">
+                              {err}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </div >
+    </div>
   );
 }
 

@@ -403,14 +403,15 @@ export default function PayRegisterPage() {
       const targetDivId = selectedDivision && selectedDivision.trim() !== '' ? selectedDivision : undefined;
 
       const limit = PAGE_SIZE;
-      const response = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, undefined, pageToLoad, limit);
+      const rawResponse = await api.getEmployeesWithPayRegister(monthStr, targetDeptId, targetDivId, undefined, pageToLoad, limit);
+      const response = rawResponse as any;
 
       if (response.success) {
         const payRegisterList = response.data || [];
         console.log('[Pay Register] Loaded page', pageToLoad, 'count:', payRegisterList.length);
 
-        if ((response as any).startDate) setPayrollStartDate((response as any).startDate);
-        if ((response as any).endDate) setPayrollEndDate((response as any).endDate);
+        if (response.startDate) setPayrollStartDate(response.startDate);
+        if (response.endDate) setPayrollEndDate(response.endDate);
 
         if (append) {
           setPayRegisters(prev => [...prev, ...payRegisterList]);
@@ -419,9 +420,9 @@ export default function PayRegisterPage() {
         }
 
         if (response.pagination) {
-          setPaginationTotal((response.pagination as any).total ?? 0);
-          setPaginationTotalPages((response.pagination as any).totalPages ?? 1);
-          setHasMore(pageToLoad < (response.pagination as any).totalPages);
+          setPaginationTotal(response.pagination.total ?? 0);
+          setPaginationTotalPages(response.pagination.totalPages ?? 1);
+          setHasMore(pageToLoad < response.pagination.totalPages);
         } else {
           setHasMore(payRegisterList.length === limit);
         }
@@ -583,7 +584,8 @@ export default function PayRegisterPage() {
         return;
       }
 
-      const response = await api.uploadPayRegisterSummary(monthStr, result.data);
+      const rawResponse = await api.uploadPayRegisterSummary(monthStr, result.data);
+      const response = rawResponse as any;
       if (response.success) {
         setUploadResults(response.data);
         await loadPayRegisters();

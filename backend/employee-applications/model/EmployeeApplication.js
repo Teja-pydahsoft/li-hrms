@@ -91,6 +91,11 @@ const employeeApplicationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    qualificationStatus: {
+      type: String,
+      default: 'Partial',
+      trim: true,
+    },
     experience: {
       type: Number,
       default: null,
@@ -158,6 +163,11 @@ const employeeApplicationSchema = new mongoose.Schema(
       default: null,
     },
     paidLeaves: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    casualLeaves: {
       type: Number,
       default: 0,
       min: 0,
@@ -276,6 +286,15 @@ const employeeApplicationSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Employee-level deduction flags (default true = apply deduction). Used by payroll for statutory & attendance.
+    applyProfessionTax: { type: Boolean, default: true },
+    applyESI: { type: Boolean, default: true },
+    applyPF: { type: Boolean, default: true },
+    applyAttendanceDeduction: { type: Boolean, default: true },
+    deductLateIn: { type: Boolean, default: true },
+    deductEarlyOut: { type: Boolean, default: true },
+    deductPermission: { type: Boolean, default: true },
+    deductAbsent: { type: Boolean, default: true },
   },
   {
     timestamps: {

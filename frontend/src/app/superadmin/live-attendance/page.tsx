@@ -1,17 +1,40 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { FiGrid } from 'react-icons/fi';
-import { LuUsers, LuClock, LuCircleCheck, LuActivity, LuCalendar, LuFilter, LuRefreshCw, LuSearch, LuDownload } from 'react-icons/lu';
-import { auth } from '@/lib/auth';
+import { LuUsers, LuClock, LuCircleCheck, LuActivity, LuCalendar, LuFilter, LuRefreshCw, LuSearch, LuDownload, LuLayers } from 'react-icons/lu';
 import { api, LiveAttendanceReportData, LiveAttendanceFilterOption, LiveAttendanceEmployee } from '@/lib/api';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toast } from 'react-hot-toast';
 
 
+// Extended type for multi-shift support (extends the base API type)
+interface MultiShiftSegment {
+  segmentIndex: number;
+  shift: string;
+  shiftStartTime: string | null;
+  shiftEndTime: string | null;
+  inTime: string | null;
+  outTime: string | null;
+  hoursWorked: number;
+  isActive: boolean;
+  isComplete: boolean;
+  isLate: boolean;
+  lateMinutes: number;
+  isEarlyOut: boolean;
+  earlyOutMinutes: number;
+}
+
+type ExtendedEmployee = LiveAttendanceEmployee & {
+  isMultiShift?: boolean;
+  shiftCount?: number;
+  segments?: MultiShiftSegment[];
+};
+
 export default function LiveAttendancePage() {
   const [reportData, setReportData] = useState<LiveAttendanceReportData | null>(null);
+  const [isMultiShiftMode, setIsMultiShiftMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [sortBy, setSortBy] = useState<'latest' | 'oldest'>('latest');
@@ -52,6 +75,7 @@ export default function LiveAttendancePage() {
 
       if (response.success) {
         setReportData(response.data as LiveAttendanceReportData);
+        setIsMultiShiftMode(!!(response.data as any)?.isMultiShift);
       }
     } catch (error) {
       console.error('Error fetching report data:', error);
@@ -90,7 +114,7 @@ export default function LiveAttendancePage() {
   };
 
   // Sort employees
-  const sortEmployees = (employees: LiveAttendanceEmployee[]) => {
+  const sortEmployees = (employees: ExtendedEmployee[]) => {
     return [...employees].sort((a, b) => {
       const timeA = new Date(a.inTime).getTime();
       const timeB = new Date(b.inTime).getTime();
@@ -332,6 +356,12 @@ export default function LiveAttendancePage() {
                   <p className="text-sm font-medium text-slate-500 border-l border-slate-200 pl-2">
                     System active and monitoring in real-time
                   </p>
+                  {isMultiShiftMode && (
+                    <span className="flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full border border-violet-300 bg-violet-50 text-[10px] font-black uppercase tracking-widest text-violet-600">
+                      <LuLayers className="h-3 w-3" />
+                      Multi-Shift Mode
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -755,63 +785,95 @@ export default function LiveAttendancePage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {sortEmployees(reportData.currentlyWorking).map((employee) => (
-                    <tr
-                      key={employee.id}
-                      className="group/row transition-all hover:bg-indigo-50/30"
-                    >
-                      <td className="px-6 py-5">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-black text-slate-900 group-hover/row:text-indigo-600 transition-colors">{employee.name}</span>
-                          <span className="text-[10px] font-mono font-bold text-slate-400">{employee.empNo}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-slate-600">{employee.shift}</span>
-                          <span className="text-[10px] text-slate-400 uppercase font-black">{employee.department}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex items-center gap-2">
-                          <LuClock className="h-3 w-3 text-green-600" />
-                          <span className="text-sm font-black text-green-700 font-mono italic">
-                            {formatTime(employee.inTime)}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="w-24">
-                          <div className="h-1.5 w-full rounded-full bg-slate-100 border border-slate-200 overflow-hidden">
-                            <div className="h-full rounded-full bg-green-500 shadow-sm" style={{ width: `${Math.min(100, (employee.hoursWorked / 8) * 100)}%` }} />
+                    <React.Fragment key={String(employee.id)}>
+                      <tr
+                        className="group/row transition-all hover:bg-indigo-50/30"
+                      >
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-black text-slate-900 group-hover/row:text-indigo-600 transition-colors">{employee.name}</span>
+                            <span className="text-[10px] font-mono font-bold text-slate-400">{employee.empNo}</span>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="inline-flex items-center gap-1.5 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-                          <span className="text-xs font-black text-indigo-600 font-mono">
-                            {formatHoursWorked(employee.hoursWorked)}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex flex-wrap gap-2">
-                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 px-2.5 py-1 text-[10px] font-black text-green-600 uppercase tracking-wider border border-green-100">
-                            <span className="h-1 w-1 rounded-full bg-green-500 animate-pulse" />
-                            Working
-                          </span>
-                          {employee.isLate && (
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-orange-50 px-2.5 py-1 text-[10px] font-black text-orange-600 uppercase tracking-wider border border-orange-100">
-                              Late {employee.lateMinutes}m
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-bold text-slate-600">{employee.shift}</span>
+                            <span className="text-[10px] text-slate-400 uppercase font-black">{employee.department}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex items-center gap-2">
+                            <LuClock className="h-3 w-3 text-green-600" />
+                            <span className="text-sm font-black text-green-700 font-mono italic">
+                              {formatTime(employee.inTime)}
                             </span>
-                          )}
-                          {employee.otHours > 0 && (
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-purple-50 px-2.5 py-1 text-[10px] font-black text-purple-600 uppercase tracking-wider border border-purple-100">
-                              OT {employee.otHours.toFixed(1)}h
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="w-24">
+                            <div className="h-1.5 w-full rounded-full bg-slate-100 border border-slate-200 overflow-hidden">
+                              <div className="h-full rounded-full bg-green-500 shadow-sm" style={{ width: `${Math.min(100, (employee.hoursWorked / 8) * 100)}%` }} />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="inline-flex items-center gap-1.5 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
+                            <span className="text-xs font-black text-indigo-600 font-mono">
+                              {formatHoursWorked(employee.hoursWorked)}
                             </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 px-2.5 py-1 text-[10px] font-black text-green-600 uppercase tracking-wider border border-green-100">
+                              <span className="h-1 w-1 rounded-full bg-green-500 animate-pulse" />
+                              Working
+                            </span>
+                            {(employee as ExtendedEmployee).isMultiShift && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-600 uppercase tracking-wider border border-violet-100">
+                                <LuLayers className="h-2.5 w-2.5" />
+                                {(employee as ExtendedEmployee).shiftCount} shifts
+                              </span>
+                            )}
+                            {employee.isLate && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-orange-50 px-2.5 py-1 text-[10px] font-black text-orange-600 uppercase tracking-wider border border-orange-100">
+                                Late {employee.lateMinutes}m
+                              </span>
+                            )}
+                            {employee.otHours > 0 && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-purple-50 px-2.5 py-1 text-[10px] font-black text-purple-600 uppercase tracking-wider border border-purple-100">
+                                OT {employee.otHours.toFixed(1)}h
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {/* Multi-shift segment detail rows */}
+                      {(employee as ExtendedEmployee).isMultiShift && (employee as ExtendedEmployee).segments?.map((seg, si) => (
+                        <tr key={`${employee.id}-seg-${si}`} className="bg-violet-50/40 border-l-2 border-violet-300">
+                          <td className="pl-10 pr-4 py-2" colSpan={2}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black text-violet-500 uppercase tracking-widest">Shift {seg.segmentIndex}</span>
+                              <span className="text-[10px] font-bold text-slate-500">{seg.shift}</span>
+                              {seg.isActive && <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className="text-xs font-mono font-bold text-green-700">{formatTime(seg.inTime)}</span>
+                            <span className="mx-1 text-slate-300">—</span>
+                            <span className="text-xs font-mono font-bold text-red-600">{seg.outTime ? formatTime(seg.outTime) : '...'}</span>
+                          </td>
+                          <td className="px-4 py-2" colSpan={2}>
+                            <span className="text-[10px] font-bold text-indigo-600">{formatHoursWorked(seg.hoursWorked)}</span>
+                          </td>
+                          <td className="px-4 py-2">
+                            {seg.isActive
+                              ? <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded border border-green-100">Active</span>
+                              : <span className="text-[10px] font-black text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-100">Done</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -848,59 +910,85 @@ export default function LiveAttendancePage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {reportData.completedShift.map((employee) => (
-                    <tr
-                      key={employee.id}
-                      className="group/row transition-all hover:bg-purple-50/30"
-                    >
-                      <td className="px-6 py-5">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-black text-slate-900 group-hover/row:text-purple-600 transition-colors">{employee.name}</span>
-                          <span className="text-[10px] font-mono font-bold text-slate-400">{employee.empNo}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex flex-col">
-                          <span className="text-xs font-bold text-slate-600">{employee.shift}</span>
-                          <span className="text-[10px] text-slate-400 uppercase font-black italic">{employee.designation}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                            <span className="text-xs font-black text-slate-700 font-mono uppercase">{formatTime(employee.inTime)}</span>
+                    <React.Fragment key={String(employee.id)}>
+                      <tr
+                        className="group/row transition-all hover:bg-purple-50/30"
+                      >
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-black text-slate-900 group-hover/row:text-purple-600 transition-colors">{employee.name}</span>
+                            <span className="text-[10px] font-mono font-bold text-slate-400">{employee.empNo}</span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                            <span className="text-xs font-black text-slate-700 font-mono uppercase">{formatTime(employee.outTime)}</span>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold text-slate-600">{employee.shift}</span>
+                            <span className="text-[10px] text-slate-400 uppercase font-black italic">{employee.designation}</span>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="inline-flex items-center gap-1.5 bg-purple-50 px-3 py-1 rounded-full border border-purple-100">
-                          <span className="text-xs font-black text-purple-600 font-mono tracking-tighter">
-                            {formatHoursWorked(employee.hoursWorked)} TOTAL
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex flex-wrap gap-2">
-                          <span className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600 uppercase tracking-wider border border-blue-100">
-                            DONE
-                          </span>
-                          {employee.isLate && (
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-orange-50 px-2 py-0.5 text-[10px] font-black text-orange-600 uppercase tracking-wider border border-orange-100">
-                              LATE {employee.lateMinutes}m
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                              <span className="text-xs font-black text-slate-700 font-mono uppercase">{formatTime(employee.inTime)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                              <span className="text-xs font-black text-slate-700 font-mono uppercase">{formatTime(employee.outTime)}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="inline-flex items-center gap-1.5 bg-purple-50 px-3 py-1 rounded-full border border-purple-100">
+                            <span className="text-xs font-black text-purple-600 font-mono tracking-tighter">
+                              {formatHoursWorked(employee.hoursWorked)} TOTAL
                             </span>
-                          )}
-                          {employee.isEarlyOut && (
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-600 uppercase tracking-wider border border-amber-100">
-                              EARLY {employee.earlyOutMinutes}m
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600 uppercase tracking-wider border border-blue-100">
+                              DONE
                             </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                            {(employee as ExtendedEmployee).isMultiShift && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-600 uppercase tracking-wider border border-violet-100">
+                                <LuLayers className="h-2.5 w-2.5" />
+                                {(employee as ExtendedEmployee).shiftCount} shifts
+                              </span>
+                            )}
+                            {employee.isLate && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-orange-50 px-2 py-0.5 text-[10px] font-black text-orange-600 uppercase tracking-wider border border-orange-100">
+                                LATE {employee.lateMinutes}m
+                              </span>
+                            )}
+                            {employee.isEarlyOut && (
+                              <span className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-600 uppercase tracking-wider border border-amber-100">
+                                EARLY {employee.earlyOutMinutes}m
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {/* Multi-shift segment detail rows */}
+                      {(employee as ExtendedEmployee).isMultiShift && (employee as ExtendedEmployee).segments?.map((seg, si) => (
+                        <tr key={`${employee.id}-cseg-${si}`} className="bg-violet-50/40 border-l-2 border-violet-300">
+                          <td className="pl-10 pr-4 py-2" colSpan={2}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black text-violet-500 uppercase tracking-widest">Shift {seg.segmentIndex}</span>
+                              <span className="text-[10px] font-bold text-slate-500">{seg.shift}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className="text-xs font-mono font-bold text-green-700">{formatTime(seg.inTime)}</span>
+                            <span className="mx-1 text-slate-300">—</span>
+                            <span className="text-xs font-mono font-bold text-red-600">{seg.outTime ? formatTime(seg.outTime) : '...'}</span>
+                          </td>
+                          <td className="px-4 py-2" colSpan={2}>
+                            <span className="text-[10px] font-bold text-indigo-600">{formatHoursWorked(seg.hoursWorked)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

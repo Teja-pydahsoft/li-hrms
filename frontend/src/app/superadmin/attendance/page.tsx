@@ -137,6 +137,8 @@ interface Department {
   _id: string;
   name: string;
   code?: string;
+  division?: string | { _id: string; name: string };
+  divisions?: (string | { _id: string; name: string })[];
 }
 
 interface Designation {
@@ -211,6 +213,7 @@ export default function AttendancePage() {
   const [monthlySummary, setMonthlySummary] = useState<any>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [payrollCycleStartDay, setPayrollCycleStartDay] = useState(1);
+  const [payrollCycleEndDay, setPayrollCycleEndDay] = useState(31);
   const [cycleDates, setCycleDates] = useState({ startDate: '', endDate: '', label: '' });
 
   // Search state
@@ -323,9 +326,16 @@ export default function AttendancePage() {
 
   const loadSettings = async () => {
     try {
-      const response = await api.getSetting('payroll_cycle_start_day');
-      if (response.success && response.data) {
-        setPayrollCycleStartDay(parseInt(response.data.value, 10) || 1);
+      const [startRes, endRes] = await Promise.all([
+        api.getSetting('payroll_cycle_start_day'),
+        api.getSetting('payroll_cycle_end_day')
+      ]);
+
+      if (startRes.success && startRes.data) {
+        setPayrollCycleStartDay(parseInt(startRes.data.value, 10) || 1);
+      }
+      if (endRes.success && endRes.data) {
+        setPayrollCycleEndDay(parseInt(endRes.data.value, 10) || 31);
       }
     } catch (err) {
       console.error('Error loading payroll settings:', err);
@@ -362,29 +372,36 @@ export default function AttendancePage() {
   }, [selectedDepartment]);
 
   useEffect(() => {
-    if (payrollCycleStartDay) {
-      let startYear = year;
-      let startMonth = month;
-
+    if (payrollCycleStartDay != null && payrollCycleStartDay >= 1) {
       if (payrollCycleStartDay > 1) {
-        startMonth = month - 1;
+        let startYear = year;
+        let startMonth = month - 1;
         if (startMonth === 0) {
           startMonth = 12;
           startYear = year - 1;
         }
+
+        // Use payrollCycleEndDay if set, otherwise fallback to startDay - 1
+        const endDay = payrollCycleEndDay || (payrollCycleStartDay - 1);
+        const endDateObj = new Date(year, month - 1, endDay);
+        const endYear = endDateObj.getFullYear();
+        const endMonth = endDateObj.getMonth() + 1;
+        const actualEndDay = endDateObj.getDate();
+
+        const start = `${startYear}-${String(startMonth).padStart(2, '0')}-${String(payrollCycleStartDay).padStart(2, '0')}`;
+        const end = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(actualEndDay).padStart(2, '0')}`;
+
+        setCycleDates({ startDate: start, endDate: end, label: '' });
+      } else {
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const lastDay = new Date(year, month, 0).getDate();
+        // For calendar month, respects payrollCycleEndDay if it's less than lastDay
+        const actualEndDay = Math.min(payrollCycleEndDay || 31, lastDay);
+        const end = `${year}-${String(month).padStart(2, '0')}-${String(actualEndDay).padStart(2, '0')}`;
+        setCycleDates({ startDate: start, endDate: end, label: '' });
       }
-
-      const endDateObj = new Date(year, month - 1, payrollCycleStartDay - 1);
-      const endYear = endDateObj.getFullYear();
-      const endMonth = endDateObj.getMonth() + 1;
-      const endDay = endDateObj.getDate();
-
-      const start = `${startYear}-${String(startMonth).padStart(2, '0')}-${String(payrollCycleStartDay).padStart(2, '0')}`;
-      const end = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`;
-
-      setCycleDates({ startDate: start, endDate: end, label: '' });
     }
-  }, [year, month, payrollCycleStartDay]);
+  }, [year, month, payrollCycleStartDay, payrollCycleEndDay]);
 
   useEffect(() => {
     // wait for cycle dates
@@ -450,7 +467,7 @@ export default function AttendancePage() {
       if (response.success && response.data) {
         let depts = response.data;
         if (divisionId) {
-          depts = depts.filter((d: any) => {
+          depts = depts.filter((d: Department) => {
             // Check direct division assignment (object or string)
             const deptDivisionId = d.division && typeof d.division === 'object' ? d.division._id : d.division;
             if (deptDivisionId === divisionId) return true;

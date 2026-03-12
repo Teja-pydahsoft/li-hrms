@@ -169,15 +169,28 @@ async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processi
     }
   }
 
-  if (inCandidates.length === 0 || outCandidates.length === 0) return null;
+  // If no candidates found, return null
+  if (inCandidates.length === 0 && outCandidates.length === 0) return null;
+
   inCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   outCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-  const inPunch = inCandidates[0];
-  const outPunch = outCandidates[outCandidates.length - 1];
-  const inTime = new Date(inPunch.timestamp);
-  const outTime = new Date(outPunch.timestamp);
-  if (outTime <= inTime) return null;
-  return { inPunch, outPunch, firstInTime: inTime, lastOutTime: outTime };
+
+  // If we have both, ensure out is after in
+  let inPunch = inCandidates.length ? inCandidates[0] : null;
+  let outPunch = outCandidates.length ? outCandidates[outCandidates.length - 1] : null;
+
+  if (inPunch && outPunch && new Date(outPunch.timestamp) <= new Date(inPunch.timestamp)) {
+    // Conflict: if both present but out <= in, pick the better match or keep only one
+    const inDist = Math.abs(new Date(inPunch.timestamp) - shiftStartDate);
+    const outDist = Math.abs(new Date(outPunch.timestamp) - shiftEndDate);
+    if (inDist <= outDist) outPunch = null;
+    else inPunch = null;
+  }
+
+  const firstInTime = inPunch ? new Date(inPunch.timestamp) : null;
+  const lastOutTime = outPunch ? new Date(outPunch.timestamp) : null;
+
+  return { inPunch, outPunch, firstInTime, lastOutTime };
 }
 
 /**
@@ -211,7 +224,18 @@ function getEffectiveWorkingDuration(firstInTime, lastOutTime, shiftStartTime, s
 async function processSingleShiftAttendance(employeeNumber, date, rawLogs, generalConfig, processingMode = {}) {
   try {
     const validLogs = (rawLogs || []).filter(l => l && l.timestamp);
-    const allPunches = validLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const sortedLogs = validLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    // DEDUPLICATION: Ignore punches within 5 minutes of each other (double-tap / accidental repeat)
+    const DEDUP_WINDOW_MS = 5 * 60 * 1000;
+    const allPunches = [];
+    for (const p of sortedLogs) {
+      const last = allPunches[allPunches.length - 1];
+      if (last && (new Date(p.timestamp) - new Date(last.timestamp)) < DEDUP_WINDOW_MS) {
+        continue;
+      }
+      allPunches.push(p);
+    }
 
     const targetDatePunches = allPunches.filter(p => {
       const d = new Date(p.timestamp);
@@ -242,41 +266,46 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
     }
 
     // Fallback (strict ON or no shift-aware pair): typed IN/OUT only — first IN, last OUT; overnight next-day OUT.
-    if (!firstInTime || !lastOutTime) {
-      const ins = targetDatePunches.filter(isIN);
-      const outs = targetDatePunches.filter(isOUT);
-      firstInTime = ins.length ? new Date(ins[0].timestamp) : null;
-      lastOutTime = outs.length ? new Date(outs[outs.length - 1].timestamp) : null;
-      inPunchRecord = ins.length ? ins[0] : null;
-      outPunchRecord = outs.length ? outs[outs.length - 1] : null;
+    // MODIFIED: Only fallback for MISSING components, don't wipe what shift-aware already found.
+    const typedIns = targetDatePunches.filter(isIN);
+    const typedOuts = targetDatePunches.filter(isOUT);
 
-      if (firstInTime && (!lastOutTime || lastOutTime <= firstInTime)) {
-        const nextDay = nextDateStr(date);
-        const nextDayPunches = allPunches.filter(p => {
-          const { dateStr } = extractISTComponents(new Date(p.timestamp));
-          return dateStr === nextDay;
-        });
-        const nextDayOuts = nextDayPunches.filter(isOUT);
-        if (nextDayOuts.length) {
-          const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
-          if (nextDayFirstOut > firstInTime) {
-            const rosterFirst = { rosterStrictWhenPresent: true };
-            const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
-            let withinGrace = true;
-            if (shifts && shifts.length > 0 && shifts[0].endTime) {
-              const endMins = timeToMinutes(shifts[0].endTime);
-              const startMins = timeToMinutes(shifts[0].startTime || '00:00');
-              const isOvernight = endMins <= startMins || (startMins >= 20 * 60 && endMins < 12 * 60);
-              if (isOvernight) {
-                const shiftEndOnNext = createISTDate(nextDay, shifts[0].endTime);
-                const graceMs = 3 * 60 * 60 * 1000;
-                withinGrace = Math.abs(nextDayFirstOut.getTime() - shiftEndOnNext.getTime()) <= graceMs;
-              }
+    if (!firstInTime && typedIns.length) {
+      firstInTime = new Date(typedIns[0].timestamp);
+      inPunchRecord = typedIns[0];
+    }
+    if (!lastOutTime && typedOuts.length) {
+      lastOutTime = new Date(typedOuts[typedOuts.length - 1].timestamp);
+      outPunchRecord = typedOuts[typedOuts.length - 1];
+    }
+
+    // Overnight typed OUT fallback (if still no OUT)
+    if (firstInTime && !lastOutTime) {
+      const nextDay = nextDateStr(date);
+      const nextDayPunches = allPunches.filter(p => {
+        const { dateStr } = extractISTComponents(new Date(p.timestamp));
+        return dateStr === nextDay;
+      });
+      const nextDayOuts = nextDayPunches.filter(isOUT);
+      if (nextDayOuts.length) {
+        const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
+        if (nextDayFirstOut > firstInTime) {
+          const rosterFirst = { rosterStrictWhenPresent: true };
+          const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
+          let withinGrace = true;
+          if (shifts && shifts.length > 0 && shifts[0].endTime) {
+            const endMins = timeToMinutes(shifts[0].endTime);
+            const startMins = timeToMinutes(shifts[0].startTime || '00:00');
+            const isOvernight = endMins <= startMins || (startMins >= 20 * 60 && endMins < 12 * 60);
+            if (isOvernight) {
+              const shiftEndOnNext = createISTDate(nextDay, shifts[0].endTime);
+              const graceMs = 3 * 60 * 60 * 1000;
+              withinGrace = Math.abs(nextDayFirstOut.getTime() - shiftEndOnNext.getTime()) <= graceMs;
             }
-            if (withinGrace) {
-              lastOutTime = nextDayFirstOut;
-              outPunchRecord = nextDayOuts[0];
-            }
+          }
+          if (withinGrace) {
+            lastOutTime = nextDayFirstOut;
+            outPunchRecord = nextDayOuts[0];
           }
         }
       }

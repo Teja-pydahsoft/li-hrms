@@ -10,7 +10,6 @@ import {
   Search,
   Edit,
   Key,
-  User as UserIcon,
   Trash2,
   RotateCw,
   CheckCircle,
@@ -76,7 +75,6 @@ interface UserFormData {
   divisionMapping?: { division: string | Division; departments: (string | Department)[] }[];
   division?: string;
   employeeId?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }
 
@@ -701,11 +699,6 @@ export default function UsersPage() {
     };
   }, []);
 
-  // Copy to clipboard
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setSuccess('Copied to clipboard!');
-  };
 
   // Reset forms
   const resetForm = () => {
@@ -750,7 +743,7 @@ export default function UsersPage() {
     const setFunc = isEmployee ? setEmployeeFormData : setFormData;
 
     setFunc((prev: any) => {
-      let newMapping = [...(prev.divisionMapping || [])];
+      const newMapping = [...(prev.divisionMapping || [])];
       const existingDivisionIdx = newMapping.findIndex(m => {
         const mDivId = typeof m.division === 'string' ? m.division : m.division?._id;
         return mDivId === divisionId;
@@ -1751,6 +1744,28 @@ export default function UsersPage() {
                                             Verify
                                           </button>
                                         )}
+                                        {/* Bank Toggle — only for bankable modules (e.g. EMPLOYEES) */}
+                                        {(module as any).bankable && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const currentFeatures = formData.featureControl || [];
+                                              const bankPerm = `${module.code}:bank`;
+                                              const hasBank = currentFeatures.includes(bankPerm);
+                                              const newFeatures = hasBank
+                                                ? currentFeatures.filter(f => f !== bankPerm)
+                                                : [...currentFeatures, bankPerm];
+                                              setFormData({ ...formData, featureControl: newFeatures });
+                                            }}
+                                            title="Bank: grants access to update bank details. Independent of Read/Write."
+                                            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${formData.featureControl?.includes(`${module.code}:bank`)
+                                              ? 'bg-amber-500 text-white shadow-sm'
+                                              : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
+                                              }`}
+                                          >
+                                            Bank
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -1986,7 +2001,7 @@ export default function UsersPage() {
                       <div className="flex-1">
                         <p className="text-xs font-semibold text-amber-900 dark:text-amber-300 mb-1">Auto-generated Password</p>
                         <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
-                          A secure temporary password will be automatically generated and sent to the employee's email address.
+                          A secure temporary password will be automatically generated and sent to the employee&apos;s email address.
                         </p>
                       </div>
                     </div>
@@ -2135,6 +2150,28 @@ export default function UsersPage() {
                                             }`}
                                         >
                                           Verify
+                                        </button>
+                                      )}
+                                      {/* Bank Toggle — only for bankable modules (e.g. EMPLOYEES) */}
+                                      {(module as any).bankable && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const currentFeatures = employeeFormData.featureControl || [];
+                                            const bankPerm = `${module.code}:bank`;
+                                            const hasBank = currentFeatures.includes(bankPerm);
+                                            const newFeatures = hasBank
+                                              ? currentFeatures.filter(f => f !== bankPerm)
+                                              : [...currentFeatures, bankPerm];
+                                            setEmployeeFormData({ ...employeeFormData, featureControl: newFeatures });
+                                          }}
+                                          title="Bank: grants access to update bank details. Independent of Read/Write."
+                                          className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${employeeFormData.featureControl?.includes(`${module.code}:bank`)
+                                            ? 'bg-amber-500 text-white shadow-sm'
+                                            : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
+                                            }`}
+                                        >
+                                          Bank
                                         </button>
                                       )}
                                     </div>
@@ -2439,6 +2476,28 @@ export default function UsersPage() {
                                               }`}
                                           >
                                             Verify
+                                          </button>
+                                        )}
+                                        {/* Bank Toggle — only for bankable modules (e.g. EMPLOYEES) */}
+                                        {(module as any).bankable && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const currentFeatures = formData.featureControl || [];
+                                              const bankPerm = `${module.code}:bank`;
+                                              const hasBank = currentFeatures.includes(bankPerm);
+                                              const newFeatures = hasBank
+                                                ? currentFeatures.filter(f => f !== bankPerm)
+                                                : [...currentFeatures, bankPerm];
+                                              setFormData({ ...formData, featureControl: newFeatures });
+                                            }}
+                                            title="Bank: grants access to update bank details. Independent of Read/Write."
+                                            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${formData.featureControl?.includes(`${module.code}:bank`)
+                                              ? 'bg-amber-500 text-white shadow-sm'
+                                              : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
+                                              }`}
+                                          >
+                                            Bank
                                           </button>
                                         )}
                                       </div>
@@ -2799,7 +2858,7 @@ export default function UsersPage() {
                                 <div>
                                   <h4 className="text-sm font-black text-amber-900 dark:text-amber-400 uppercase tracking-widest">Access Policy Note</h4>
                                   <p className="mt-1 text-xs font-medium leading-relaxed text-amber-700/80 dark:text-amber-500/60">
-                                    This user's data visibility is strictly governed by the assigned business units. Any changes to division or department hierarchy will automatically propagate to this user's visibility scope.
+                                    This user&apos;s data visibility is strictly governed by the assigned business units. Any changes to division or department hierarchy will automatically propagate to this user&apos;s visibility scope.
                                   </p>
                                 </div>
                               </div>
@@ -2852,6 +2911,12 @@ export default function UsersPage() {
                                                   <span className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2 py-1 text-[9px] font-black text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-500/20">
                                                     <Edit className="h-3 w-3" />
                                                     WRITE
+                                                  </span>
+                                                )}
+                                                {selectedViewUser.featureControl?.includes(`${m.code}:bank`) && (
+                                                  <span className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-1 text-[9px] font-black text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 border border-amber-100 dark:border-amber-500/20">
+                                                    <RotateCw className="h-3 w-3" />
+                                                    BANK
                                                   </span>
                                                 )}
                                               </div>
@@ -2919,7 +2984,7 @@ export default function UsersPage() {
                       <div className="flex items-start gap-3 rounded-2xl bg-blue-50/50 p-4 border border-blue-100/50 dark:bg-blue-900/10 dark:border-blue-800/50">
                         <Info className="h-5 w-5 text-blue-500 mt-0.5" />
                         <p className="text-[11px] leading-relaxed text-blue-700/80 dark:text-blue-400/80">
-                          These credentials have been dispatched to the user's primary contact endpoint. Please ensure they update their access key upon first authentication.
+                          These credentials have been dispatched to the user&apos;s primary contact endpoint. Please ensure they update their access key upon first authentication.
                         </p>
                       </div>
 
