@@ -314,7 +314,30 @@ const LoanSchema = new mongoose.Schema(
       remarks: String,
     },
 
-    // Applied by (the user who submitted)
+    // Guarantors for the loan (at least two required)
+    guarantors: [
+      {
+        employeeId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Employee',
+          required: true,
+        },
+        emp_no: {
+          type: String,
+          required: true,
+        },
+        name: String,
+        status: {
+          type: String,
+          enum: ['pending', 'accepted', 'rejected'],
+          default: 'pending',
+        },
+        actionAt: Date,
+        remarks: String,
+      },
+    ],
+
+    // applied by (the user who submitted)
     appliedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

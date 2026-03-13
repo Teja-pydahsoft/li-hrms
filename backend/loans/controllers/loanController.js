@@ -508,6 +508,7 @@ exports.applyLoan = async (req, res) => {
       remarks,
       empNo, // Primary - emp_no for applying on behalf
       employeeId, // Legacy - for backward compatibility
+      guarantorIds, // Array of employee IDs or emp_nos
     } = req.body;
 
     // Validate request type
@@ -515,6 +516,14 @@ exports.applyLoan = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Invalid request type. Must be "loan" or "salary_advance"',
+      });
+    }
+
+    // Validate guarantors (at least two required)
+    if (!guarantorIds || !Array.isArray(guarantorIds) || guarantorIds.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least two guarantors are required for a loan/advance application',
       });
     }
 
@@ -615,6 +624,46 @@ exports.applyLoan = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Employee record not found',
+      });
+    }
+
+    // Process Guarantors
+    const processedGuarantors = [];
+    const uniqueGuarantorIds = new Set();
+
+    for (const gId of guarantorIds) {
+      const guarantor = await findEmployeeByIdOrEmpNo(gId);
+      if (!guarantor) {
+        return res.status(400).json({
+          success: false,
+          error: `Guarantor with ID ${gId} not found`,
+        });
+      }
+
+      if (guarantor._id.toString() === employee._id.toString()) {
+        return res.status(400).json({
+          success: false,
+          error: 'Applicant cannot be their own guarantor',
+        });
+      }
+
+      if (uniqueGuarantorIds.has(guarantor._id.toString())) {
+        continue; // Skip duplicate guarantors
+      }
+
+      uniqueGuarantorIds.add(guarantor._id.toString());
+      processedGuarantors.push({
+        employeeId: guarantor._id,
+        emp_no: guarantor.emp_no,
+        name: guarantor.employee_name,
+        status: 'pending',
+      });
+    }
+
+    if (processedGuarantors.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least two unique guarantors are required',
       });
     }
 
@@ -731,8 +780,8 @@ exports.applyLoan = async (req, res) => {
       appliedBy: req.user._id,
       appliedAt: new Date(),
       status: 'pending',
-      loanConfig,
       advanceConfig,
+      guarantors: processedGuarantors,
       repayment: {
         totalPaid: 0,
         remainingBalance: requestType === 'loan' ? totalAmount : amount,
@@ -776,6 +825,144 @@ exports.applyLoan = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to apply for loan/advance',
+    });
+  }
+};
+
+// @desc    Get guarantor requests for the current user
+// @route   GET /api/loans/guarantor-requests
+// @access  Private
+exports.getGuarantorRequests = async (req, res) => {
+  try {
+    const employeeId = req.user.employeeRef || req.user.employeeId;
+    if (!employeeId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Current user is not linked to an employee record',
+      });
+    }
+
+    // Find employee to get their MongoDB ID if they only have emp_no
+    let mongoEmployeeId = req.user.employeeRef;
+    if (!mongoEmployeeId) {
+      const employee = await findEmployeeByEmpNo(req.user.employeeId);
+      if (employee) mongoEmployeeId = employee._id;
+    }
+
+    if (!mongoEmployeeId) {
+       return res.status(404).json({
+        success: false,
+        error: 'Associated employee record not found',
+      });
+    }
+
+    const loans = await Loan.find({
+      'guarantors.employeeId': mongoEmployeeId,
+      isActive: true,
+    })
+      .populate('employeeId', 'employee_name emp_no')
+      .populate('department', 'name')
+      .populate('designation', 'name')
+      .sort({ appliedAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: loans.length,
+      data: loans,
+    });
+  } catch (error) {
+    console.error('Error fetching guarantor requests:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch guarantor requests',
+    });
+  }
+};
+
+// @desc    Process guarantor action (accept/reject)
+// @route   PUT /api/loans/:id/guarantor-action
+// @access  Private
+exports.processGuarantorAction = async (req, res) => {
+  try {
+    const { action, remarks } = req.body;
+    const { id } = req.params;
+
+    if (!['accepted', 'rejected'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid action. Must be "accepted" or "rejected"',
+      });
+    }
+
+    const loan = await Loan.findById(id);
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Loan application not found',
+      });
+    }
+
+    // Identify current user's employee record
+    let mongoEmployeeId = req.user.employeeRef;
+    if (!mongoEmployeeId) {
+      const employee = await findEmployeeByEmpNo(req.user.employeeId);
+      if (employee) mongoEmployeeId = employee._id;
+    }
+
+    if (!mongoEmployeeId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to perform guarantor actions',
+      });
+    }
+
+    // Find the guarantor entry for this user
+    const guarantorEntry = loan.guarantors.find(
+      (g) => g.employeeId.toString() === mongoEmployeeId.toString()
+    );
+
+    if (!guarantorEntry) {
+      return res.status(403).json({
+        success: false,
+        error: 'You are not listed as a guarantor for this loan',
+      });
+    }
+
+    if (guarantorEntry.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: `You have already ${guarantorEntry.status} this request`,
+      });
+    }
+
+    // Update guarantor status
+    guarantorEntry.status = action;
+    guarantorEntry.actionAt = new Date();
+    guarantorEntry.remarks = remarks;
+
+    // Add to history
+    loan.workflow.history.push({
+      step: 'guarantor',
+      action: action === 'accepted' ? 'approved' : 'rejected',
+      actionBy: req.user._id,
+      actionByName: req.user.name,
+      actionByRole: 'guarantor',
+      comments: remarks || `Guarantor ${action} the request`,
+      timestamp: new Date(),
+    });
+
+    await loan.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Request successfully ${action}`,
+      data: loan,
+    });
+  } catch (error) {
+    console.error('Error processing guarantor action:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to process guarantor action',
     });
   }
 };
@@ -1503,6 +1690,16 @@ exports.disburseLoan = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Only approved loans can be disbursed',
+      });
+    }
+
+    // Check if all guarantors have accepted
+    const pendingGuarantors = loan.guarantors.filter((g) => g.status !== 'accepted');
+    if (pendingGuarantors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot disburse: ${pendingGuarantors.length} guarantor(s) have not yet accepted the request`,
+        pendingGuarantors: pendingGuarantors.map((g) => g.name),
       });
     }
 

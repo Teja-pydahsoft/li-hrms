@@ -45,13 +45,17 @@ router.get('/', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), l
 // Apply for loan/advance
 router.post('/', loanController.applyLoan);
 
-// Calculate salary advance eligibility
+// Get guarantor requests
+router.get('/guarantor-requests', loanController.getGuarantorRequests);
+
+// Calculate eligibility - MUST be before /:id
 router.get('/calculate-eligibility', loanController.calculateEligibility);
 
-// Get single loan - MUST be after all specific routes like /my, /pending-approvals, /calculate-eligibility
+// Get single loan - MUST be after all specific routes like /my, /pending-approvals, /calculate-eligibility, /guarantor-requests
 router.get('/:id', loanController.getLoan);
 
-// Update loan/advance
+// Process guarantor action
+router.put('/:id/guarantor-action', loanController.processGuarantorAction);
 router.put('/:id', loanController.updateLoan);
 
 // Cancel loan

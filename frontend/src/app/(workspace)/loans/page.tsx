@@ -76,6 +76,14 @@ interface LoanApplication {
     modifiedAt: string;
     reason?: string;
   }>;
+  guarantors?: Array<{
+    employeeId: any;
+    emp_no: string;
+    name: string;
+    status: 'pending' | 'accepted' | 'rejected';
+    actionAt?: string;
+    remarks?: string;
+  }>;
 }
 
 interface Employee {
@@ -138,11 +146,12 @@ const LoanCardSkeleton = () => (
 
 export default function LoansPage() {
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
-  const [activeTab, setActiveTab] = useState<'loans' | 'advances' | 'pending'>('loans');
+  const [activeTab, setActiveTab] = useState<'loans' | 'advances' | 'pending' | 'guarantor_requests'>('loans');
   const [loans, setLoans] = useState<LoanApplication[]>([]);
   const [advances, setAdvances] = useState<LoanApplication[]>([]);
   const [pendingLoans, setPendingLoans] = useState<LoanApplication[]>([]);
   const [pendingAdvances, setPendingAdvances] = useState<LoanApplication[]>([]);
+  const [guarantorRequests, setGuarantorRequests] = useState<LoanApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLoan, setSelectedLoan] = useState<LoanApplication | null>(null);
@@ -203,6 +212,9 @@ export default function LoansPage() {
     totalAmount: number;
   } | null>(null);
 
+  const [guarantorSearch, setGuarantorSearch] = useState('');
+  const [showGuarantorDropdown, setShowGuarantorDropdown] = useState(false);
+
   // Form state
   const [formData, setFormData] = useState({
     amount: '',
@@ -210,6 +222,7 @@ export default function LoansPage() {
     duration: '',
     remarks: '',
     needAmount: '', // Optional higher amount request
+    guarantorIds: [] as string[],
   });
 
   // User detection and role-based UI
@@ -293,6 +306,21 @@ export default function LoansPage() {
       setApprovalValidation(null);
     }
   }, [approvalAmount, eligibilityData, selectedLoan]);
+
+  // Handle click outside for dropdowns
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showEmployeeDropdown || showGuarantorDropdown) {
+        const target = event.target as HTMLElement;
+        if (!target.closest('.relative')) {
+          setShowEmployeeDropdown(false);
+          setShowGuarantorDropdown(false);
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showEmployeeDropdown, showGuarantorDropdown]);
 
   useEffect(() => {
     if (applyType === 'loan' && formData.amount && formData.duration && loanSettings) {
@@ -419,6 +447,14 @@ export default function LoansPage() {
         setPendingLoans([]);
         setPendingAdvances([]);
       }
+
+      // Load guarantor requests
+      const guarantorRes = await api.getGuarantorRequests();
+      if (guarantorRes.success && guarantorRes.data) {
+        setGuarantorRequests(guarantorRes.data || []);
+      } else {
+        setGuarantorRequests([]);
+      }
     } catch (err) {
       console.error('[Superadmin Loans] Error loading data:', err);
       setMessage({ type: 'error', text: 'Failed to load loans and advances' });
@@ -460,6 +496,35 @@ export default function LoansPage() {
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'An error occurred' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleGuarantorAction = async (loanId: string, action: 'accepted' | 'rejected') => {
+    try {
+      const { value: remarks } = await Swal.fire({
+        title: `Are you sure you want to ${action} this request?`,
+        input: 'textarea',
+        inputLabel: 'Remarks (Optional)',
+        inputPlaceholder: 'Enter your remarks here...',
+        showCancelButton: true,
+        confirmButtonText: action.charAt(0).toUpperCase() + action.slice(1),
+        confirmButtonColor: action === 'accepted' ? '#10b981' : '#ef4444',
+      });
+
+      if (remarks !== undefined) {
+        setSaving(true);
+        const response = await api.processGuarantorAction(loanId, action, remarks);
+        if (response.success) {
+          Swal.fire('Success!', `Request ${action} successfully.`, 'success');
+          loadData();
+        } else {
+          Swal.fire('Error!', response.error || `Failed to ${action} request.`, 'error');
+        }
+      }
+    } catch (error) {
+      console.error('Error processing guarantor action:', error);
     } finally {
       setSaving(false);
     }
@@ -869,7 +934,7 @@ export default function LoansPage() {
 
   const openApplyDialog = (type: 'loan' | 'salary_advance') => {
     setApplyType(type);
-    setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '' });
+    setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '', guarantorIds: [] });
     setSelectedEmployee(null);
     setEmployeeSearch('');
     setInterestCalculation(null);
@@ -897,6 +962,11 @@ export default function LoansPage() {
         return;
       }
 
+      if (applyType === 'loan' && (!formData.guarantorIds || formData.guarantorIds.length < 2)) {
+        setMessage({ type: 'error', text: 'At least 2 unique guarantors are required for loan applications' });
+        return;
+      }
+
       const payload: any = {
         requestType: applyType,
         amount: parseFloat(formData.amount),
@@ -908,6 +978,7 @@ export default function LoansPage() {
 
       if (applyType === 'loan') {
         payload.duration = parseInt(formData.duration);
+        payload.guarantorIds = formData.guarantorIds;
       } else {
         payload.duration = formData.duration ? parseInt(formData.duration) : 1;
       }
@@ -917,7 +988,7 @@ export default function LoansPage() {
       if (response.success) {
         setMessage({ type: 'success', text: `${applyType === 'loan' ? 'Loan' : 'Salary advance'} applied successfully for ${getEmployeeName(selectedEmployee)}` });
         setShowApplyDialog(false);
-        setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '' });
+        setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '', guarantorIds: [] });
         setSelectedEmployee(null);
         setEmployeeSearch('');
         loadData();
@@ -1060,23 +1131,24 @@ export default function LoansPage() {
             {[
               { id: 'loans', label: 'Loans', icon: Banknote, count: loans.length, activeColor: 'emerald' },
               { id: 'advances', label: 'Advances', icon: Wallet, count: advances.length, activeColor: 'teal' },
-              { id: 'pending', label: 'Pending', icon: Clock, count: pendingLoans.length + pendingAdvances.length, activeColor: 'amber' }
+              { id: 'pending', label: 'Pending', icon: Clock, count: pendingLoans.length + pendingAdvances.length, activeColor: 'amber' },
+              { id: 'guarantor_requests', label: 'Guarantor Requests', icon: CheckCircle2, count: guarantorRequests.length, activeColor: 'blue' }
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`group relative flex items-center gap-2 px-4 sm:px-6 py-2 rounded-lg text-xs font-bold transition-all duration-300 whitespace-nowrap ${activeTab === tab.id
-                  ? `bg-white dark:bg-slate-700 text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : 'emerald-600'} dark:text-${tab.id === 'pending' ? 'amber-400' : tab.id === 'advances' ? 'teal-400' : 'emerald-400'} shadow-sm ring-1 ring-slate-200/50 dark:ring-0`
+                  ? `bg-white dark:bg-slate-700 text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : tab.id === 'guarantor_requests' ? 'blue-600' : 'emerald-600'} dark:text-${tab.id === 'pending' ? 'amber-400' : tab.id === 'advances' ? 'teal-400' : tab.id === 'guarantor_requests' ? 'blue-400' : 'emerald-400'} shadow-sm ring-1 ring-slate-200/50 dark:ring-0`
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                   }`}
               >
                 <tab.icon className={`w-3.5 h-3.5 ${activeTab === tab.id
-                  ? `text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : 'emerald-600'} dark:text-${tab.id === 'pending' ? 'amber-400' : tab.id === 'advances' ? 'teal-400' : 'emerald-400'}`
+                  ? `text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : tab.id === 'guarantor_requests' ? 'blue-600' : 'emerald-600'} dark:text-${tab.id === 'pending' ? 'amber-400' : tab.id === 'advances' ? 'teal-400' : tab.id === 'guarantor_requests' ? 'blue-400' : 'emerald-400'}`
                   : 'text-slate-400 group-hover:text-slate-600'}`} />
                 <span>{tab.label}</span>
                 {tab.count > 0 && (
                   <span className={`flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-md text-[10px] font-black ${activeTab === tab.id
-                    ? `bg-${tab.id === 'pending' ? 'amber-50' : tab.id === 'advances' ? 'teal-50' : 'emerald-50'} text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : 'emerald-600'} dark:bg-${tab.id === 'pending' ? 'amber-900/30' : tab.id === 'advances' ? 'teal-900/30' : 'emerald-900/30'}`
+                    ? `bg-${tab.id === 'pending' ? 'amber-50' : tab.id === 'advances' ? 'teal-50' : tab.id === 'guarantor_requests' ? 'blue-50' : 'emerald-50'} text-${tab.id === 'pending' ? 'amber-600' : tab.id === 'advances' ? 'teal-600' : tab.id === 'guarantor_requests' ? 'blue-600' : 'emerald-600'} dark:bg-${tab.id === 'pending' ? 'amber-900/30' : tab.id === 'advances' ? 'teal-900/30' : tab.id === 'guarantor_requests' ? 'blue-900/30' : 'emerald-900/30'}`
                     : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
                     }`}>
                     {tab.count}
@@ -1654,6 +1726,96 @@ export default function LoansPage() {
               )}
             </div>
           )}
+
+          {activeTab === 'guarantor_requests' && (
+            <div className="p-6">
+              <h3 className="text-xl font-black text-slate-800 dark:text-slate-200 mb-6 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                Guarantor Requests
+              </h3>
+              
+              {guarantorRequests.length === 0 ? (
+                <div className="text-center py-20 bg-slate-50/50 dark:bg-slate-900/20 rounded-3xl border-2 border-dashed border-slate-200 dark:border-slate-800">
+                  <Banknote className="w-16 h-16 text-slate-300 mx-auto mb-4 opacity-50" />
+                  <p className="text-xl font-bold text-slate-900 dark:text-white mb-1">No requests to guarantee</p>
+                  <p className="text-slate-500">You haven't been requested as a guarantor for any loans yet.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {guarantorRequests.map((req) => {
+                    const myGuarantorInfo = req.guarantors?.find((g: any) => {
+                      const currentUserId = currentUser?.employeeRef || currentUser?.id;
+                      if (!currentUserId) return false;
+                      const gId = typeof g.employeeId === 'object' ? g.employeeId?._id : g.employeeId;
+                      return gId?.toString() === currentUserId.toString();
+                    });
+                    
+                    return (
+                      <div key={req._id} className="group relative overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl dark:border-slate-800 dark:bg-slate-900">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/30 dark:to-indigo-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 font-black text-lg">
+                              {(req.employeeId?.employee_name || 'E')[0]}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900 dark:text-white line-clamp-1">
+                                {req.employeeId?.employee_name || 'Unknown'}
+                              </div>
+                              <div className="text-xs font-bold text-slate-500">{req.emp_no || 'N/A'}</div>
+                            </div>
+                          </div>
+                          <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            myGuarantorInfo?.status === 'accepted' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                            myGuarantorInfo?.status === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                            'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                          }`}>
+                            {myGuarantorInfo?.status || 'pending'}
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 mb-6">
+                          <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50">
+                            <span className="text-xs font-bold text-slate-500 uppercase">Amount</span>
+                            <span className="text-lg font-black text-slate-900 dark:text-white">₹{req.amount.toLocaleString()}</span>
+                          </div>
+                          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50">
+                            <span className="text-xs font-bold text-slate-500 uppercase block mb-1">Reason</span>
+                            <p className="text-sm text-slate-700 dark:text-slate-300 line-clamp-2 italic">"{req.reason}"</p>
+                          </div>
+                        </div>
+
+                        {myGuarantorInfo?.status === 'pending' ? (
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => handleGuarantorAction(req._id, 'accepted')}
+                              className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-2xl text-xs font-black shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 transition-all flex items-center justify-center gap-2"
+                            >
+                              <CheckCircle2 className="w-4 h-4" /> Accept
+                            </button>
+                            <button
+                              onClick={() => handleGuarantorAction(req._id, 'rejected')}
+                              className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-xs font-black hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-all flex items-center justify-center gap-2 border border-transparent hover:border-red-200 dark:hover:border-red-800"
+                            >
+                              <XCircle className="w-4 h-4" /> Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            disabled
+                            className="w-full py-3 bg-slate-50 dark:bg-slate-800/50 text-slate-400 rounded-2xl text-xs font-black flex items-center justify-center gap-2 border border-slate-100 dark:border-slate-800"
+                          >
+                            <Clock className="w-4 h-4" /> Action Taken
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Detail Dialog */}
@@ -1817,6 +1979,48 @@ export default function LoansPage() {
                     {selectedLoan.reason || 'Not specified'}
                   </p>
                 </div>
+
+                {/* Guarantors Status */}
+                {selectedLoan.requestType === 'loan' && selectedLoan.guarantors && selectedLoan.guarantors.length > 0 && (
+                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <p className="text-xs text-blue-500 uppercase font-semibold tracking-wide mb-3 flex items-center gap-2">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Guarantor Status ({selectedLoan.guarantors.filter(g => g.status === 'accepted').length}/{selectedLoan.guarantors.length} Accepted)
+                    </p>
+                    <div className="space-y-3">
+                      {selectedLoan.guarantors.map((guarantor: any, idx: number) => (
+                        <div key={idx} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 transition-all hover:border-blue-200 dark:hover:border-blue-800">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs ${
+                              guarantor.status === 'accepted' ? 'bg-emerald-500' : 
+                              guarantor.status === 'rejected' ? 'bg-red-500' : 'bg-amber-500'
+                            }`}>
+                              {getEmployeeInitials(guarantor)}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900 dark:text-white">{guarantor.name}</p>
+                              <p className="text-[10px] text-slate-500 font-medium">{guarantor.emp_no}</p>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <span className={`px-2 py-0.5 text-[10px] font-black uppercase tracking-wider rounded-md ${
+                              guarantor.status === 'accepted' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                              guarantor.status === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                              'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                            }`}>
+                              {guarantor.status}
+                            </span>
+                            {guarantor.actionAt && (
+                              <p className="text-[9px] text-slate-400 font-medium">
+                                {new Date(guarantor.actionAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Change History */}
                 {selectedLoan.changeHistory && selectedLoan.changeHistory.length > 0 && (
@@ -3324,6 +3528,88 @@ export default function LoansPage() {
                         <span className="font-bold text-blue-900 dark:text-blue-100">₹{interestCalculation.emiAmount.toLocaleString()}</span>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* Guarantors Selection - Only for loans */}
+                {applyType === 'loan' && (
+                  <div className="relative mb-4">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Guarantors (Select at least 2) *
+                    </label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {formData.guarantorIds.map(id => {
+                        const emp = employees.find(e => e._id === id);
+                        if (!emp) return null;
+                        return (
+                          <div key={id} className="flex items-center gap-2 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-3 py-1.5 rounded-full text-sm font-medium border border-blue-200 dark:border-blue-800">
+                            <span>{getEmployeeName(emp)}</span>
+                            <button
+                              type="button"
+                              onClick={() => setFormData({ ...formData, guarantorIds: formData.guarantorIds.filter(gid => gid !== id) })}
+                              className="hover:text-blue-900 dark:hover:text-blue-100"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Search className="h-4 w-4 text-slate-400" />
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Search for guarantors..."
+                        value={guarantorSearch}
+                        onChange={(e) => {
+                          setGuarantorSearch(e.target.value);
+                          setShowGuarantorDropdown(true);
+                        }}
+                        onFocus={() => setShowGuarantorDropdown(true)}
+                        className="w-full rounded-lg border border-slate-200 bg-white pl-10 pr-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                      />
+                      
+                      {showGuarantorDropdown && guarantorSearch && (
+                        <div className="absolute z-50 mt-1 w-full max-h-60 overflow-auto bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl">
+                          {employees
+                            .filter(emp => 
+                              !formData.guarantorIds.includes(emp._id) && 
+                              emp._id !== selectedEmployee?._id &&
+                              (getEmployeeName(emp).toLowerCase().includes(guarantorSearch.toLowerCase()) || emp.emp_no.toLowerCase().includes(guarantorSearch.toLowerCase()))
+                            )
+                            .slice(0, 5)
+                            .map(emp => (
+                              <button
+                                key={emp._id}
+                                type="button"
+                                onClick={() => {
+                                  setFormData({ ...formData, guarantorIds: [...formData.guarantorIds, emp._id] });
+                                  setGuarantorSearch('');
+                                  setShowGuarantorDropdown(false);
+                                }}
+                                className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-3 border-b border-slate-100 dark:border-slate-700 last:border-0"
+                              >
+                                <div className="h-8 w-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-400 font-bold text-xs">
+                                  {getEmployeeInitials(emp)}
+                                </div>
+                                <div>
+                                  <div className="text-sm font-semibold">{getEmployeeName(emp)}</div>
+                                  <div className="text-xs text-slate-500 dark:text-slate-400">{emp.emp_no} • {emp.department?.name || 'No Dept'}</div>
+                                </div>
+                              </button>
+                            ))}
+                          {employees.filter(emp => !formData.guarantorIds.includes(emp._id) && emp._id !== selectedEmployee?._id && (getEmployeeName(emp).toLowerCase().includes(guarantorSearch.toLowerCase()) || emp.emp_no.toLowerCase().includes(guarantorSearch.toLowerCase()))).length === 0 && (
+                            <div className="p-4 text-center text-sm text-slate-500 dark:text-slate-400">No employees found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {formData.guarantorIds.length < 2 && (
+                      <p className="mt-1 text-xs text-red-500 font-medium">Selection of at least 2 guarantors is mandatory.</p>
+                    )}
                   </div>
                 )}
 

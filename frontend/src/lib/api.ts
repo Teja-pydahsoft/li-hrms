@@ -2557,6 +2557,19 @@ export const api = {
     return apiRequest<any>(`/loans/${id}/settlement-preview${query}`, { method: 'GET' });
   },
 
+  // Get loans where current user is a guarantor
+  getGuarantorRequests: async () => {
+    return apiRequest<any>('/loans/guarantor-requests', { method: 'GET' });
+  },
+
+  // Process guarantor action (accept/reject)
+  processGuarantorAction: async (loanId: string, action: 'accepted' | 'rejected', remarks?: string) => {
+    return apiRequest<any>(`/loans/${loanId}/guarantor-action`, {
+      method: 'PUT',
+      body: JSON.stringify({ action, remarks }),
+    });
+  },
+
   // Add leave/OD/CCL type
   addLeaveType: async (type: 'leave' | 'od' | 'ccl', data: any) => {
     return apiRequest<any>(`/leaves/types/${type}`, {

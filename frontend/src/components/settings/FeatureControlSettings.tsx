@@ -20,6 +20,7 @@ const availableModules: { id: string; label: string }[] = [
   { id: 'PAYSLIPS', label: 'Payslips' },
   { id: 'PAY_REGISTER', label: 'Pay Register' },
   { id: 'ALLOWANCES_DEDUCTIONS', label: 'Allowances & Deductions' },
+  { id: 'LOANS', label: 'Loans & Salary Advance' },
   { id: 'CCL', label: 'CCL' },
   { id: 'HOLIDAY_CALENDAR', label: 'Holidays' },
   { id: 'SETTINGS', label: 'Settings' },

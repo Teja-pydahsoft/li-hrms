@@ -102,6 +102,14 @@ interface LoanApplication {
     }>;
   };
   interestAmount?: number;
+  guarantors?: Array<{
+    employeeId: string;
+    emp_no: string;
+    name: string;
+    status: 'pending' | 'accepted' | 'rejected';
+    actionAt?: string;
+    remarks?: string;
+  }>;
 }
 
 interface Employee {
@@ -192,6 +200,8 @@ export default function LoansPage() {
     totalInterest: number;
     totalAmount: number;
   } | null>(null);
+  const [guarantorSearch, setGuarantorSearch] = useState('');
+  const [showGuarantorDropdown, setShowGuarantorDropdown] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -200,6 +210,7 @@ export default function LoansPage() {
     duration: '',
     remarks: '',
     needAmount: '', // Optional higher amount request
+    guarantorIds: [] as string[],
   });
 
   // User detection and role-based UI
@@ -905,6 +916,20 @@ export default function LoansPage() {
     }
   };
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.employee-search-container')) {
+        setShowEmployeeDropdown(false);
+      }
+      if (!target.closest('.guarantor-search-container')) {
+        setShowGuarantorDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const getEmployeeName = (emp: Employee) => {
     if (emp.employee_name) return emp.employee_name;
     if (emp.first_name && emp.last_name) return `${emp.first_name} ${emp.last_name}`;
@@ -923,8 +948,16 @@ export default function LoansPage() {
 
   const openApplyDialog = (type: 'loan' | 'salary_advance') => {
     setApplyType(type);
-    setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '' });
+    setFormData({
+      amount: '',
+      reason: '',
+      duration: '',
+      remarks: '',
+      needAmount: '',
+      guarantorIds: [],
+    });
     setSelectedEmployee(null);
+    setGuarantorSearch('');
     setEmployeeSearch('');
     setInterestCalculation(null);
     setShowApplyDialog(true);
@@ -946,8 +979,8 @@ export default function LoansPage() {
         return;
       }
 
-      if (applyType === 'loan' && !formData.duration) {
-        setMessage({ type: 'error', text: 'Duration is required for loans' });
+      if (applyType === 'loan' && (!formData.guarantorIds || formData.guarantorIds.length < 2)) {
+        setMessage({ type: 'error', text: 'At least 2 guarantors are required for loan applications' });
         return;
       }
 
@@ -958,6 +991,7 @@ export default function LoansPage() {
         remarks: formData.remarks,
         needAmount: formData.needAmount ? parseFloat(formData.needAmount) : undefined,
         empNo: selectedEmployee.emp_no,
+        guarantorIds: formData.guarantorIds,
       };
 
       if (applyType === 'loan') {
@@ -971,8 +1005,9 @@ export default function LoansPage() {
       if (response.success) {
         setMessage({ type: 'success', text: `${applyType === 'loan' ? 'Loan' : 'Salary advance'} applied successfully for ${getEmployeeName(selectedEmployee)}` });
         setShowApplyDialog(false);
-        setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '' });
+        setFormData({ amount: '', reason: '', duration: '', remarks: '', needAmount: '', guarantorIds: [] });
         setSelectedEmployee(null);
+        setGuarantorSearch('');
         setEmployeeSearch('');
         loadData();
       } else {
@@ -987,6 +1022,20 @@ export default function LoansPage() {
 
   const filteredEmployees = employees.filter((emp) => {
     const search = employeeSearch.toLowerCase();
+    return (
+      getEmployeeName(emp).toLowerCase().includes(search) ||
+      emp.emp_no.toLowerCase().includes(search) ||
+      emp.department?.name.toLowerCase().includes(search)
+    );
+  });
+
+  const filteredGuarantors = employees.filter((emp) => {
+    const search = guarantorSearch.toLowerCase();
+    // Applicant cannot be their own guarantor
+    if (selectedEmployee && emp._id === selectedEmployee._id) return false;
+    // Already selected guarantors
+    if (formData.guarantorIds.includes(emp._id)) return false;
+
     return (
       getEmployeeName(emp).toLowerCase().includes(search) ||
       emp.emp_no.toLowerCase().includes(search) ||
@@ -1791,6 +1840,41 @@ export default function LoansPage() {
                   {selectedLoan.reason || 'Not specified'}
                 </p>
               </div>
+
+              {/* Guarantors */}
+              {selectedLoan.guarantors && selectedLoan.guarantors.length > 0 && (
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <p className="text-xs text-indigo-500 uppercase font-semibold tracking-wide mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    Guarantors ({selectedLoan.guarantors.length})
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {selectedLoan.guarantors.map((guarantor, idx) => (
+                      <div key={idx} className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                            {guarantor.name}
+                          </p>
+                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase ${guarantor.status === 'accepted'
+                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30'
+                            : guarantor.status === 'rejected'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-900/30'
+                              : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30'
+                            }`}>
+                            {guarantor.status}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500">{guarantor.emp_no}</p>
+                        {guarantor.remarks && (
+                          <p className="text-xs text-slate-400 mt-1 italic italic truncate">"{guarantor.remarks}"</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Change History */}
               {selectedLoan.changeHistory && selectedLoan.changeHistory.length > 0 && (
@@ -3251,6 +3335,90 @@ export default function LoansPage() {
                         <span className="font-bold text-blue-900 dark:text-blue-100">₹{interestCalculation.emiAmount.toLocaleString()}</span>
                       </div>
                     </div>
+                  </div>
+                )}
+ 
+                {/* Guarantor Selection - Only for loans */}
+                {applyType === 'loan' && (
+                  <div className="space-y-4">
+                    <div className="relative guarantor-search-container">
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Select Guarantors (Min 2) *
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search employee by name or ID..."
+                          value={guarantorSearch}
+                          onChange={(e) => {
+                            setGuarantorSearch(e.target.value);
+                            setShowGuarantorDropdown(true);
+                          }}
+                          onFocus={() => setShowGuarantorDropdown(true)}
+                          className="w-full rounded-lg border border-slate-200 bg-white pl-10 pr-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                        />
+                        <div className="absolute left-3 top-2.5 text-slate-400">
+                          <SearchIcon />
+                        </div>
+                      </div>
+
+                      {showGuarantorDropdown && guarantorSearch && (
+                        <div className="absolute z-[60] mt-1 w-full max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                          {filteredGuarantors.length > 0 ? (
+                            filteredGuarantors.map((emp) => (
+                              <button
+                                key={emp._id}
+                                type="button"
+                                onClick={() => {
+                                  setFormData({
+                                    ...formData,
+                                    guarantorIds: [...formData.guarantorIds, emp._id]
+                                  });
+                                  setGuarantorSearch('');
+                                  setShowGuarantorDropdown(false);
+                                }}
+                                className="flex w-full items-center gap-3 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                              >
+                                <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                                  {getEmployeeInitials(emp)}
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-sm font-semibold text-slate-900 dark:text-white">{getEmployeeName(emp)}</p>
+                                  <p className="text-xs text-slate-500">{emp.emp_no} • {emp.department?.name || 'No Dept'}</p>
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="p-4 text-center text-sm text-slate-500">No employees found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Selected Guarantors List */}
+                    {formData.guarantorIds.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {formData.guarantorIds.map((id) => {
+                          const emp = employees.find(e => e._id === id);
+                          if (!emp) return null;
+                          return (
+                            <div key={id} className="flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-100 dark:border-blue-800">
+                              <span>{getEmployeeName(emp)}</span>
+                              <button
+                                type="button"
+                                onClick={() => setFormData({
+                                  ...formData,
+                                  guarantorIds: formData.guarantorIds.filter(gid => gid !== id)
+                                })}
+                                className="rounded-full hover:bg-blue-200 dark:hover:bg-blue-800 p-0.5"
+                              >
+                                <XIcon />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 
