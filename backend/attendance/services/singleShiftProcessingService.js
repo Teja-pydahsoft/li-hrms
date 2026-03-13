@@ -290,11 +290,8 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       if (nextDayOuts.length) {
         const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
         if (nextDayFirstOut > firstInTime) {
-          // 23-hour window for single shift detection (per user requirement)
-          const durationMs = nextDayFirstOut.getTime() - firstInTime.getTime();
-          if (durationMs <= 23 * 60 * 60 * 1000) {
-            const rosterFirst = { rosterStrictWhenPresent: true };
-            const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
+          const rosterFirst = { rosterStrictWhenPresent: true };
+          const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
           let withinGrace = true;
           if (shifts && shifts.length > 0 && shifts[0].endTime) {
             const endMins = timeToMinutes(shifts[0].endTime);
@@ -309,7 +306,6 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
           if (withinGrace) {
             lastOutTime = nextDayFirstOut;
             outPunchRecord = nextDayOuts[0];
-          }
           }
         }
       }
