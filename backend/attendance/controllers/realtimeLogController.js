@@ -176,52 +176,54 @@ exports.receiveRealTimeLogs = async (req, res) => {
 
             // Get general settings for shift detection
             const generalConfig = await Settings.getSettingsByCategory('general');
+            const { processMultiShiftBatch } = require('../services/multiShiftProcessingService');
 
-            // Process each unique employee
+            // 1. Build a map of logs by employee for the expanded sliding window
+            const logsByEmployeeForBatch = {};
+            const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
             for (const empNo of uniqueEmployees) {
                 try {
-                    // Get all raw logs for this employee (for context)
-                    const dates = Array.from(uniqueDates);
+                    const punchDates = Array.from(uniqueDates);
+                    // Calculate a conservative bounding range for the Batch processor
+                    const minDateObj = new Date(Math.min(...punchDates.map(d => new Date(d))));
+                    const maxDateObj = new Date(Math.max(...punchDates.map(d => new Date(d))));
 
-                    // Extend date range by 1 day on each side for overnight shifts
-                    const minDate = new Date(Math.min(...dates.map(d => new Date(d))));
-                    minDate.setDate(minDate.getDate() - 1);
-                    const maxDate = new Date(Math.max(...dates.map(d => new Date(d))));
-                    maxDate.setDate(maxDate.getDate() + 1);
+                    // Expand window: [punchDate - 2 days] to [punchDate + 1 day]
+                    // This covers: 
+                    // T-2/T-1 (Checking if today's punch closes an old shift)
+                    // T+1 (Context for iterative splitting)
+                    const searchStart = new Date(minDateObj.getTime() - (2 * 24 * 60 * 60 * 1000));
+                    const searchEnd = new Date(maxDateObj.getTime() + (1 * 24 * 60 * 60 * 1000));
 
-                    // Fetch all logs for this employee in the date range
+                    // Fetch all logs for this employee in the expanded range
                     const allLogs = await AttendanceRawLog.find({
                         employeeNumber: empNo,
                         date: {
-                            $gte: formatDate(minDate),
-                            $lte: formatDate(maxDate),
+                            $gte: formatDate(searchStart),
+                            $lte: formatDate(searchEnd),
                         },
                         timestamp: { $gte: new Date('2020-01-01') },
-                        type: { $in: ['IN', 'OUT', null] }, // Include null (thumb-only) for alternating IN/OUT pairing
+                        type: { $in: ['IN', 'OUT', null] },
                     }).sort({ timestamp: 1 }).lean();
 
-                    // Convert to simple format; null-type gets punch_state from position in pairing (handled in multiShiftProcessingService)
-                    const logs = allLogs.map(log => ({
-                        timestamp: new Date(log.timestamp),
-                        type: log.type,
-                        punch_state: log.type === 'IN' ? 0 : log.type === 'OUT' ? 1 : null,
-                        _id: log._id,
-                    }));
-
-                    // Process each unique date
-                    for (const date of uniqueDates) {
-                        await processMultiShiftAttendance(
-                            empNo,
-                            date,
-                            logs,
-                            generalConfig
-                        );
+                    if (allLogs.length > 0) {
+                        logsByEmployeeForBatch[empNo] = allLogs.map(log => ({
+                            timestamp: new Date(log.timestamp),
+                            type: log.type,
+                            punch_state: log.type === 'IN' ? 0 : log.type === 'OUT' ? 1 : null,
+                            _id: log._id,
+                        }));
                     }
-
                 } catch (empError) {
-                    console.error(`[RealTime] Error processing employee ${empNo}:`, empError);
-                    // Continue with other employees
+                    console.error(`[RealTime] Error preparing employee ${empNo}:`, empError);
                 }
+            }
+
+            // 2. Perform Batch Processing (handles cross-day injection automatically)
+            if (Object.keys(logsByEmployeeForBatch).length > 0) {
+                const batchResult = await processMultiShiftBatch(logsByEmployeeForBatch, generalConfig);
+                console.log(`[RealTime] Batch complete: ${batchResult.employeesProcessed} emp, ${batchResult.datesProcessed} dates, ${batchResult.errors.length} errors`);
             }
         }
 

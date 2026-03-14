@@ -366,6 +366,7 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       extraHours,
       otHours: 0, // Only set when OT is approved via Convert to OT flow
       status: 'incomplete',
+      basePayable: 1, // Default base
       inPunchId: (inPunchRecord && (inPunchRecord._id || inPunchRecord.id)) || null,
       outPunchId: (outPunchRecord && (outPunchRecord._id || outPunchRecord.id)) || null,
     };
@@ -429,6 +430,7 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       }
 
       const basePayable = (assignedShiftDef?.payableShifts ?? 1);
+      pShift.basePayable = basePayable;
       const statusDuration = punchHours + (pShift.odHours || 0); // Use punch + OD gap-fill for status
 
       if (statusDuration >= expectedHours * 0.75) {
@@ -509,6 +511,7 @@ async function buildAndUpsertPartialSingleShift(employeeNumber, date, inPunch, g
     otHours: 0,
     status: 'incomplete',
     payableShift: 0,
+    basePayable: 1,
     inPunchId: inPunch._id || inPunch.id,
     outPunchId: null,
   };
@@ -523,6 +526,7 @@ async function buildAndUpsertPartialSingleShift(employeeNumber, date, inPunch, g
     pShift.isLateIn = shiftAssignment.isLateIn;
     pShift.isEarlyOut = false;
     pShift.expectedHours = shiftAssignment.expectedHours ?? 8;
+    pShift.basePayable = shiftAssignment.basePayable ?? 1;
   }
 
   const updateData = {

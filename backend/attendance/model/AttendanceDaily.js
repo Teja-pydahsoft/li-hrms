@@ -97,7 +97,11 @@ const attendanceDailySchema = new mongoose.Schema(
       },
       payableShift: {
         type: Number,
-        default: 0, // 0, 0.5, 1
+        default: 0, // Calculated value: 0, 0.5, 1, 2 etc.
+      },
+      basePayable: {
+        type: Number,
+        default: 1, // Base value from Shift definition (e.g. 1.0 or 2.0)
       },
       expectedHours: {
         type: Number,
@@ -462,7 +466,7 @@ attendanceDailySchema.pre('save', async function () {
         shift.workingHours = Math.round(((Number(shift.punchHours) || 0) + addedOdHours) * 100) / 100;
         const expectedHours = Number(shift.expectedHours) || 8;
         const statusDuration = (Number(shift.punchHours) || 0) + addedOdHours;
-        const basePayable = 1;
+        const basePayable = shift.basePayable || 1;
         // When hour-based OD contributes hours and total (punch + OD) satisfies shift duration: mark PRESENT, full payable, early-out already waived above
         if (statusDuration >= expectedHours * 0.75) {
           shift.status = 'PRESENT';
