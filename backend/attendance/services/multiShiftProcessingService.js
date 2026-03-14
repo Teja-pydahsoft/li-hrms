@@ -146,7 +146,7 @@ function timeStringToDate(timeStr, refDate, isNextDay = false) {
  * @param {Object} generalConfig - General settings
  * @returns {Promise<Object>} Processing result
  */
-async function processMultiShiftAttendance(employeeNumber, date, rawLogs, generalConfig) {
+async function processMultiShiftAttendance(employeeNumber, date, rawLogs, generalConfig, pairedOutIds = new Set()) {
 
     try {
         // Resolve processing mode and apply punch filtering (strictCheckInOutOnly)
@@ -293,7 +293,18 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                 ? effectiveOutOverride
                 : allOutsFull.find(p => {
                     const tDiff = new Date(p.timestamp) - currentInTime;
-                    return tDiff > 0 && tDiff <= MAX_WINDOW_MS;
+                    if (tDiff <= 0 || tDiff > MAX_WINDOW_MS || pairedOutIds.has(String(p._id || p.id))) return false;
+
+                    // Prevent cross-day stealing: if there's an IN punch between currentIn and this OUT
+                    // that is >= 12 hours after currentIn, don't pair.
+                    const stealingIn = deduplicatedPunches.find(inP => 
+                        inP.type === 'IN' && 
+                        new Date(inP.timestamp) > currentInTime &&
+                        new Date(inP.timestamp) < new Date(p.timestamp) &&
+                        (new Date(inP.timestamp) - currentInTime) >= 12 * 60 * 60 * 1000
+                    );
+                    
+                    return !stealingIn;
                 });
 
             // --- ITERATIVE SPLIT (Design: 14h+3h first, 3h gap + half-day for 2nd/3rd) ---
@@ -481,7 +492,16 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                         // Re-search for nextOut after 1 hour
                         nextOut = allOutsFull.find(p => {
                             const tDiff2 = new Date(p.timestamp) - currentInTime;
-                            return tDiff2 >= 60 * 60 * 1000 && tDiff2 <= MAX_WINDOW_MS;
+                            if (tDiff2 < 60 * 60 * 1000 || tDiff2 > MAX_WINDOW_MS || pairedOutIds.has(String(p._id || p.id))) return false;
+                            
+                            const stealingIn = deduplicatedPunches.find(inP => 
+                                inP.type === 'IN' && 
+                                new Date(inP.timestamp) > currentInTime &&
+                                new Date(inP.timestamp) < new Date(p.timestamp) &&
+                                (new Date(inP.timestamp) - currentInTime) >= 12 * 60 * 60 * 1000
+                            );
+                            
+                            return !stealingIn;
                         });
 
                         // Try assignment again with the better OUT (if found)
@@ -510,16 +530,18 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
             // 4. Determine Block Time for NEXT iteration
             if (shiftAssignment && shiftAssignment.success && shiftAssignment.shiftEndTime) {
                 const shiftEnd = timeStringToDate(shiftAssignment.shiftEndTime, date, shiftAssignment.shiftEndTime < shiftAssignment.shiftStartTime);
-                // Block until EITHER shift end OR the actual punch out time (whichever is later)
-                // This prevents "Double-usage" of an OUT punch as next IN
                 const outTime = nextOut ? new Date(nextOut.timestamp) : null;
-                blockUntilTime = outTime && outTime > shiftEnd ? outTime : shiftEnd;
+                // Allow starting a new shift immediately after an early OUT by using outTime if available
+                blockUntilTime = outTime || shiftEnd;
             } else {
                 // FALLBACK Block: If no shift, block for 1 hour from current In
-                // BUT if we found an OUT, we MUST block until that OUT time to avoid using it as next IN
                 const fallbackBlock = new Date(currentInTime.getTime() + 60 * 60 * 1000);
                 const outTime = nextOut ? new Date(nextOut.timestamp) : null;
-                blockUntilTime = outTime && outTime > fallbackBlock ? outTime : fallbackBlock;
+                blockUntilTime = outTime || fallbackBlock;
+            }
+
+            if (nextOut) {
+                pairedOutIds.add(String(nextOut._id || nextOut.id));
             }
 
             // 5. Construct Processed Shift Object (payableShift default 0; set from status below when assignment succeeds)
@@ -852,13 +874,16 @@ async function processMultiShiftBatch(logsByEmployee, generalConfig) {
                 }
             }
 
+            const pairedOutIds = new Set();
+            
             // Process each date
             for (const [date, dateLogs] of Object.entries(logsByDate)) {
                 const result = await processMultiShiftAttendance(
                     employeeNumber,
                     date,
                     dateLogs, // Pass enriched logs (includes cross-day OUTs)
-                    generalConfig
+                    generalConfig,
+                    pairedOutIds
                 );
 
 
