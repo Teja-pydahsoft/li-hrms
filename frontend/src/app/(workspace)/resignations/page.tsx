@@ -61,6 +61,7 @@ interface ResignationRequest {
   remarks: string;
   status: string;
   requestedBy?: { _id: string; name: string; email?: string };
+  requestType?: 'resignation' | 'termination';
   createdAt: string;
   workflow?: {
     currentStepRole?: string;
@@ -155,6 +156,15 @@ const getEmployeeInitials = (req: ResignationRequest) => {
 
 const isEmployeeRole = (user: any) => String(user?.role || '').toLowerCase() === 'employee';
 
+const canInitiateTermination = (user: any, settings: any) => {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase();
+  if (role === 'super_admin') return true;
+  
+  const allowedRoles = settings?.workflow?.terminationAllowedRoles || ['super_admin', 'hr'];
+  return allowedRoles.includes(role);
+};
+
 export default function ResignationsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'pending'>('all');
   const [allRequests, setAllRequests] = useState<ResignationRequest[]>([]);
@@ -174,6 +184,7 @@ export default function ResignationsPage() {
   const [applySelectedEmpNo, setApplySelectedEmpNo] = useState('');
   const [applyRemarks, setApplyRemarks] = useState('');
   const [applyLastWorkingDate, setApplyLastWorkingDate] = useState('');
+  const [applyType, setApplyType] = useState<'resignation' | 'termination'>('resignation');
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyModalLoading, setApplyModalLoading] = useState(false);
 
@@ -223,8 +234,9 @@ export default function ResignationsPage() {
     loadData();
   }, []);
 
-  const openApplyModal = (selfOnly: boolean = false) => {
+  const openApplyModal = (selfOnly: boolean = false, type: 'resignation' | 'termination' = 'resignation') => {
     setApplySelfOnly(!!selfOnly);
+    setApplyType(type);
     const user = auth.getUser();
     const myEmpNo = user?.emp_no || (user as any)?.employeeId;
     if (selfOnly && myEmpNo) {
@@ -233,7 +245,13 @@ export default function ResignationsPage() {
       setApplySelectedEmpNo('');
     }
     setApplyRemarks('');
-    setApplyLastWorkingDate('');
+    
+    if (type === 'termination') {
+      setApplyLastWorkingDate(toLocalDateString(new Date()));
+    } else {
+      setApplyLastWorkingDate('');
+    }
+    
     setShowApplyModal(true);
   };
 
@@ -296,6 +314,7 @@ export default function ResignationsPage() {
         emp_no: applySelectedEmpNo,
         leftDate: applyLastWorkingDate,
         remarks: applyRemarks.trim() || undefined,
+        requestType: applyType,
       });
       if (res?.success) {
         Swal.fire({ icon: 'success', title: 'Submitted', text: 'Resignation request submitted successfully.', timer: 2000, showConfirmButton: false });
@@ -548,15 +567,28 @@ export default function ResignationsPage() {
             </div>
           </div>
           {canApplyResignation(currentUser as any) && (
-            <button
-              type="button"
-              onClick={() => openApplyModal(isEmployeeRole(currentUser))}
-              className="inline-flex items-center gap-2 rounded-xl bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-green-500/20 transition active:scale-95"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">{isEmployeeRole(currentUser) ? 'Submit resignation' : 'Apply for Resignation'}</span>
-              <span className="sm:hidden">{isEmployeeRole(currentUser) ? 'Submit' : 'New'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => openApplyModal(isEmployeeRole(currentUser), 'resignation')}
+                className="inline-flex items-center gap-2 rounded-xl bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-green-500/20 transition active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">{isEmployeeRole(currentUser) ? 'Submit resignation' : 'Apply for Resignation'}</span>
+                <span className="sm:hidden">{isEmployeeRole(currentUser) ? 'Submit' : 'New'}</span>
+              </button>
+              {canInitiateTermination(currentUser, resignationSettings) && (
+                <button
+                  type="button"
+                  onClick={() => openApplyModal(false, 'termination')}
+                  className="inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-rose-500/20 transition active:scale-95"
+                >
+                  <X className="w-4 h-4" />
+                  <span className="hidden sm:inline">Terminate Employee</span>
+                  <span className="sm:hidden">Terminate</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -727,13 +759,22 @@ export default function ResignationsPage() {
                           <p className="text-xs text-slate-500 dark:text-slate-400">{req.emp_no}</p>
                         </div>
                       </div>
-                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusColor(req.status)}`}>
-                        {req.status}
-                      </span>
+                      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusColor(req.status)}`}>
+                          {req.status}
+                        </span>
+                        {req.requestType === 'termination' && (
+                          <span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                            Termination
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="space-y-1.5 text-sm">
                       <div className="flex justify-between">
-                        <span className="text-slate-500 dark:text-slate-400">Last working date</span>
+                        <span className="text-slate-500 dark:text-slate-400">
+                          {req.requestType === 'termination' ? 'Termination date' : 'Last working date'}
+                        </span>
                         <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(req.leftDate, req.isLwdManual, req.status)}</span>
                       </div>
                       {req.remarks && (
@@ -791,11 +832,22 @@ export default function ResignationsPage() {
                           <p className="text-xs text-slate-500 dark:text-slate-400">{req.emp_no}</p>
                         </div>
                       </div>
-                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusColor(req.status)}`}>Pending</span>
+                      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusColor(req.status)}`}>
+                          {req.status === 'pending' ? 'Pending' : req.status}
+                        </span>
+                        {req.requestType === 'termination' && (
+                          <span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                            Termination
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="mb-4 space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <span className="text-slate-500 dark:text-slate-400">Last working date</span>
+                        <span className="text-slate-500 dark:text-slate-400">
+                          {req.requestType === 'termination' ? 'Termination date' : 'Last working date'}
+                        </span>
                         <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(req.leftDate, req.isLwdManual, req.status)}</span>
                       </div>
                       {req.remarks && (
@@ -848,8 +900,17 @@ export default function ResignationsPage() {
           <div className="relative z-50 w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <LogOut className="w-5 h-5 text-green-500" />
-                {applySelfOnly ? 'Submit resignation' : 'Apply for Resignation'}
+                {applyType === 'termination' ? (
+                  <>
+                    <X className="w-5 h-5 text-rose-500" />
+                    Terminate Employee
+                  </>
+                ) : (
+                  <>
+                    <LogOut className="w-5 h-5 text-green-500" />
+                    {applySelfOnly ? 'Submit resignation' : 'Apply for Resignation'}
+                  </>
+                )}
               </h2>
               <button type="button" onClick={() => !applyLoading && setShowApplyModal(false)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
                 <X className="w-5 h-5" />
@@ -875,7 +936,9 @@ export default function ResignationsPage() {
                 </div>
                 )}
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Remarks for resignation</label>
+                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    {applyType === 'termination' ? 'Reason for termination' : 'Remarks for resignation'}
+                  </label>
                   <textarea
                     value={applyRemarks}
                     onChange={(e) => setApplyRemarks(e.target.value)}
@@ -885,19 +948,34 @@ export default function ResignationsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Last working date</label>
+                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    {applyType === 'termination' ? 'Termination date' : 'Last working date'}
+                  </label>
                   <div className="flex items-center gap-2 h-11 pl-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 text-sm font-medium">
                     <Calendar className="w-4 h-4 text-slate-400" />
                     <span>{applyLastWorkingDate ? new Date(applyLastWorkingDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span>
                   </div>
-                  <p className="mt-1 text-[10px] text-slate-400">Auto-set from notice period; last day in office.</p>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {applyType === 'termination' 
+                      ? 'Employee will be deactivated on this date. By default set to today.' 
+                      : 'Auto-set from notice period; last day in office.'}
+                  </p>
                 </div>
+                {applyType === 'termination' && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/30">
+                    <p className="text-[11px] text-rose-600 dark:text-rose-400 leading-relaxed font-medium">
+                      <strong>Warning:</strong> Termination will deactivate the employee account immediately upon final approval if the date is today or earlier.
+                    </p>
+                  </div>
+                )}
                 <div className="flex gap-3 pt-2">
                   <button type="button" onClick={() => !applyLoading && setShowApplyModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
                     Cancel
                   </button>
-                  <button type="button" onClick={handleSubmitResignation} disabled={applyLoading || !applySelectedEmpNo || !applyLastWorkingDate} className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-green-500/20 flex items-center justify-center gap-2">
-                    {applyLoading ? 'Submitting...' : (applySelfOnly ? 'Submit resignation' : 'Submit Resignation')}
+                  <button type="button" onClick={handleSubmitResignation} disabled={applyLoading || !applySelectedEmpNo || !applyLastWorkingDate} className={`flex-1 py-2.5 rounded-xl text-white font-bold text-sm shadow-lg flex items-center justify-center gap-2 ${
+                    applyType === 'termination' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/20' : 'bg-green-600 hover:bg-green-700 shadow-green-500/20'
+                  }`}>
+                    {applyLoading ? 'Submitting...' : (applyType === 'termination' ? 'Confirm Termination' : (applySelfOnly ? 'Submit resignation' : 'Submit Resignation'))}
                   </button>
                 </div>
               </div>
@@ -910,14 +988,18 @@ export default function ResignationsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-300" onClick={() => { setShowDetailDialog(false); setSelectedRequest(null); }} />
           <div className="relative z-50 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Resignation request</h2>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
+              {selectedRequest.requestType === 'termination' ? 'Termination request' : 'Resignation request'}
+            </h2>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Employee</span>
                 <span className="font-medium text-slate-900 dark:text-white">{getEmployeeName(selectedRequest)} ({selectedRequest.emp_no})</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-slate-500 dark:text-slate-400">Last working date</span>
+                <span className="text-slate-500 dark:text-slate-400">
+                  {selectedRequest.requestType === 'termination' ? 'Termination date' : 'Last working date'}
+                </span>
                 {canEditLWDCurrentStep ? (
                   <div className="flex items-center gap-2">
                     <input
@@ -1024,9 +1106,11 @@ export default function ResignationsPage() {
                   <button
                     type="button"
                     onClick={() => handleDetailAction('approve')}
-                    className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-bold rounded-lg"
+                    className={`flex-1 py-2 text-white text-sm font-bold rounded-lg ${
+                      selectedRequest.requestType === 'termination' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-green-600 hover:bg-green-700'
+                    }`}
                   >
-                    Approve
+                    {selectedRequest.requestType === 'termination' ? 'Consent' : 'Approve'}
                   </button>
                   <button
                     type="button"

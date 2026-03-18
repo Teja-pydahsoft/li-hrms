@@ -12,10 +12,14 @@ const {
 // @access  Private (HR, manager, super_admin, etc. - who can set left date)
 exports.createResignationRequest = async (req, res) => {
   try {
-    let { emp_no, leftDate, remarks } = req.body;
+    let { emp_no, leftDate, remarks, requestType } = req.body;
+    requestType = requestType || 'resignation';
     const userRole = (req.user?.role || '').toLowerCase();
     const isEmployeeSelf = userRole === 'employee';
     if (isEmployeeSelf) {
+      if (requestType === 'termination') {
+        return res.status(403).json({ success: false, message: 'Employees cannot initiate their own termination.' });
+      }
       emp_no = req.user?.employeeId || req.user?.emp_no;
       if (!emp_no) {
         return res.status(400).json({ success: false, message: 'Your employee record could not be identified. Please contact HR.' });
@@ -33,8 +37,22 @@ exports.createResignationRequest = async (req, res) => {
     }
 
     const settings = await ResignationSettings.getActiveSettings();
+    
+    // Check termination permissions
+    if (requestType === 'termination') {
+      const allowedRoles = settings?.workflow?.terminationAllowedRoles || ['super_admin', 'hr'];
+      const isSuperAdmin = userRole === 'super_admin';
+      
+      if (!isSuperAdmin && !allowedRoles.includes(userRole)) {
+        return res.status(403).json({ 
+          success: false, 
+          message: `Your role (${userRole}) is not authorized to initiate terminations based on current policy.` 
+        });
+      }
+    }
+
     const noticePeriodDays = Math.max(0, Number(settings?.noticePeriodDays) || 0);
-    if (noticePeriodDays > 0) {
+    if (noticePeriodDays > 0 && requestType === 'resignation') {
       // Compare calendar days only (parse YYYY-MM-DD at noon UTC to avoid timezone shift)
       const leftDateStr = String(leftDate).slice(0, 10);
       const leftDay = new Date(leftDateStr + 'T12:00:00.000Z');
@@ -128,7 +146,8 @@ exports.createResignationRequest = async (req, res) => {
       remarks: remarks || '',
       status: 'pending',
       requestedBy: req.user._id,
-      isLwdManual: isManual,
+      requestType,
+      isLwdManual: requestType === 'termination' ? true : isManual,
       workflow: {
         currentStepRole: firstRole,
         nextApproverRole: firstRole,
@@ -463,16 +482,21 @@ exports.approveResignationRequest = async (req, res) => {
       const emp = await Employee.findById(resignation.employeeId._id || resignation.employeeId);
       if (emp) {
         emp.leftDate = resignation.leftDate;
-        emp.leftReason = resignation.remarks || null;
-        // Do not set is_active = false here: account stays active until last working date (leftDate).
-        // Auth and listings treat employee as inactive only when leftDate is in the past.
+        emp.leftReason = resignation.remarks || (resignation.requestType === 'termination' ? 'Terminated' : null);
+        
+        // If termination, deactivate immediately
+        if (resignation.requestType === 'termination') {
+          emp.is_active = false;
+        }
+
         await emp.save();
 
         // Employee history: final approval / left date set
         try {
+          const isTermination = resignation.requestType === 'termination';
           await EmployeeHistory.create({
             emp_no: emp.emp_no,
-            event: 'resignation_final_approved',
+            event: isTermination ? 'termination_final_approved' : 'resignation_final_approved',
             performedBy: req.user._id,
             performedByName: req.user.name,
             performedByRole: req.user.role,
@@ -489,7 +513,9 @@ exports.approveResignationRequest = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Resignation approved. Employee left date has been set. Account remains active until last working date.',
+        message: resignation.requestType === 'termination' 
+          ? 'Termination approved. Employee has been deactivated.' 
+          : 'Resignation approved. Employee left date has been set. Account remains active until last working date.',
         data: resignation,
       });
     }

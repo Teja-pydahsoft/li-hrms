@@ -46,6 +46,10 @@ const ResignationSettingsSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      terminationAllowedRoles: {
+        type: [String],
+        default: ['super_admin', 'hr'],
+      },
     },
     isActive: {
       type: Boolean,
