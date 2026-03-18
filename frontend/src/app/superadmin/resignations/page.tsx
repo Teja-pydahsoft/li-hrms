@@ -21,6 +21,7 @@ import {
   ListTodo,
   Plus,
   Calendar,
+  Save,
 } from 'lucide-react';
 
 const StatCard = ({ title, value, icon: Icon, bgClass, iconClass, dekorClass, loading }: { title: string; value: number | string; icon: React.ComponentType<{ className?: string }>; bgClass: string; iconClass: string; dekorClass?: string; loading?: boolean }) => (
@@ -74,6 +75,7 @@ interface ResignationRequest {
       actionByRole?: string;
       comments?: string;
       updatedAt?: string;
+      canEditLWD?: boolean;
     }>;
     history?: Array<{
       step?: string;
@@ -151,6 +153,8 @@ export default function SuperAdminResignationsPage() {
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<ResignationRequest | null>(null);
   const [actionComment, setActionComment] = useState('');
+  const [newLeftDate, setNewLeftDate] = useState('');
+  const [saveLoading, setSaveLoading] = useState(false);
 
   const [showApplyModal, setShowApplyModal] = useState(false);
   const [applyEmployees, setApplyEmployees] = useState<{ emp_no: string; name: string }[]>([]);
@@ -284,10 +288,40 @@ export default function SuperAdminResignationsPage() {
     return false;
   };
 
+  const handleSaveLWD = async () => {
+    if (!selectedRequest || !newLeftDate) return;
+    
+    setSaveLoading(true);
+    try {
+      const response = await api.updateResignationLWD(selectedRequest._id, {
+        newLeftDate: newLeftDate,
+        comments: actionComment.trim() || undefined
+      });
+      
+      if (response.success) {
+        toast.success('Last working date updated successfully');
+        // Update local state to show change in history/details
+        setSelectedRequest(response.data);
+        // Refresh all data
+        loadData();
+      } else {
+        toast.error((response as any).message || 'Failed to update date');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update date');
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
   const handleDetailAction = async (action: 'approve' | 'reject') => {
     if (!selectedRequest) return;
     try {
-      const response = await api.approveResignationRequest(selectedRequest._id, action, actionComment);
+      const response = await api.approveResignationRequest(selectedRequest._id, { 
+        action, 
+        comments: actionComment,
+        newLeftDate: action === 'approve' && newLeftDate !== (selectedRequest.leftDate ? selectedRequest.leftDate.split('T')[0] : '') ? newLeftDate : undefined
+      });
       if (response.success) {
         Swal.fire({
           icon: 'success',
@@ -318,7 +352,7 @@ export default function SuperAdminResignationsPage() {
 
   const handleCardAction = async (id: string, action: 'approve' | 'reject') => {
     try {
-      const response = await api.approveResignationRequest(id, action, '');
+      const response = await api.approveResignationRequest(id, { action, comments: '' });
       if (response.success) {
         Swal.fire({
           icon: 'success',
@@ -577,6 +611,7 @@ export default function SuperAdminResignationsPage() {
                       onClick={() => {
                         setSelectedRequest(req);
                         setActionComment('');
+                        setNewLeftDate(req.leftDate ? req.leftDate.split('T')[0] : '');
                         setShowDetailDialog(true);
                       }}
                       className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
@@ -637,6 +672,7 @@ export default function SuperAdminResignationsPage() {
                         onClick={() => {
                           setSelectedRequest(req);
                           setActionComment('');
+                          setNewLeftDate(req.leftDate ? req.leftDate.split('T')[0] : '');
                           setShowDetailDialog(true);
                         }}
                         className="flex-1 flex items-center justify-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
@@ -742,9 +778,34 @@ export default function SuperAdminResignationsPage() {
                 <span className="text-slate-500 dark:text-slate-400">Employee</span>
                 <span className="font-medium text-slate-900 dark:text-white">{getEmployeeName(selectedRequest)} ({selectedRequest.emp_no})</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center gap-4">
                 <span className="text-slate-500 dark:text-slate-400">Last working date</span>
-                <span className="font-medium text-slate-900 dark:text-white">{formatDate(selectedRequest.leftDate)}</span>
+                {selectedRequest.status === 'pending' ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={newLeftDate}
+                      onChange={(e) => setNewLeftDate(e.target.value)}
+                      className="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none"
+                    />
+                    {newLeftDate && newLeftDate !== (selectedRequest.leftDate ? selectedRequest.leftDate.split('T')[0] : '') && (
+                      <button
+                        onClick={handleSaveLWD}
+                        disabled={saveLoading}
+                        className="p-2 rounded-lg bg-green-500 hover:bg-green-600 text-white shadow-sm transition active:scale-95 disabled:opacity-50 flex items-center justify-center"
+                        title="Save date change"
+                      >
+                        {saveLoading ? (
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Save className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span className="font-medium text-slate-900 dark:text-white">{formatDate(selectedRequest.leftDate)}</span>
+                )}
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Status</span>
@@ -766,14 +827,58 @@ export default function SuperAdminResignationsPage() {
 
             {selectedRequest.workflow?.approvalChain && selectedRequest.workflow.approvalChain.length > 0 && (
               <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Approval workflow</h3>
-                <div className="space-y-2">
-                  {selectedRequest.workflow.approvalChain.map((step, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs">
-                      <span className="text-slate-700 dark:text-slate-300">{step.label || step.role}</span>
-                      <span className={`rounded-full px-2 py-0.5 font-medium ${step.status === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : step.status === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}`}>
-                        {step.status || 'pending'}
-                      </span>
+                <h3 className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">Approval History</h3>
+                <div className="space-y-3">
+                  {selectedRequest.workflow.approvalChain.map((step, idx) => {
+                    const isPending = !step.status || step.status === 'pending';
+                    const isRejected = step.status === 'rejected';
+                    const isApproved = step.status === 'approved';
+                    
+                    return (
+                      <div key={idx} className="relative pl-6 border-l-2 border-slate-200 dark:border-slate-700 ml-1 pb-4 last:pb-0">
+                        <div className={`absolute -left-[9px] top-0.5 w-4 h-4 rounded-full border-2 border-white dark:border-slate-900 shadow-sm ${
+                          isApproved ? 'bg-green-500' : isRejected ? 'bg-red-500' : 'bg-slate-300 dark:bg-slate-600'
+                        }`} />
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{step.label || step.role}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${
+                              isApproved ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 
+                              isRejected ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 
+                              'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-500'
+                            }`}>
+                              {step.status || 'pending'}
+                            </span>
+                          </div>
+                          {!isPending && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              <p>By: <span className="font-semibold text-slate-700 dark:text-slate-200">{step.actionByName || '—'}</span> {step.updatedAt && <span className="ml-1 opacity-70">· {new Date(step.updatedAt).toLocaleDateString()}</span>}</p>
+                              {step.comments && <p className="mt-1 italic border-l-2 border-slate-200 dark:border-slate-700 pl-2">&quot;{step.comments}&quot;</p>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* LWD History */}
+            {((selectedRequest as any).lwdHistory?.length > 0) && (
+              <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
+                <h3 className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">Last Working Date History</h3>
+                <div className="space-y-3">
+                  {(selectedRequest as any).lwdHistory.map((h: any, idx: number) => (
+                    <div key={idx} className="text-[11px] p-2 rounded-xl bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-blue-700 dark:text-blue-400">
+                          {formatDate(h.oldDate)} → {formatDate(h.newDate)}
+                        </span>
+                        <span className="opacity-60">{new Date(h.timestamp).toLocaleDateString()}</span>
+                      </div>
+                      <p className="text-slate-600 dark:text-slate-400">Changed by <span className="font-bold">{h.updatedByName}</span> ({h.updatedByRole})</p>
+                      {h.comments && <p className="mt-1 italic">&quot;{h.comments}&quot;</p>}
                     </div>
                   ))}
                 </div>
@@ -781,14 +886,44 @@ export default function SuperAdminResignationsPage() {
             )}
 
             {selectedRequest.status === 'pending' && canPerformAction(selectedRequest) && (
-              <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-3">
-                <textarea
-                  value={actionComment}
-                  onChange={(e) => setActionComment(e.target.value)}
-                  placeholder="Add a comment (optional)..."
-                  rows={2}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm dark:bg-slate-800 dark:text-white resize-none"
-                />
+              <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700 flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 dark:text-slate-500">Approver Action</label>
+                  
+                  {/* LWD Edit Option if enabled for this step */}
+                  {(() => {
+                    const currentStep = selectedRequest.workflow?.approvalChain?.find(s => s.status === 'pending' || !s.status);
+                    const userRole = (currentUser?.role || '').toLowerCase();
+                    const isSuperOrSubAdmin = ['super_admin', 'sub_admin'].includes(userRole);
+                    
+                    // Allow edit if step allows it OR if user is Super/Sub Admin
+                    if (currentStep?.canEditLWD || isSuperOrSubAdmin) {
+                      return (
+                        <div className="mb-2 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/50">
+                          <label className="block text-[10px] font-black uppercase text-amber-700 dark:text-amber-500 mb-2">Update Last Working Date</label>
+                          <input
+                            type="date"
+                            value={newLeftDate || (selectedRequest.leftDate ? String(selectedRequest.leftDate).split('T')[0] : '')}
+                            onChange={(e) => setNewLeftDate(e.target.value)}
+                            className="w-full h-10 px-3 rounded-lg border border-orange-200 dark:border-orange-800 bg-white dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-orange-500 text-slate-800 dark:text-slate-100"
+                          />
+                          <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400 font-medium italic">
+                            {currentStep?.canEditLWD ? "This step allows LWD editing." : "Super Admin override: You can edit the LWD."}
+                          </p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  <textarea
+                    value={actionComment}
+                    onChange={(e) => setActionComment(e.target.value)}
+                    placeholder="Add a comment (optional)..."
+                    rows={2}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-600 px-4 py-2 text-sm dark:bg-slate-800 dark:text-white resize-none outline-none focus:ring-2 focus:ring-green-500/20"
+                  />
+                </div>
                 <div className="flex gap-2">
                   <button
                     type="button"

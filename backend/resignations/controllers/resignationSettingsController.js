@@ -14,6 +14,7 @@ exports.getSettings = async (req, res) => {
           isEnabled: true,
           steps: [],
           finalAuthority: { role: 'hr', anyHRCanApprove: true },
+          allowHigherAuthorityToApproveLowerLevels: false,
         },
         isActive: true,
         isDefault: true,
@@ -26,6 +27,7 @@ exports.getSettings = async (req, res) => {
           isEnabled: true,
           steps: [],
           finalAuthority: { role: 'hr', anyHRCanApprove: true },
+          allowHigherAuthorityToApproveLowerLevels: false,
         },
         isActive: plain.isActive !== false,
       };
@@ -59,6 +61,9 @@ exports.saveSettings = async (req, res) => {
       if (workflow.isEnabled !== undefined) settings.workflow.isEnabled = !!workflow.isEnabled;
       if (workflow.steps) settings.workflow.steps = workflow.steps;
       if (workflow.finalAuthority) settings.workflow.finalAuthority = workflow.finalAuthority;
+      if (workflow.allowHigherAuthorityToApproveLowerLevels !== undefined) {
+        settings.workflow.allowHigherAuthorityToApproveLowerLevels = !!workflow.allowHigherAuthorityToApproveLowerLevels;
+      }
     }
     settings.updatedBy = req.user?._id;
     settings.isActive = true;

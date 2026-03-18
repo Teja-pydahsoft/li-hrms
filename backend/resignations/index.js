@@ -14,6 +14,7 @@ router.post('/settings', authorize('super_admin'), resignationSettingsController
 router.post('/', authorize('employee', 'manager', 'hod', 'hr', 'sub_admin', 'super_admin'), resignationController.createResignationRequest);
 router.get('/pending-approvals', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), resignationController.getPendingApprovals);
 router.put('/:id/approve', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), resignationController.approveResignationRequest);
+router.put('/:id/lwd', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), resignationController.updateLWD);
 router.get('/', resignationController.getResignationRequests);
 
 module.exports = router;

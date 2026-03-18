@@ -2409,15 +2409,21 @@ export const api = {
   getResignationPendingApprovals: async () => {
     return apiRequest<any>('/resignations/pending-approvals', { method: 'GET' });
   },
-  approveResignationRequest: async (id: string, action: 'approve' | 'reject', comments?: string) => {
+  approveResignationRequest: async (id: string, data: { action: 'approve' | 'reject'; comments?: string; newLeftDate?: string }) => {
     return apiRequest<any>(`/resignations/${id}/approve`, {
       method: 'PUT',
-      body: JSON.stringify({ action, comments }),
+      body: JSON.stringify(data),
     });
   },
   getResignationRequests: async (params?: { emp_no?: string }) => {
     const q = params?.emp_no ? `?emp_no=${encodeURIComponent(params.emp_no)}` : '';
     return apiRequest<any>(`/resignations${q}`, { method: 'GET' });
+  },
+  updateResignationLWD: async (id: string, data: { newLeftDate: string; comments?: string }) => {
+    return apiRequest<any>(`/resignations/${id}/lwd`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
   },
 
   // ==========================================

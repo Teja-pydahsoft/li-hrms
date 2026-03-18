@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/auth';
 import { canViewResignation, canApplyResignation, canApproveResignation } from '@/lib/permissions';
@@ -16,12 +16,12 @@ import {
   X,
   Filter,
   CheckCircle2,
-  XCircle,
   Clock,
   Clock3,
   ListTodo,
   Plus,
   Calendar,
+  Save,
 } from 'lucide-react';
 
 const StatCard = ({ title, value, icon: Icon, bgClass, iconClass, dekorClass, loading }: { title: string; value: number | string; icon: React.ComponentType<{ className?: string }>; bgClass: string; iconClass: string; dekorClass?: string; loading?: boolean }) => (
@@ -75,6 +75,7 @@ interface ResignationRequest {
       actionByRole?: string;
       comments?: string;
       updatedAt?: string;
+      canEditLWD?: boolean;
     }>;
     history?: Array<{
       step?: string;
@@ -86,6 +87,15 @@ interface ResignationRequest {
     }>;
     reportingManagerIds?: string[];
   };
+  lwdHistory?: Array<{
+    oldDate: string;
+    newDate: string;
+    updatedBy?: string;
+    updatedByName?: string;
+    updatedByRole?: string;
+    comments?: string;
+    timestamp?: string;
+  }>;
 }
 
 const getStatusColor = (status: string) => {
@@ -148,6 +158,8 @@ export default function ResignationsPage() {
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<ResignationRequest | null>(null);
   const [actionComment, setActionComment] = useState('');
+  const [editableLWD, setEditableLWD] = useState('');
+  const [saveLoading, setSaveLoading] = useState(false);
 
   const [showApplyModal, setShowApplyModal] = useState(false);
   const [applySelfOnly, setApplySelfOnly] = useState(false);
@@ -162,6 +174,7 @@ export default function ResignationsPage() {
     search: '',
     status: '',
   });
+  const [resignationSettings, setResignationSettings] = useState<any>(null);
 
   useEffect(() => {
     const user = auth.getUser();
@@ -177,11 +190,17 @@ export default function ResignationsPage() {
       if (allRes.success && allRes.data) setAllRequests(Array.isArray(allRes.data) ? allRes.data : []);
       else setAllRequests([]);
       if (!isEmployee) {
-        const pendingRes = await api.getResignationPendingApprovals();
+        const [pendingRes, settingsRes] = await Promise.all([
+          api.getResignationPendingApprovals(),
+          api.getResignationSettings()
+        ]);
         if (pendingRes.success && pendingRes.data) setPendingRequests(Array.isArray(pendingRes.data) ? pendingRes.data : []);
         else setPendingRequests([]);
+        if (settingsRes.success && settingsRes.data) setResignationSettings(settingsRes.data);
       } else {
         setPendingRequests([]);
+        const settingsRes = await api.getResignationSettings();
+        if (settingsRes.success && settingsRes.data) setResignationSettings(settingsRes.data);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load data';
@@ -294,6 +313,8 @@ export default function ResignationsPage() {
 
     const nextRole = String(item.workflow?.nextApproverRole || '').toLowerCase().trim();
     if (!nextRole) return false;
+    
+    // Direct match
     if (role === nextRole) return true;
     if (nextRole === 'final_authority' && role === 'hr') return true;
     if (nextRole === 'reporting_manager') {
@@ -301,13 +322,117 @@ export default function ResignationsPage() {
       const userId = String((currentUser as any).id ?? (currentUser as any)._id ?? '').trim();
       if (reportingManagerIds?.length && userId && reportingManagerIds.some((id: string) => String(id).trim() === userId)) return true;
     }
+
+    // Allow Higher Authority logic
+    const allowHigher = resignationSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+    if (allowHigher && item.workflow?.approvalChain) {
+      const chain = item.workflow.approvalChain;
+      const activeIndex = chain.findIndex(s => s.status === 'pending');
+      if (activeIndex !== -1) {
+        const userId = String((currentUser as any).id ?? (currentUser as any)._id ?? '').trim();
+        const isReportingManager = item.workflow.reportingManagerIds?.some(id => String(id).trim() === userId);
+        
+        // Look for any LATER step that matches user
+        const laterSteps = chain.slice(activeIndex);
+        return laterSteps.some(step => {
+          const stepRole = (step.role || '').toLowerCase();
+          if (stepRole === role) return true;
+          if (stepRole === 'reporting_manager' && isReportingManager) return true;
+          if (stepRole === 'final_authority' && role === 'hr') return true;
+          return false;
+        });
+      }
+    }
+
     return false;
+  };
+
+  const getCurrentStep = useCallback((req: ResignationRequest) => {
+    if (!req.workflow?.approvalChain || !currentUser) return null;
+    const role = (currentUser.role || '').toLowerCase();
+    const userId = String((currentUser as any).id ?? (currentUser as any)._id ?? '').trim();
+    const isSuperOrSubAdmin = ['super_admin', 'sub_admin'].includes(role);
+    
+    const allowHigher = resignationSettings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+    
+    const chain = req.workflow.approvalChain;
+    const activeIndex = chain.findIndex(s => s.status === 'pending');
+    if (activeIndex === -1) return null;
+
+    if (allowHigher) {
+      // Find the LATEST step that matches user, starting from activeIndex
+      const laterSteps = chain.slice(activeIndex);
+      // We search in reverse to find the "highest" role the user has in the remaining chain
+      for (let i = laterSteps.length - 1; i >= 0; i--) {
+        const step = laterSteps[i];
+        const stepRole = (step.role || '').toLowerCase();
+        if (stepRole === 'reporting_manager') {
+          const reportingManagerIds = req.workflow?.reportingManagerIds as string[] | undefined;
+          if (reportingManagerIds?.some((id: string) => String(id).trim() === userId)) return step;
+        }
+        if (stepRole === role) return step;
+        if (stepRole === 'final_authority' && role === 'hr') return step;
+      }
+    }
+
+    // Default: find current pending step
+    const currentStep = chain[activeIndex];
+    const stepRole = (currentStep.role || '').toLowerCase();
+    const isReportingManager = req.workflow?.reportingManagerIds?.some((id: string) => String(id).trim() === userId);
+    
+    const isMatch = isSuperOrSubAdmin || 
+      stepRole === role || 
+      (stepRole === 'reporting_manager' && isReportingManager) ||
+      (stepRole === 'final_authority' && role === 'hr');
+    
+    return isMatch ? currentStep : null;
+  }, [currentUser, resignationSettings]);
+
+  const canEditLWDCurrentStep = useMemo(() => {
+    if (!selectedRequest || !currentUser) return false;
+    const role = (currentUser.role || '').toLowerCase();
+    if (['super_admin', 'sub_admin'].includes(role)) return true;
+    
+    const currentStep = getCurrentStep(selectedRequest);
+    return currentStep?.canEditLWD || false;
+  }, [selectedRequest, currentUser, getCurrentStep]);
+
+  const handleSaveLWD = async () => {
+    if (!selectedRequest || !editableLWD) return;
+    
+    setSaveLoading(true);
+    try {
+      const response = await api.updateResignationLWD(selectedRequest._id, {
+        newLeftDate: editableLWD,
+        comments: actionComment.trim() || undefined
+      });
+      
+      if (response.success) {
+        toast.success('Last working date updated successfully');
+        // Update local state to show change in history/details
+        setSelectedRequest(response.data);
+        // Refresh all data
+        loadData();
+      } else {
+        toast.error(response.message || 'Failed to update date');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update date');
+    } finally {
+      setSaveLoading(false);
+    }
   };
 
   const handleDetailAction = async (action: 'approve' | 'reject') => {
     if (!selectedRequest) return;
     try {
-      const response = await api.approveResignationRequest(selectedRequest._id, action, actionComment);
+      const data: any = { action, comments: actionComment };
+      // Include new LWD if edited during approval
+      if (action === 'approve' && editableLWD && editableLWD !== (selectedRequest.leftDate ? selectedRequest.leftDate.split('T')[0] : '')) {
+        data.newLeftDate = editableLWD;
+      }
+      
+      const response = await api.approveResignationRequest(selectedRequest._id, data);
       if (response.success) {
         Swal.fire({
           icon: 'success',
@@ -338,7 +463,7 @@ export default function ResignationsPage() {
 
   const handleCardAction = async (id: string, action: 'approve' | 'reject') => {
     try {
-      const response = await api.approveResignationRequest(id, action, '');
+      const response = await api.approveResignationRequest(id, { action, comments: '' });
       if (response.success) {
         Swal.fire({
           icon: 'success',
@@ -615,6 +740,7 @@ export default function ResignationsPage() {
                       onClick={() => {
                         setSelectedRequest(req);
                         setActionComment('');
+                        setEditableLWD(req.leftDate ? req.leftDate.split('T')[0] : '');
                         setShowDetailDialog(true);
                       }}
                       className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
@@ -666,7 +792,7 @@ export default function ResignationsPage() {
                         <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(req.leftDate)}</span>
                       </div>
                       {req.remarks && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">"{req.remarks}"</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">&quot;{req.remarks}&quot;</p>
                       )}
                     </div>
                     <div className="flex gap-2">
@@ -675,6 +801,7 @@ export default function ResignationsPage() {
                         onClick={() => {
                           setSelectedRequest(req);
                           setActionComment('');
+                          setEditableLWD(req.leftDate ? req.leftDate.split('T')[0] : '');
                           setShowDetailDialog(true);
                         }}
                         className="flex-1 flex items-center justify-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
@@ -782,10 +909,53 @@ export default function ResignationsPage() {
                 <span className="text-slate-500 dark:text-slate-400">Employee</span>
                 <span className="font-medium text-slate-900 dark:text-white">{getEmployeeName(selectedRequest)} ({selectedRequest.emp_no})</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-slate-500 dark:text-slate-400">Last working date</span>
-                <span className="font-medium text-slate-900 dark:text-white">{formatDate(selectedRequest.leftDate)}</span>
+                {canEditLWDCurrentStep ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={editableLWD}
+                      onChange={(e) => setEditableLWD(e.target.value)}
+                      className="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none"
+                    />
+                    {editableLWD && editableLWD !== (selectedRequest.leftDate ? selectedRequest.leftDate.split('T')[0] : '') && (
+                      <button
+                        onClick={handleSaveLWD}
+                        disabled={saveLoading}
+                        className="p-2 rounded-lg bg-green-500 hover:bg-green-600 text-white shadow-sm transition active:scale-95 disabled:opacity-50 flex items-center justify-center"
+                        title="Save date change"
+                      >
+                        {saveLoading ? (
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Save className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span className="font-medium text-slate-900 dark:text-white">{formatDate(selectedRequest.leftDate)}</span>
+                )}
               </div>
+              
+              {selectedRequest.lwdHistory && selectedRequest.lwdHistory.length > 0 && (
+                <div className="mt-2 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">LWD change history</h4>
+                  <div className="space-y-2">
+                    {selectedRequest.lwdHistory.map((history, idx) => (
+                      <div key={idx} className="text-[11px] text-slate-600 dark:text-slate-400 pb-2 border-b border-slate-100 dark:border-slate-800 last:border-0 last:pb-0">
+                        <div className="flex justify-between font-bold text-slate-700 dark:text-slate-300">
+                          <span>{formatDate(history.oldDate)} → {formatDate(history.newDate)}</span>
+                          <span className="opacity-60">{history.timestamp ? new Date(history.timestamp).toLocaleDateString() : '—'}</span>
+                        </div>
+                        <p className="mt-0.5">Changed by <span className="font-semibold">{history.updatedByName}</span> ({history.updatedByRole})</p>
+                        {history.comments && <p className="mt-1 italic opacity-80">&quot;{history.comments}&quot;</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Status</span>
                 <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusColor(selectedRequest.status)}`}>{selectedRequest.status}</span>
@@ -807,13 +977,27 @@ export default function ResignationsPage() {
             {selectedRequest.workflow?.approvalChain && selectedRequest.workflow.approvalChain.length > 0 && (
               <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Approval workflow</h3>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {selectedRequest.workflow.approvalChain.map((step, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs">
-                      <span className="text-slate-700 dark:text-slate-300">{step.label || step.role}</span>
-                      <span className={`rounded-full px-2 py-0.5 font-medium ${step.status === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : step.status === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}`}>
-                        {step.status || 'pending'}
-                      </span>
+                    <div key={idx} className="flex flex-col gap-1 p-2 rounded-xl bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{step.label || step.role}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${
+                          step.status === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 
+                          step.status === 'rejected' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 
+                          'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
+                          {step.status || 'pending'}
+                        </span>
+                      </div>
+                      {step.status && step.status !== 'pending' && (
+                        <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                          <div className="flex justify-between">
+                            <span>By: <span className="font-semibold text-slate-700 dark:text-slate-300">{step.actionByName || '—'}</span></span>
+                            {step.updatedAt && <span>{new Date(step.updatedAt).toLocaleDateString()}</span>}
+                          </div>
+                          {step.comments && <p className="mt-1 italic border-l-2 border-slate-200 dark:border-slate-700 pl-2">"{step.comments}"</p>}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

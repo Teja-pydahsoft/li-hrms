@@ -2,21 +2,10 @@ const ResignationRequest = require('../model/ResignationRequest');
 const ResignationSettings = require('../model/ResignationSettings');
 const Employee = require('../../employees/model/Employee');
 const EmployeeHistory = require('../../employees/model/EmployeeHistory');
-const { getEmployeeIdsInScope } = require('../../shared/middleware/dataScopeMiddleware');
-
-function buildWorkflowVisibilityFilter(user) {
-  if (!user) return { _id: null };
-  const role = (user.role || '').toLowerCase();
-  const roleVariants = [role, role.replace('_', '')];
-  const filter = {
-    $or: [
-      { 'workflow.approvalChain': { $elemMatch: { role: { $in: roleVariants } } } },
-      { 'workflow.reportingManagerIds': user._id.toString() },
-    ],
-  };
-  if (['super_admin', 'sub_admin'].includes(role)) return {};
-  return filter;
-}
+const {
+  getEmployeeIdsInScope,
+  buildWorkflowVisibilityFilter
+} = require('../../shared/middleware/dataScopeMiddleware');
 
 // @desc    Create resignation request (opens workflow)
 // @route   POST /api/resignations
@@ -83,6 +72,7 @@ exports.createResignationRequest = async (req, res) => {
         label: 'Reporting Manager Approval',
         status: 'pending',
         isCurrent: true,
+        canEditLWD: false,
       });
     } else {
       approvalSteps.push({
@@ -91,6 +81,7 @@ exports.createResignationRequest = async (req, res) => {
         label: 'HOD Approval',
         status: 'pending',
         isCurrent: true,
+        canEditLWD: false,
       });
     }
     if (workflowEnabled && settings?.workflow?.steps?.length) {
@@ -103,6 +94,7 @@ exports.createResignationRequest = async (req, res) => {
             label: step.stepName || `${(step.approverRole || '').toUpperCase()} Approval`,
             status: 'pending',
             isCurrent: false,
+            canEditLWD: step.canEditLWD || false,
           });
         }
       });
@@ -229,7 +221,7 @@ exports.getPendingApprovals = async (req, res) => {
 exports.approveResignationRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { action, comments } = req.body; // action: 'approve' | 'reject'
+    const { action, comments, newLeftDate } = req.body; // action: 'approve' | 'reject'
     const resignation = await ResignationRequest.findById(id)
       .populate('employeeId')
       .populate('requestedBy', 'name email');
@@ -240,6 +232,11 @@ exports.approveResignationRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Request is no longer pending' });
     }
 
+    // Fetch Resignation Settings to check for 'Allow Higher Authority'
+    const ResignationSettings = require('../model/ResignationSettings');
+    const settings = await ResignationSettings.getActiveSettings();
+    const allowHigher = settings?.workflow?.allowHigherAuthorityToApproveLowerLevels === true;
+
     const chain = resignation.workflow?.approvalChain || [];
     const activeIndex = chain.findIndex((s) => s.status === 'pending');
     if (activeIndex === -1) {
@@ -249,12 +246,38 @@ exports.approveResignationRequest = async (req, res) => {
     const userRole = (req.user.role || '').toLowerCase();
     const isReportingManager = resignation.workflow?.reportingManagerIds?.includes(req.user._id.toString());
     const isSuperOrSubAdmin = ['super_admin', 'sub_admin'].includes(userRole);
-    const canAct =
-      isSuperOrSubAdmin ||
-      step.role === userRole ||
-      (step.role === 'reporting_manager' && isReportingManager) ||
-      (step.role === 'final_authority' && userRole === 'hr') ||
-      (resignation.workflow.finalAuthority === userRole && ['hr'].includes(userRole));
+    
+    let canAct = false;
+    let targetStep = step;
+
+    if (isSuperOrSubAdmin) {
+      canAct = true;
+    } else {
+      // Direct match with current step
+      const isMatchCurrent = step.role === userRole ||
+        (step.role === 'reporting_manager' && isReportingManager) ||
+        (step.role === 'final_authority' && userRole === 'hr') ||
+        (resignation.workflow.finalAuthority === userRole && ['hr'].includes(userRole));
+      
+      if (isMatchCurrent) {
+        canAct = true;
+      } else if (allowHigher) {
+        // Check if user's role exists in any LATER pending/future steps
+        // For Resignations, we look from the activeIndex onwards
+        const laterSteps = chain.slice(activeIndex);
+        const matchedLaterStep = laterSteps.find(s => 
+          s.role === userRole || 
+          (s.role === 'reporting_manager' && isReportingManager) ||
+          (s.role === 'final_authority' && userRole === 'hr')
+        );
+        
+        if (matchedLaterStep) {
+          canAct = true;
+          targetStep = matchedLaterStep;
+        }
+      }
+    }
+
     if (!canAct) {
       return res.status(403).json({
         success: false,
@@ -262,16 +285,78 @@ exports.approveResignationRequest = async (req, res) => {
       });
     }
 
+    // Use targetStep for the action instead of just the first pending step
+    const actingStep = targetStep; 
+
     const isApprove = action === 'approve';
-    step.status = isApprove ? 'approved' : 'rejected';
-    step.actionBy = req.user._id;
-    step.actionByName = req.user.name;
-    step.actionByRole = userRole;
-    step.comments = comments || '';
-    step.updatedAt = new Date();
+
+    // Handle LWD Change
+    if (isApprove && newLeftDate && (actingStep.canEditLWD || isSuperOrSubAdmin)) {
+      const newDateObj = new Date(newLeftDate);
+      if (!isNaN(newDateObj.getTime())) {
+        const oldDate = resignation.leftDate;
+        resignation.leftDate = newDateObj;
+
+        // Log LWD change to lwdHistory (newly added array)
+        if (!resignation.lwdHistory) resignation.lwdHistory = [];
+        resignation.lwdHistory.push({
+          oldDate,
+          newDate: newDateObj,
+          updatedBy: req.user._id,
+          updatedByName: req.user.name,
+          updatedByRole: userRole,
+          comments: comments || 'LWD updated during approval',
+          timestamp: new Date(),
+        });
+
+        // Also log to workflow history for immediate visibility
+        resignation.workflow.history.push({
+          step: actingStep.role,
+          action: 'lwd_changed',
+          actionBy: req.user._id,
+          actionByName: req.user.name,
+          actionByRole: userRole,
+          comments: `LWD changed from ${oldDate.toISOString().split('T')[0]} to ${newDateObj.toISOString().split('T')[0]}`,
+          timestamp: new Date(),
+        });
+      }
+    }
+
+    actingStep.status = isApprove ? 'approved' : 'rejected';
+    actingStep.actionBy = req.user._id;
+    actingStep.actionByName = req.user.name;
+    actingStep.actionByRole = userRole;
+    actingStep.comments = comments || '';
+    actingStep.updatedAt = new Date();
+
+    // If a higher authority approved, we should mark all skipped earlier steps as 'approved' as well
+    // or just leave them? Usually 'approved' is better so workflow proceed.
+    if (isApprove && allowHigher && targetStep !== step) {
+      for (let i = activeIndex; i < chain.indexOf(targetStep); i++) {
+        const skippedStep = chain[i];
+        if (skippedStep.status === 'pending') {
+          skippedStep.status = 'approved';
+          skippedStep.actionBy = req.user._id;
+          skippedStep.actionByName = req.user.name;
+          skippedStep.actionByRole = `${userRole} (Higher Auth)`;
+          skippedStep.comments = 'Auto-approved by higher authority';
+          skippedStep.updatedAt = new Date();
+          
+          resignation.workflow.history.push({
+            step: skippedStep.role,
+            action: 'approved',
+            actionBy: req.user._id,
+            actionByName: req.user.name,
+            actionByRole: `${userRole} (Higher Auth)`,
+            comments: 'Auto-approved by higher authority acting on later step',
+            timestamp: new Date(),
+          });
+        }
+      }
+    }
 
     resignation.workflow.history.push({
-      step: step.role,
+      step: actingStep.role,
       action: isApprove ? 'approved' : 'rejected',
       actionBy: req.user._id,
       actionByName: req.user.name,
@@ -401,19 +486,30 @@ exports.approveResignationRequest = async (req, res) => {
 exports.getResignationRequests = async (req, res) => {
   try {
     const { emp_no } = req.query;
-    const filter = {};
-    const userRole = (req.user.role || '').toLowerCase();
+
+    // Visibility and Scope:
+    // Applicants see their own. 
+    // Super/Sub admins see everything. 
+    // Functional roles (HOD/Manager/HR) see in-scope employees OR those in their workflow chain.
+    const workflowFilter = buildWorkflowVisibilityFilter(req.user);
+    const scopeEmployeeIds = await getEmployeeIdsInScope(req.user);
+    
+    // Final visibility: (part of workflow) OR (in administrative scope)
+    const visibilityFilter = {
+      $or: [
+        workflowFilter,
+        { employeeId: { $in: scopeEmployeeIds } }
+      ]
+    };
+
+    const filter = {
+      $and: [
+        visibilityFilter,
+        { isActive: { $ne: false } }
+      ]
+    };
+
     if (emp_no) filter.emp_no = String(emp_no).toUpperCase();
-    else if (userRole === 'employee') {
-      const myEmployeeId = req.user.employeeRef
-        || (req.user.employeeId && (await Employee.findOne({ emp_no: String(req.user.employeeId).toUpperCase() }).select('_id').lean())?._id)
-        || req.user._id;
-      if (myEmployeeId) filter.employeeId = myEmployeeId;
-      else filter.employeeId = { $in: [] };
-    } else if (userRole !== 'super_admin' && userRole !== 'sub_admin') {
-      const employeeIds = await getEmployeeIdsInScope(req.user);
-      if (employeeIds.length) filter.employeeId = { $in: employeeIds };
-    }
     const list = await ResignationRequest.find(filter)
       .populate('employeeId', 'employee_name emp_no department_id division_id')
       .populate('requestedBy', 'name email')
@@ -425,6 +521,106 @@ exports.getResignationRequests = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch resignation requests',
+    });
+  }
+};
+
+// @desc    Update Last Working Date (LWD) without immediate approval/rejection
+// @route   PUT /api/resignations/:id/lwd
+// @access  Private
+exports.updateLWD = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newLeftDate, comments } = req.body;
+
+    if (!newLeftDate) {
+      return res.status(400).json({ success: false, message: 'New left date is required' });
+    }
+
+    const resignation = await ResignationRequest.findById(id);
+    if (!resignation) {
+      return res.status(404).json({ success: false, message: 'Resignation request not found' });
+    }
+
+    if (resignation.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Can only update LWD for pending requests' });
+    }
+
+    const userRole = (req.user.role || '').toLowerCase();
+    const isSuperOrSubAdmin = ['super_admin', 'sub_admin'].includes(userRole);
+    
+    // Check if user is the current approver or super admin
+    const chain = resignation.workflow?.approvalChain || [];
+    const activeIndex = chain.findIndex(s => s.status === 'pending');
+    const step = activeIndex !== -1 ? chain[activeIndex] : null;
+
+    let canEdit = isSuperOrSubAdmin;
+    if (step && !canEdit) {
+      const isReportingManager = resignation.workflow?.reportingManagerIds?.includes(req.user._id.toString());
+      const isCorrectRole = (step.role === userRole) || 
+                          (step.role === 'reporting_manager' && isReportingManager) ||
+                          (step.role === 'final_authority' && userRole === 'hr');
+      
+      if (isCorrectRole && step.canEditLWD) {
+        canEdit = true;
+      }
+    }
+
+    if (!canEdit) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to edit LWD at this stage' });
+    }
+
+    const newDateObj = new Date(newLeftDate);
+    if (isNaN(newDateObj.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+
+    const oldDate = resignation.leftDate;
+    const oldDateStr = oldDate ? oldDate.toISOString().split('T')[0] : 'None';
+    const newDateStr = newDateObj.toISOString().split('T')[0];
+
+    // Check if date actually changed
+    if (oldDateStr === newDateStr) {
+      return res.status(200).json({ success: true, message: 'No change in date', data: resignation });
+    }
+
+    resignation.leftDate = newDateObj;
+
+    // Log LWD change to lwdHistory
+    if (!resignation.lwdHistory) resignation.lwdHistory = [];
+    resignation.lwdHistory.push({
+      oldDate,
+      newDate: newDateObj,
+      updatedBy: req.user._id,
+      updatedByName: req.user.name,
+      updatedByRole: userRole,
+      comments: comments || `LWD updated from ${oldDateStr} to ${newDateStr}`,
+      timestamp: new Date(),
+    });
+
+    // Also log to workflow history
+    resignation.workflow.history.push({
+      step: step?.role || 'Admin',
+      action: 'lwd_changed',
+      actionBy: req.user._id,
+      actionByName: req.user.name,
+      actionByRole: userRole,
+      comments: `LWD changed from ${oldDateStr} to ${newDateStr}. ${comments || ''}`,
+      timestamp: new Date(),
+    });
+
+    await resignation.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Last working date updated successfully',
+      data: resignation,
+    });
+  } catch (error) {
+    console.error('Error updating LWD:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to update LWD',
     });
   }
 };

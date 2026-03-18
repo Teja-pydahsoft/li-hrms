@@ -25,6 +25,10 @@ const ResignationSettingsSchema = new mongoose.Schema(
             type: String,
             enum: ['hod', 'hr', 'manager', 'super_admin', 'reporting_manager'],
           },
+          canEditLWD: {
+            type: Boolean,
+            default: false,
+          },
         },
       ],
       finalAuthority: {
@@ -37,6 +41,10 @@ const ResignationSettingsSchema = new mongoose.Schema(
           type: Boolean,
           default: true,
         },
+      },
+      allowHigherAuthorityToApproveLowerLevels: {
+        type: Boolean,
+        default: false,
       },
     },
     isActive: {

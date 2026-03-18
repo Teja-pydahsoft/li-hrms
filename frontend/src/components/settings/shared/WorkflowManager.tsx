@@ -8,6 +8,7 @@ export interface WorkflowStep {
     stepName: string;
     approverRole: string;
     isActive: boolean;
+    canEditLWD?: boolean;
 }
 
 export interface WorkflowData {
@@ -28,6 +29,7 @@ interface WorkflowManagerProps {
     description?: string;
     icon?: LucideIcon;
     addStepLabel?: string;
+    isResignationWorkflow?: boolean;
 }
 
 const WorkflowManager = ({
@@ -36,7 +38,8 @@ const WorkflowManager = ({
     title = "Multi-Level Approval",
     description = "Workflow Engine for automated authorization.",
     icon: Icon = ShieldCheck,
-    addStepLabel = "Add Next Approval Stage"
+    addStepLabel = "Add Next Approval Stage",
+    isResignationWorkflow = false
 }: WorkflowManagerProps) => {
     const steps = workflow?.steps || [];
 
@@ -72,6 +75,7 @@ const WorkflowManager = ({
                 approverRole: 'manager',
                 stepName: `Level ${nextOrder} Approval`,
                 isActive: true,
+                canEditLWD: false,
             },
         ];
         update('steps', newSteps);
@@ -158,6 +162,21 @@ const WorkflowManager = ({
                                         <p className="text-[9px] text-gray-400 mt-1 italic leading-tight">* Falls back to HOD if no manager is assigned</p>
                                     )}
                                 </div>
+                                {isResignationWorkflow && (
+                                    <div className="flex flex-col justify-center gap-1">
+                                        <label className="text-[10px] text-gray-400 uppercase font-bold tracking-tighter">Can Edit LWD</label>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => updateStep(idx, 'canEditLWD', !step.canEditLWD)}
+                                                className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${step.canEditLWD ? 'bg-purple-600' : 'bg-gray-200 dark:bg-gray-700'}`}
+                                            >
+                                                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${step.canEditLWD ? 'translate-x-5' : 'translate-x-1'}`} />
+                                            </button>
+                                            <span className="text-[10px] font-medium text-gray-500 uppercase">{step.canEditLWD ? 'Yes' : 'No'}</span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             <button
                                 onClick={() => removeStep(idx)}

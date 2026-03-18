@@ -3500,34 +3500,40 @@ export default function LeavesPage() {
                   </div>
                 )}
 
-                {/* Half Day Selection (Leave Only - OD handled above via buttons) */}
-                {applyType === 'leave' && (
+                {/* Half Day Selection */}
+                {(applyType === 'leave' || (applyType === 'od' && formData.odType_extended === 'half_day')) && (
                   <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.isHalfDay}
-                        onChange={(e) => {
-                          if (!e.target.checked) {
-                            setFormData({ ...formData, isHalfDay: false, halfDayType: null });
-                          } else {
-                            // When toggling half-day on, sync toDate to fromDate and default to first_half
-                            setFormData({ ...formData, isHalfDay: true, halfDayType: formData.halfDayType || 'first_half', toDate: formData.fromDate });
-                          }
-                        }}
-                        className="w-4 h-4 rounded border-slate-300"
-                      />
-                      <span className="text-sm text-slate-700 dark:text-slate-300">Half Day</span>
-                    </label>
-                    {formData.isHalfDay && (
-                      <select
-                        value={formData.halfDayType || 'first_half'}
-                        onChange={(e) => setFormData({ ...formData, halfDayType: e.target.value as any })}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                      >
-                        <option value="first_half">First Half</option>
-                        <option value="second_half">Second Half</option>
-                      </select>
+                    {applyType === 'leave' && (
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.isHalfDay}
+                          onChange={(e) => {
+                            if (!e.target.checked) {
+                              setFormData({ ...formData, isHalfDay: false, halfDayType: null });
+                            } else {
+                              // When toggling half-day on, sync toDate to fromDate and default to first_half
+                              setFormData({ ...formData, isHalfDay: true, halfDayType: formData.halfDayType || 'first_half', toDate: formData.fromDate });
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-300"
+                        />
+                        <span className="text-sm text-slate-700 dark:text-slate-300">Half Day</span>
+                      </label>
+                    )}
+
+                    {(formData.isHalfDay || (applyType === 'od' && formData.odType_extended === 'half_day')) && (
+                      <div className="flex items-center gap-2">
+                        {applyType === 'od' && <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Select Half:</span>}
+                        <select
+                          value={formData.halfDayType || 'first_half'}
+                          onChange={(e) => setFormData({ ...formData, halfDayType: e.target.value as any })}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-purple-500 outline-none"
+                        >
+                          <option value="first_half">First Half</option>
+                          <option value="second_half">Second Half</option>
+                        </select>
+                      </div>
                     )}
                   </div>
                 )}
@@ -3874,13 +3880,13 @@ export default function LeavesPage() {
                                   {isCurrent && <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">⏳ Your turn</span>}
                                   {isPending && !isCurrent && <span className="text-[10px] font-bold text-slate-400 uppercase">○ Pending</span>}
                                 </div>
-                                {isApproved && (
+                                {(isApproved || isRejected) && (
                                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
                                     {step.actionByName || 'Unknown'} ({step.actionByRole || stepRole})
                                     {step.updatedAt && <span className="ml-1 inline-block">· {new Date(step.updatedAt).toLocaleString()}</span>}
                                   </p>
                                 )}
-                                {isApproved && step.comments && (
+                                {(isApproved || isRejected) && step.comments && (
                                   <p className="text-xs text-slate-500 italic mt-0.5">"{step.comments}"</p>
                                 )}
                               </div>

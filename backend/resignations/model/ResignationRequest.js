@@ -50,7 +50,7 @@ const ResignationRequestSchema = new mongoose.Schema(
           actionByName: String,
           actionByRole: String,
           comments: String,
-          updatedAt: Date,
+          canEditLWD: { type: Boolean, default: false },
         },
       ],
       finalAuthority: String,
@@ -58,7 +58,7 @@ const ResignationRequestSchema = new mongoose.Schema(
       history: [
         {
           step: String,
-          action: { type: String, enum: ['submitted', 'approved', 'rejected', 'cancelled'] },
+          action: { type: String, enum: ['submitted', 'approved', 'rejected', 'cancelled', 'lwd_changed'] },
           actionBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
           actionByName: String,
           actionByRole: String,
@@ -67,6 +67,18 @@ const ResignationRequestSchema = new mongoose.Schema(
         },
       ],
     },
+    // History of LWD changes
+    lwdHistory: [
+      {
+        oldDate: Date,
+        newDate: Date,
+        updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        updatedByName: String,
+        updatedByRole: String,
+        comments: String,
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

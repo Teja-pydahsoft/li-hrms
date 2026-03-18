@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { toast } from 'react-toastify';
-import Spinner from '@/components/Spinner';
 import { Save, ChevronRight, LogOut } from 'lucide-react';
 import { SettingsSkeleton } from './SettingsSkeleton';
 import WorkflowManager, { WorkflowData } from './shared/WorkflowManager';
@@ -34,13 +33,21 @@ const ResignationSettings = () => {
           noticePeriodDays: noticeDays,
           workflow: {
             isEnabled: d.workflow?.isEnabled !== false,
-            steps: (d.workflow?.steps || []).map((s: any) => ({
+            steps: (d.workflow?.steps || []).map((s: { 
+              stepOrder: number; 
+              stepName?: string; 
+              approverRole?: string; 
+              role?: string; 
+              canEditLWD?: boolean; 
+            }) => ({
               stepOrder: s.stepOrder,
               stepName: s.stepName || s.approverRole,
               approverRole: s.approverRole || s.role || 'hr',
               isActive: true,
+              canEditLWD: s.canEditLWD || false,
             })),
             finalAuthority: d.workflow?.finalAuthority || { role: 'hr', anyHRCanApprove: true },
+            allowHigherAuthorityToApproveLowerLevels: d.workflow?.allowHigherAuthorityToApproveLowerLevels ?? false,
           },
         });
       }
@@ -67,8 +74,10 @@ const ResignationSettings = () => {
             stepOrder: s.stepOrder,
             stepName: s.stepName,
             approverRole: s.approverRole,
+            canEditLWD: s.canEditLWD || false,
           })),
           finalAuthority: settings.workflow.finalAuthority,
+          allowHigherAuthorityToApproveLowerLevels: settings.workflow.allowHigherAuthorityToApproveLowerLevels ?? false,
         },
       };
       const res = await api.saveResignationSettings(payload);
@@ -128,6 +137,7 @@ const ResignationSettings = () => {
                 onChange={(workflow) => setSettings((s) => ({ ...s, workflow }))}
                 title="Resignation approval workflow"
                 description="Approval steps before employee left date is set."
+                isResignationWorkflow={true}
               />
             </div>
           </section>
