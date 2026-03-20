@@ -67,6 +67,13 @@ const ODSchema = new mongoose.Schema(
       default: null,
     },
 
+    // NEW: Compensatory Off (CO) Eligibility Flag
+    // True if this OD was applied on a holiday/week-off
+    isCOEligible: {
+      type: Boolean,
+      default: false,
+    },
+
     // NEW: Hour-based OD fields
     odType_extended: {
       type: String,

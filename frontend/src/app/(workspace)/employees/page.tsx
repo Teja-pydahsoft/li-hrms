@@ -2977,7 +2977,7 @@ export default function EmployeesPage() {
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-1  group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center justify-end gap-1 group-hover:opacity-100 transition-opacity">
                             {/* {hasManagePermission && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleEdit(employee); }}

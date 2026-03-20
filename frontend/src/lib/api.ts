@@ -2298,6 +2298,15 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
+  
+  // Check if date is holiday for an employee (OD specific)
+  checkODHoliday: async (employeeId?: string, empNo?: string, date?: string) => {
+    const q = new URLSearchParams();
+    if (employeeId) q.append('employeeId', employeeId);
+    if (empNo) q.append('empNo', empNo);
+    if (date) q.append('date', date);
+    return apiRequest<any>(`/leaves/od/check-holiday?${q.toString()}`, { method: 'GET' });
+  },
 
   // Cancel OD
   cancelOD: async (id: string, reason?: string) => {

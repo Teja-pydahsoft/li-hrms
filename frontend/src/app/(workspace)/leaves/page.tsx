@@ -37,7 +37,8 @@ import {
   Check,
   Circle,
   Loader2,
-  Trash2
+  Trash2,
+  Star
 } from 'lucide-react';
 
 // Custom Stat Card
@@ -528,6 +529,10 @@ export default function LeavesPage() {
     odInfo: any;
   } | null>(null);
   const [checkingApprovedRecords, setCheckingApprovedRecords] = useState(false);
+
+  // Holiday info for OD
+  const [holidayInfo, setHolidayInfo] = useState<{ isHolidayOrWeekOff: boolean, message: string } | null>(null);
+  const [checkingHoliday, setCheckingHoliday] = useState(false);
 
   // Form validation for Apply button
   const isFormValid = () => {
@@ -1370,6 +1375,42 @@ export default function LeavesPage() {
 
     checkApprovedRecords();
   }, [selectedEmployee, formData.fromDate, formData.toDate]);
+
+  // Check holiday status for OD
+  useEffect(() => {
+    const checkHolidayStatus = async () => {
+      const targetEmp = selectedEmployee || (currentUser?.role === 'employee' ? { _id: (currentUser as any).id, emp_no: (currentUser as any).emp_no || (currentUser as any).employeeId } : null);
+
+      if (applyType !== 'od' || !formData.fromDate || !targetEmp) {
+        setHolidayInfo(null);
+        return;
+      }
+
+      setCheckingHoliday(true);
+      try {
+        const response = await api.checkODHoliday(
+          targetEmp._id,
+          targetEmp.emp_no,
+          formData.fromDate
+        );
+        if (response.success) {
+          setHolidayInfo({
+            isHolidayOrWeekOff: response.isHolidayOrWeekOff,
+            message: response.message || 'Holiday/Week-off detected'
+          });
+        } else {
+          setHolidayInfo(null);
+        }
+      } catch (err) {
+        console.error('Error checking holiday status:', err);
+        setHolidayInfo(null);
+      } finally {
+        setCheckingHoliday(false);
+      }
+    };
+
+    checkHolidayStatus();
+  }, [applyType, formData.fromDate, selectedEmployee, currentUser]);
 
   // Fetch CL balance for the pay-cycle period that contains the selected from date (not calendar month).
   const isCLSelected = applyType === 'leave' && (formData.leaveType === 'CL' || formData.leaveType?.toUpperCase() === 'CL');
@@ -3446,6 +3487,23 @@ export default function LeavesPage() {
                   })()
                 )}
 
+                {/* Holiday Indicator for OD */}
+                {applyType === 'od' && holidayInfo && holidayInfo.isHolidayOrWeekOff && (
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500">
+                    <div className="flex items-start gap-4">
+                      <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                        <Star className="w-5 h-5 fill-current" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                        <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                          {holidayInfo.message}. Selected day is holiday so this OD contributes to your compensatory off not on the working day.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Hour-Based OD - Time Pickers */}
                 {applyType === 'od' && formData.odType_extended === 'hours' && (
                   <div className="grid grid-cols-2 gap-4">
@@ -3710,6 +3768,23 @@ export default function LeavesPage() {
                     </div>
                   </div>
 
+                  {/* CO Eligibility Indicator */}
+                  {detailType === 'od' && (selectedItem as any).isCOEligible && (
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500">
+                      <div className="flex items-start gap-4">
+                        <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                          <Star className="w-5 h-5 fill-current" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                          <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                            This OD contributes to your compensatory off as it was applied on a holiday or week-off.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Stats Grid - Cleaner Look */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-slate-50 dark:bg-slate-700/30 p-4 sm:p-6 rounded-xl">
                     <div className="space-y-1">
@@ -3733,6 +3808,42 @@ export default function LeavesPage() {
                       <p className="text-[13px] sm:text-sm font-bold text-slate-900 dark:text-white">{formatDate(selectedItem!.toDate)}</p>
                     </div>
                   </div>
+
+                  {/* Punch Transparency / Time Details (Visible if populated) */}
+                  {detailType === 'od' && (selectedItem as ODApplication).odStartTime && (
+                    <div className="grid grid-cols-3 gap-4 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800/50">
+                      <div className="space-y-1">
+                        <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work In</p>
+                        <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                          {(() => {
+                            const [h, m] = ((selectedItem as ODApplication).odStartTime || '').split(':');
+                            if (!h) return 'N/A';
+                            const date = new Date();
+                            date.setHours(parseInt(h), parseInt(m));
+                            return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                          })()}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work Out</p>
+                        <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                          {(() => {
+                            const [h, m] = ((selectedItem as ODApplication).odEndTime || '').split(':');
+                            if (!h) return 'N/A';
+                            const date = new Date();
+                            date.setHours(parseInt(h), parseInt(m));
+                            return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                          })()}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Total Duration</p>
+                        <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                          {(selectedItem as ODApplication).durationHours || 0} hrs
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-6">
                     <div className="bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-6 rounded-xl">

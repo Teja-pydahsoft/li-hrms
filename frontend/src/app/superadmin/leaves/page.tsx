@@ -10,7 +10,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import Spinner from '@/components/Spinner';
 import LocationPhotoCapture from '@/components/LocationPhotoCapture';
 import EmployeeSelect from '@/components/EmployeeSelect';
-import { Loader2, Calendar, Briefcase, X, Clock as Clock3 } from 'lucide-react';
+import { Loader2, Calendar, Briefcase, X, Clock as Clock3, Star } from 'lucide-react';
 
 const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
@@ -427,6 +427,10 @@ export default function LeavesPage() {
   const [clBalanceForMonth, setClBalanceForMonth] = useState<number | null>(null);
   const [clBalanceLoading, setClBalanceLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
+
+  // OD Holiday Info
+  const [checkingHoliday, setCheckingHoliday] = useState(false);
+  const [holidayInfo, setHolidayInfo] = useState<{ isHolidayOrWeekOff: boolean; message: string } | null>(null);
 
   // Form state
   const [formData, setFormData] = useState<{
@@ -1180,6 +1184,43 @@ export default function LeavesPage() {
     const maxTo = d.toISOString().split('T')[0];
     setFormData(prev => (prev.toDate <= maxTo ? prev : { ...prev, toDate: maxTo }));
   }, [isCLSelected, formData.isHalfDay, formData.fromDate, formData.toDate, clBalanceForMonth]);
+
+  // Check holiday status for OD
+  useEffect(() => {
+    const checkHolidayStatus = async () => {
+      const currentUser = auth.getUser();
+      const targetEmp = selectedEmployee || (currentUser?.role === 'employee' ? { _id: (currentUser as any).id, emp_no: (currentUser as any).emp_no || (currentUser as any).employeeId } : null);
+
+      if (applyType !== 'od' || !formData.fromDate || !targetEmp) {
+        setHolidayInfo(null);
+        return;
+      }
+
+      setCheckingHoliday(true);
+      try {
+        const response = await api.checkODHoliday(
+          targetEmp._id,
+          targetEmp.emp_no,
+          formData.fromDate
+        );
+        if (response.success) {
+          setHolidayInfo({
+            isHolidayOrWeekOff: response.isHolidayOrWeekOff,
+            message: response.message || 'Holiday/Week-off detected'
+          });
+        } else {
+          setHolidayInfo(null);
+        }
+      } catch (err) {
+        console.error('Error checking holiday status:', err);
+        setHolidayInfo(null);
+      } finally {
+        setCheckingHoliday(false);
+      }
+    };
+
+    checkHolidayStatus();
+  }, [applyType, formData.fromDate, selectedEmployee]);
 
   const openApplyDialog = (type: 'leave' | 'od') => {
     setApplyType(type);
@@ -2460,6 +2501,23 @@ export default function LeavesPage() {
                 </div>
               )}
 
+              {/* Holiday Indicator for OD */}
+              {applyType === 'od' && holidayInfo && holidayInfo.isHolidayOrWeekOff && (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500 mb-4 mt-2">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                      <Star className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                      <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                        {holidayInfo.message}. Selected day is holiday so this OD contributes to your compensatory off not on the working day.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Half Day Selection */}
               {(applyType === 'leave' || (applyType === 'od' && formData.odType_extended === 'half_day')) && (
                 <div className="flex items-center gap-4">
@@ -2697,6 +2755,23 @@ export default function LeavesPage() {
                   </div>
                 </div>
               </div>
+
+              {/* CO Eligibility Indicator */}
+              {detailType === 'od' && (selectedItem as any).isCOEligible && (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500 mb-4">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                      <Star className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                      <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                        This OD contributes to compensatory off as it was applied on a holiday or week-off.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Stats Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-slate-50 dark:bg-slate-700/30 p-4 sm:p-6 rounded-xl">

@@ -12,6 +12,9 @@ const {
 } = require('../../shared/middleware/dataScopeMiddleware');
 const Department = require('../../departments/model/Department');
 const EmployeeHistory = require('../../employees/model/EmployeeHistory');
+const PreScheduledShift = require('../../shifts/model/PreScheduledShift');
+const AttendanceDaily = require('../../attendance/model/AttendanceDaily');
+const leaveRegisterService = require('../services/leaveRegisterService');
 
 /**
  * Get employee settings from database
@@ -105,6 +108,68 @@ const findEmployeeByIdOrEmpNo = async (identifier) => {
 
   // Try to find by emp_no as fallback
   return await findEmployeeByEmpNo(identifier);
+};
+
+/**
+ * Check if date is holiday or weekly off for employee (PreScheduledShift)
+ */
+const isHolidayOrWeekOff = async (employeeNumber, dateStr) => {
+  const empNo = String(employeeNumber).trim().toUpperCase();
+  const ps = await PreScheduledShift.findOne({
+    employeeNumber: empNo,
+    date: dateStr,
+    status: { $in: ['WO', 'HOL'] },
+  });
+  return !!ps;
+};
+
+// @desc    Validate if date is holiday/week-off for an employee
+// @route   GET /api/leaves/od/check-holiday
+// @access  Private
+exports.checkHoliday = async (req, res) => {
+  try {
+    const { date, employeeId, empNo } = req.query;
+
+    if (!date) {
+      return res.status(400).json({ success: false, error: 'Date is required' });
+    }
+
+    const dateStr = new Date(date).toISOString().split('T')[0];
+
+    let employee = null;
+    if (employeeId) {
+      employee = await Employee.findById(employeeId);
+    } else if (empNo) {
+      employee = await findEmployeeByEmpNo(empNo);
+    } else {
+      // Fallback: self
+      const identifier = req.user.employeeRef || req.user.employeeId;
+      if (identifier) {
+        employee = await findEmployeeByIdOrEmpNo(identifier);
+      }
+    }
+
+    if (!employee) {
+      return res.status(400).json({ success: false, error: 'Employee not found' });
+    }
+
+    const isHolWo = await isHolidayOrWeekOff(employee.emp_no, dateStr);
+
+    res.status(200).json({
+      success: true,
+      isHolidayOrWeekOff: isHolWo,
+      message: isHolWo 
+        ? 'Selected day is holiday so this OD contributes to your compensatory off not on the working day.'
+        : 'Regular working day',
+      date: dateStr,
+    });
+  } catch (error) {
+    console.error('Error in checkHoliday:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    });
+  }
 };
 
 /**
@@ -771,6 +836,10 @@ exports.applyOD = async (req, res) => {
       ],
     };
 
+    // NEW: Check if this OD is on a holiday/week-off for CO eligibility
+    const fromDateStr = from.toISOString().split('T')[0];
+    const isHolWo = await isHolidayOrWeekOff(employee.emp_no, fromDateStr);
+
     // Create OD application
     const od = new OD({
       employeeId: employee._id,
@@ -808,6 +877,7 @@ exports.applyOD = async (req, res) => {
       workflow: workflowData,
       photoEvidence: photoEvidence || null, // ADDED
       geoLocation: geoLocation || null, // ADDED
+      isCOEligible: isHolWo, // NEW: Flag for frontend display
     });
 
     await od.save();
@@ -1650,6 +1720,46 @@ exports.processODAction = async (req, res) => {
             }
           }
           // Half-day / full-day: do not create or update daily; recalc below will add 0.5/1 to monthly summary for OD-only days
+        }
+
+        // NEW: Compensatory Off Credit for Holidays/Week-offs
+        try {
+          console.log('[OD-FLOW] processODAction: checking for holiday/week-off CO credit');
+          const emp = await Employee.findById(od.employeeId)
+            .populate('department_id', 'name')
+            .populate('designation_id', 'name');
+            
+          for (const attendanceDate of datesToUpdate) {
+            const isHolWo = await isHolidayOrWeekOff(od.emp_no, attendanceDate);
+            if (isHolWo) {
+              const increment = od.isHalfDay ? 0.5 : 1;
+              console.log(`[OD-FLOW] processODAction: crediting ${increment} CO for ${od.emp_no} on holiday/week-off ${attendanceDate}`);
+              
+              if (emp) {
+                await leaveRegisterService.addTransaction({
+                  employeeId: od.employeeId,
+                  empNo: od.emp_no,
+                  employeeName: emp.employee_name || 'N/A',
+                  designation: (emp.designation_id && emp.designation_id.name) || 'N/A',
+                  department: (emp.department_id && emp.department_id.name) || 'N/A',
+                  divisionId: emp.division_id,
+                  departmentId: emp.department_id,
+                  dateOfJoining: emp.doj || new Date(),
+                  employmentStatus: emp.is_active ? 'active' : 'inactive',
+                  leaveType: 'CCL',
+                  transactionType: 'CREDIT',
+                  startDate: new Date(attendanceDate + 'T00:00:00Z'),
+                  endDate: new Date(attendanceDate + 'T00:00:00Z'),
+                  days: increment,
+                  reason: `Compensatory Off credited for OD on holiday/week-off (${attendanceDate})`,
+                  status: 'APPROVED',
+                  autoGenerated: true,
+                });
+              }
+            }
+          }
+        } catch (coErr) {
+          console.error('[OD-FLOW] processODAction: CO credit failed:', coErr);
         }
 
         // Explicitly recalc monthly summary so it reflects hour-based OD (shift/day -> PRESENT)

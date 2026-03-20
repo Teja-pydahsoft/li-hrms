@@ -280,6 +280,8 @@ const syncAttendanceFromMSSQL = async (fromDate = null, toDate = null) => {
       // 2. Check for 3 consecutive absences
       await checkConsecutiveAbsences(checkDateStr);
 
+      // 3. Removed: Auto-OD Creation for Holidays/Week-offs (Moved to calculation engine)
+
     } catch (absentError) {
       console.error('[AttendanceSync] Error in absenteeism check:', absentError);
       // We don't fail the sync stats if this auxiliary task fails, but we log it
