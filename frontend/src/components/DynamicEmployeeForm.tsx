@@ -104,13 +104,6 @@ export default function DynamicEmployeeForm({
 }: DynamicEmployeeFormProps) {
   const [settings, setSettings] = useState<FormSettings | null>(null);
   const [loading, setLoading] = useState(true);
-  /** In create mode, cells become read-only after first edit (except certificate). Not used in edit mode. */
-  const [editedQualificationCells, setEditedQualificationCells] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (isEditingExistingEmployee) setEditedQualificationCells(new Set());
-  }, [isEditingExistingEmployee]);
-
   const [users, setUsers] = useState<Array<{ _id: string; name: string; email: string; role?: string; divisionMapping?: Array<{ division?: { _id: string } | string }> }>>([]);
 
   // Reporting-to dropdown: filter by selected division using each user's divisionMapping; super_admin and sub_admin shown for all divisions
@@ -1055,12 +1048,6 @@ export default function DynamicEmployeeForm({
       handleFieldChange('qualifications', fullArray);
     };
 
-    /** In create mode, mark this cell as edited on blur so it becomes read-only (except certificate fields). Called from input onBlur. */
-    const markQualificationCellEdited = (qualIndex: number, fieldId: string) => {
-      if (isViewMode || isEditingExistingEmployee || isCertificateFieldId(fieldId)) return;
-      setEditedQualificationCells((prev) => new Set(prev).add(`${qualIndex}-${fieldId}`));
-    };
-
     const handleAddQualification = () => {
       const newQual = qualFields.reduce((acc, field) => {
         if (field.type === 'number') acc[field.id] = 0;
@@ -1081,12 +1068,6 @@ export default function DynamicEmployeeForm({
     const inputCls = (hasError: boolean) =>
       `w-full min-w-0 rounded-lg border px-2.5 py-1.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-1 focus:ring-green-400/20 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 ${hasError ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'}`;
 
-    const isCertificateFieldId = (fieldId: string) =>
-      ['certificate_submitted', 'certificateFile', 'certificateUrl'].includes(fieldId);
-    /** In create mode, a cell becomes read-only after first edit (except certificate). In edit mode we don't lock. */
-    const shouldLockCellBecauseEdited = (qualIndex: number, field: QualificationsField) =>
-      !isViewMode && !isEditingExistingEmployee && editedQualificationCells.has(`${qualIndex}-${field.id}`) && !isCertificateFieldId(field.id);
-
     const renderQualificationValueSpan = (value: any, field: QualificationsField) => {
       const display =
         field.type === 'boolean' ? (value ? 'Yes' : 'No')
@@ -1101,16 +1082,6 @@ export default function DynamicEmployeeForm({
       const raw = qualifications[qualIndex]?.[field.id];
       const value = field.type === 'boolean' ? !!raw : (raw ?? '');
       const error = errors[`qualifications[${qualIndex}].${field.id}`];
-      if (shouldLockCellBecauseEdited(qualIndex, field)) {
-        return (
-          <>
-            {renderQualificationValueSpan(value, field)}
-            {error && <p className="mt-0.5 text-xs text-red-600 dark:text-red-400">{error}</p>}
-          </>
-        );
-      }
-
-      const onBlurLock = () => markQualificationCellEdited(qualIndex, field.id);
       switch (field.type) {
         case 'text':
           return (
@@ -1119,7 +1090,6 @@ export default function DynamicEmployeeForm({
                 type="text"
                 value={value}
                 onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, e.target.value)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 disabled={isViewMode}
@@ -1134,7 +1104,6 @@ export default function DynamicEmployeeForm({
               <textarea
                 value={value}
                 onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, e.target.value)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 rows={2}
@@ -1151,7 +1120,6 @@ export default function DynamicEmployeeForm({
                 type="number"
                 value={value}
                 onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, parseFloat(e.target.value) || 0)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 min={field.validation?.min}
@@ -1172,7 +1140,6 @@ export default function DynamicEmployeeForm({
                 type={isMonthYear ? 'month' : 'date'}
                 value={isMonthYear ? (monthInputValue && monthInputValue.length >= 7 ? monthInputValue : '') : dateValue}
                 onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, isMonthYear ? (e.target.value ? `${e.target.value}-01` : '') : e.target.value)}
-                onBlur={onBlurLock}
                 required={field.isRequired}
                 disabled={isViewMode}
                 className={inputCls(!!error)}
@@ -1187,7 +1154,6 @@ export default function DynamicEmployeeForm({
               <select
                 value={value}
                 onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, e.target.value)}
-                onBlur={onBlurLock}
                 required={field.isRequired}
                 disabled={isViewMode}
                 className={inputCls(!!error)}
@@ -1210,7 +1176,6 @@ export default function DynamicEmployeeForm({
                   type="checkbox"
                   checked={!!value}
                   onChange={(e) => handleQualificationChange(applicantRowIndex, field.id, e.target.checked)}
-                  onBlur={onBlurLock}
                   disabled={isViewMode}
                   className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500"
                 />
@@ -1231,16 +1196,7 @@ export default function DynamicEmployeeForm({
       const raw = rowData[field.id];
       const value = field.type === 'boolean' ? !!raw : (raw ?? '');
       const error = errors[`qualifications[${qualIndex}].${field.id}`];
-      if (shouldLockCellBecauseEdited(qualIndex, field)) {
-        return (
-          <>
-            {renderQualificationValueSpan(value, field)}
-            {error && <p className="mt-0.5 text-xs text-red-600 dark:text-red-400">{error}</p>}
-          </>
-        );
-      }
       const onChange = (v: any) => handleQualificationChangeByQualIndex(qualIndex, field.id, v);
-      const onBlurLock = () => markQualificationCellEdited(qualIndex, field.id);
 
       switch (field.type) {
         case 'text':
@@ -1250,7 +1206,6 @@ export default function DynamicEmployeeForm({
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 disabled={isViewMode}
@@ -1265,7 +1220,6 @@ export default function DynamicEmployeeForm({
               <textarea
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 rows={2}
@@ -1282,7 +1236,6 @@ export default function DynamicEmployeeForm({
                 type="number"
                 value={value}
                 onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-                onBlur={onBlurLock}
                 placeholder={field.placeholder}
                 required={field.isRequired}
                 min={field.validation?.min}
@@ -1303,7 +1256,6 @@ export default function DynamicEmployeeForm({
                 type={isMonthYear ? 'month' : 'date'}
                 value={isMonthYear ? (monthInputValue && monthInputValue.length >= 7 ? monthInputValue : '') : dateValue}
                 onChange={(e) => onChange(isMonthYear ? (e.target.value ? `${e.target.value}-01` : '') : e.target.value)}
-                onBlur={onBlurLock}
                 required={field.isRequired}
                 disabled={isViewMode}
                 className={inputCls(!!error)}
@@ -1318,7 +1270,6 @@ export default function DynamicEmployeeForm({
               <select
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                onBlur={onBlurLock}
                 required={field.isRequired}
                 disabled={isViewMode}
                 className={inputCls(!!error)}
@@ -1341,7 +1292,6 @@ export default function DynamicEmployeeForm({
                   type="checkbox"
                   checked={!!value}
                   onChange={(e) => onChange(e.target.checked)}
-                  onBlur={onBlurLock}
                   disabled={isViewMode}
                   className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500"
                 />
