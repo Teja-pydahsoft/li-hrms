@@ -2977,8 +2977,8 @@ export default function EmployeesPage() {
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            {hasManagePermission && (
+                          <div className="flex items-center justify-end gap-1  group-hover:opacity-100 transition-opacity">
+                            {/* {hasManagePermission && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleEdit(employee); }}
                                 className="w-8 h-8 flex items-center justify-center rounded-lg text-text-secondary hover:bg-indigo-500/10 hover:text-indigo-500 transition-all font-bold"
@@ -2986,7 +2986,7 @@ export default function EmployeesPage() {
                               >
                                 <Edit2 className="h-3.5 w-3.5" />
                               </button>
-                            )}
+                            )} */}
                             <button
                               onClick={(e) => { e.stopPropagation(); handleViewEmployee(employee); }}
                               className="w-8 h-8 flex items-center justify-center rounded-lg text-text-secondary hover:bg-indigo-500/10 hover:text-indigo-500 transition-all font-bold"
@@ -3221,7 +3221,7 @@ export default function EmployeesPage() {
                       <Eye className="h-2.5 w-2.5" />
                       <span>View</span>
                     </button>
-                    {hasManagePermission && (
+                    {/* {hasManagePermission && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleEdit(employee); }}
                         className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-blue-500/10 px-1.5 py-1.5 text-[9px] font-black uppercase tracking-wider text-blue-500 transition-colors hover:bg-blue-500/20"
@@ -3230,7 +3230,7 @@ export default function EmployeesPage() {
                         <Edit2 className="h-2.5 w-2.5" />
                         <span>Edit</span>
                       </button>
-                    )}
+                    )} */}
                     {hasManagePermission && (
                       <>
                         {employee.leftDate ? (
