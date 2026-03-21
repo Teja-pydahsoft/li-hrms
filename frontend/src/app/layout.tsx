@@ -51,6 +51,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${plusJakartaSans.variable} antialiased font-sans`}
+        suppressHydrationWarning
       >
         <AuthProvider>
           <WorkspaceProvider>

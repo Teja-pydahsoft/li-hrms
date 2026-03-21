@@ -396,6 +396,7 @@ export default function ShiftsPage() {
         setEditingShift(null);
         resetForm();
         loadShifts();
+        loadDivisionsAndDepartments();
       } else {
         setError(response.message || 'Failed to save shift');
       }
@@ -464,7 +465,7 @@ export default function ShiftsPage() {
   // const canManageShifts = ['super_admin', 'sub_admin', 'hr'].includes(currentUser?.role);
 
   // Helper to render Shift Card (extracted for reuse across sections)
-  const renderShiftCard = (shift: Shift) => (
+  const renderShiftCard = (shift: Shift, allowManageOverride?: boolean) => (
     <div
       key={shift._id}
       className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white/80 backdrop-blur-sm p-4 shadow-lg transition-all hover:border-blue-300 hover:shadow-xl dark:border-slate-700 dark:bg-slate-900/80"
@@ -503,7 +504,7 @@ export default function ShiftsPage() {
         </span>
       </div>
 
-      {canManageShifts && (
+      {(allowManageOverride !== undefined ? allowManageOverride : canManageShifts) && (
         <div className="flex gap-2 border-t border-slate-200 pt-3 dark:border-slate-800">
           <button
             onClick={() => handleEdit(shift)}
@@ -738,7 +739,7 @@ export default function ShiftsPage() {
               const divisionShifts = (division.shifts || []).map(s => {
                 let val: any = s;
                 if (val && typeof val === 'object' && 'shiftId' in val) val = val.shiftId;
-                const shiftId = typeof val === 'string' ? val : val._id;
+                const shiftId = typeof val === 'string' ? val : val?._id;
                 return typeof val === 'string' ? shifts.find(allS => allS._id === shiftId) : val;
               }).filter(Boolean) as Shift[];
 
@@ -752,7 +753,7 @@ export default function ShiftsPage() {
                   </h2>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {/* Unique Shifts only */}
-                    {Array.from(new Map(divisionShifts.map(s => [s._id, s])).values()).map(renderShiftCard)}
+                    {Array.from(new Map(divisionShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
                   </div>
                 </div>
               );
@@ -765,7 +766,7 @@ export default function ShiftsPage() {
               const directShifts = (dept.shifts || []).map(s => {
                 let val: any = s;
                 if (val && typeof val === 'object' && 'shiftId' in val) val = val.shiftId;
-                const shiftId = typeof val === 'string' ? val : val._id;
+                const shiftId = typeof val === 'string' ? val : val?._id;
                 return typeof val === 'string' ? shifts.find(allS => allS._id === shiftId) : val;
               }).filter(Boolean) as Shift[];
 
@@ -781,7 +782,7 @@ export default function ShiftsPage() {
               }).map(s => {
                 let val: any = s;
                 if (val && typeof val === 'object' && 'shiftId' in val) val = val.shiftId;
-                const shiftId = typeof val === 'string' ? val : (val as any)._id; // Cast to avoid TS validation if type is incomplete
+                const shiftId = typeof val === 'string' ? val : (val as any)?._id; 
                 return typeof val === 'string' ? shifts.find(allS => allS._id === shiftId) : val;
               }).filter(Boolean) as Shift[];
 
@@ -799,7 +800,7 @@ export default function ShiftsPage() {
                       </h2>
                       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {/* Unique Shifts only */}
-                        {Array.from(new Map(allDeptShifts.map(s => [s._id, s])).values()).map(renderShiftCard)}
+                        {Array.from(new Map(allDeptShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
                       </div>
                     </>
                   )}
@@ -832,7 +833,7 @@ export default function ShiftsPage() {
                           const resolvedDesShifts = effectiveShifts.map(s => {
                             let val: any = s;
                             if (val && typeof val === 'object' && 'shiftId' in val) val = val.shiftId;
-                            const shiftId = typeof val === 'string' ? val : (val as any)._id;
+                            const shiftId = typeof val === 'string' ? val : (val as any)?._id;
                             return typeof val === 'string' ? shifts.find(allS => allS._id === shiftId) : val;
                           }).filter(Boolean) as Shift[];
 
@@ -845,7 +846,7 @@ export default function ShiftsPage() {
                                 {des.name} <span className="text-xs font-normal text-slate-400">Designation Shifts</span>
                               </h3>
                               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                                {Array.from(new Map(resolvedDesShifts.map(s => [s._id, s])).values()).map(renderShiftCard)}
+                                {Array.from(new Map(resolvedDesShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
                               </div>
                             </div>
                           )
@@ -873,7 +874,7 @@ export default function ShiftsPage() {
                     All Available Shifts
                   </h2>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {shifts.map(renderShiftCard)}
+                    {shifts.map(s => renderShiftCard(s, false))}
                   </div>
                 </div>
               )}
@@ -889,7 +890,7 @@ export default function ShiftsPage() {
                   Your Assigned Shifts
                 </h2>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {resolvedEmployeeShifts.map(renderShiftCard)}
+                  {resolvedEmployeeShifts.map(s => renderShiftCard(s, false))}
                 </div>
                 <p className="text-sm text-slate-500 mt-2">
                   These are the specific shifts assigned to you based on your designation, department, or division (in that order of priority).

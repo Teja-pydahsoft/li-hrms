@@ -103,8 +103,14 @@ export default function WorkspaceSidebar() {
         const fetchFeatureControl = async () => {
             if (!user?.role) return;
 
+            // Priority 1: User-specific feature control (overrides)
+            if (user.featureControl && Array.isArray(user.featureControl) && user.featureControl.length > 0) {
+                setFeatureControl(user.featureControl);
+                return;
+            }
+
+            // Priority 2: Fetch role-based defaults from Settings
             try {
-                // Always fetch from Settings so admin changes (e.g. adding Resignation for manager) apply without re-login
                 const response = await api.getSetting(`feature_control_${user.role}`);
                 if (response.success && response.data?.value && Array.isArray(response.data.value.activeModules)) {
                     setFeatureControl(response.data.value.activeModules);
@@ -113,16 +119,13 @@ export default function WorkspaceSidebar() {
             } catch (error) {
                 console.error('Error fetching RBAC settings:', error);
             }
-            // Fallback: use user.featureControl from login or default list
-            if (user.featureControl && Array.isArray(user.featureControl) && user.featureControl.length > 0) {
-                setFeatureControl(user.featureControl);
+
+            // Priority 3: Hardcoded fallbacks (failsafe)
+            const managementRoles = ['manager', 'hr', 'hod'];
+            if (managementRoles.includes(user.role)) {
+                setFeatureControl(MODULE_CATEGORIES.flatMap(c => c.modules.map(m => m.code)));
             } else {
-                const managementRoles = ['manager', 'hr', 'hod'];
-                if (managementRoles.includes(user.role)) {
-                    setFeatureControl(MODULE_CATEGORIES.flatMap(c => c.modules.map(m => m.code)));
-                } else {
-                    setFeatureControl(['DASHBOARD', 'LEAVE_OD', 'ATTENDANCE', 'PROFILE', 'PAYSLIPS']);
-                }
+                setFeatureControl(['DASHBOARD', 'LEAVE_OD', 'ATTENDANCE', 'PROFILE', 'PAYSLIPS']);
             }
         };
         fetchFeatureControl();

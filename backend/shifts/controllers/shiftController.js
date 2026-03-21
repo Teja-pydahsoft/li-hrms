@@ -81,7 +81,9 @@ exports.getScopedShiftData = async (req, res) => {
     let designations = [];
 
     let divQuery = { isActive: true };
-    if (!isGlobal && user.divisionMapping?.length > 0) {
+    // If NOT global AND has divisionMapping, then restrict. 
+    // If divisionMapping is empty/null, show all (per user request).
+    if (!isGlobal && user.divisionMapping && user.divisionMapping.length > 0) {
       const allowedDivIds = new Set(
         user.divisionMapping.map(dm => (dm.division?._id || dm.division)?.toString()).filter(Boolean)
       );
@@ -89,42 +91,39 @@ exports.getScopedShiftData = async (req, res) => {
       else divQuery._id = { $in: [] };
     }
 
-    // Only fetch divisions if we are global or have a filter (don't fetch all if restricted and no filter matches)
-    if (isGlobal || divQuery._id) {
-      divisions = await Division.find(divQuery)
-        .populate('shifts')
-        .lean();
-    }
+    // Fetch divisions with correctly populated shifts
+    divisions = await Division.find(divQuery)
+      .populate('shifts.shiftId')
+      .lean();
 
     let deptQuery = { isActive: true };
-    if (!isGlobal) {
-      const allowedDeptIds = (user.divisionMapping || []).flatMap(dm =>
+    if (!isGlobal && user.divisionMapping && user.divisionMapping.length > 0) {
+      const allowedDeptIds = user.divisionMapping.flatMap(dm =>
         (dm.departments || []).map(d => d?._id || d)
-      );
+      ).filter(Boolean);
+
       if (allowedDeptIds.length > 0) {
         deptQuery._id = { $in: allowedDeptIds };
       } else if (divisions.length > 0) {
+        // If divMapping has divisions but no specific departments, allowed all depts in those divisions
         deptQuery.divisions = { $in: divisions.map(d => d._id) };
       } else {
         deptQuery._id = { $in: [] };
       }
     }
 
+    // Fetch departments with correctly populated shifts
     departments = await Department.find(deptQuery)
-      .populate('shifts')
-      .populate({
-        path: 'designations', // Populate designations to get their shifts too? No, usually separate collection reference.
-        // But Department model often has `designations` array of refs.
-      })
+      .populate('shifts.shiftId')
+      .populate('divisionDefaults.shifts.shiftId')
+      .populate('designations')
       .lean();
 
     // 3. DESIGNATIONS
-    // Fetch designations linked to these departments
     const deptIds = departments.map(d => d._id);
     let desQuery = { isActive: true };
 
-    if (!isGlobal) {
-      // If restricted, only show designations within allowed departments
+    if (!isGlobal && user.divisionMapping && user.divisionMapping.length > 0) {
       if (deptIds.length > 0) {
         desQuery.department = { $in: deptIds };
       } else {
@@ -132,13 +131,10 @@ exports.getScopedShiftData = async (req, res) => {
       }
     }
 
-    // Also consider global designations? 
-    // HODs usually only care about their department's designations.
-
     designations = await Designation.find(desQuery)
-      .populate('shifts')
-      .populate('departmentShifts.shifts')
-      .populate('divisionDefaults.shifts')
+      .populate('shifts.shiftId')
+      .populate('departmentShifts.shifts.shiftId')
+      .populate('divisionDefaults.shifts.shiftId')
       .lean();
 
     res.status(200).json({
@@ -275,6 +271,31 @@ exports.createShift = async (req, res) => {
     // Clear cache
     const cacheService = require('../../shared/services/cacheService');
     await cacheService.delByPattern('shifts:*');
+
+    // LINK TO DIVISION IF NOT GLOBAL
+    // If the user has a specific division mapping and is not a super_admin/sub_admin,
+    // automatically link this new shift to their assigned divisions.
+    const isGlobal = ['super_admin', 'sub_admin'].includes(req.user.role || '');
+    if (!isGlobal && req.user.divisionMapping && req.user.divisionMapping.length > 0) {
+      try {
+        const Division = require('../../departments/model/Division');
+        const divisionIds = req.user.divisionMapping.map(m => m.division);
+        
+        await Division.updateMany(
+          { _id: { $in: divisionIds } },
+          { 
+            $addToSet: { 
+              shifts: { 
+                shiftId: shift._id, 
+                gender: 'All' 
+              } 
+            } 
+          }
+        );
+      } catch (linkErr) {
+        console.error('Error linking new shift to divisions:', linkErr);
+      }
+    }
 
     res.status(201).json({
       success: true,

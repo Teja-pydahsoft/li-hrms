@@ -559,7 +559,11 @@ exports.updateUser = async (req, res) => {
     if (employeeId !== undefined) user.employeeId = employeeId;
     if (employeeRef !== undefined) user.employeeRef = employeeRef;
     if (scope !== undefined) user.scope = scope;
-    if (featureControl !== undefined) user.featureControl = featureControl;
+    if (featureControl !== undefined) {
+      user.featureControl = Array.isArray(featureControl) ? featureControl.flatMap(fc =>
+        fc.includes(':') ? [fc] : [`${fc}:read`, `${fc}:write`]
+      ) : [];
+    }
     if (dataScope !== undefined) user.dataScope = dataScope;
     if (divisionMapping !== undefined) {
       user.divisionMapping = divisionMapping;
