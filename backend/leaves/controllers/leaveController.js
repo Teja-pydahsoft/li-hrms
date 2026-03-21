@@ -1978,10 +1978,10 @@ exports.getLeaveStats = async (req, res) => {
 // @desc    Get dashboard counts for superadmin (all or filtered)
 // @route   GET /api/leaves/dashboard-stats
 // @access  Private (same as getLeaves - applyScopeFilter)
-// Query: search, division, department, designation. When absent = global counts; when present = filtered counts.
+// Query: search, division, department, designation, fromDate, toDate. When absent = global counts; when present = filtered counts.
 exports.getDashboardStats = async (req, res) => {
   try {
-    const { search, division, department, designation } = req.query;
+    const { search, division, department, designation, fromDate, toDate } = req.query;
 
     const scopeFilter = req.scopeFilter || { isActive: true };
     const workflowFilter = buildWorkflowVisibilityFilter(req.user);
@@ -2027,6 +2027,17 @@ exports.getDashboardStats = async (req, res) => {
     if (designation) {
       leaveFilter.designation = designation;
       odFilter.designation = designation;
+    }
+
+    if (fromDate) {
+      const start = new Date(fromDate);
+      leaveFilter.fromDate = { ...leaveFilter.fromDate, $gte: start };
+      odFilter.fromDate = { ...odFilter.fromDate, $gte: start };
+    }
+    if (toDate) {
+      const end = new Date(toDate);
+      leaveFilter.toDate = { ...leaveFilter.toDate, $lte: end };
+      odFilter.toDate = { ...odFilter.toDate, $lte: end };
     }
 
     if (search && String(search).trim()) {

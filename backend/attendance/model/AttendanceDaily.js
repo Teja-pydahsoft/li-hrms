@@ -632,6 +632,24 @@ attendanceDailySchema.pre('save', async function () {
       rangeDescription: null,
     };
   }
+
+  // Final Wisdom: Auto-OD trigger for Holiday/Week-off work
+  // Trigger only if status is HOLIDAY/WEEK_OFF and at least 2 hours worked
+  if ((this.status === 'HOLIDAY' || this.status === 'WEEK_OFF') && (this.totalWorkingHours >= 2)) {
+    const hasWorkedShift = this.shifts && this.shifts.some(s => ['PRESENT', 'HALF_DAY'].includes(s.status));
+    if (hasWorkedShift) {
+      const doc = this; // Capture document
+      setImmediate(async () => {
+        try {
+          const { processAutoODForEmployee } = require('../../leaves/services/autoODService');
+          // Pass the captured doc as the record
+          await processAutoODForEmployee(doc.employeeNumber, doc.date, doc);
+        } catch (autoOdError) {
+          console.error(`[AttendanceDaily Hook] Auto-OD error for ${doc.employeeNumber} on ${doc.date}:`, autoOdError);
+        }
+      });
+    }
+  }
 });
 
 // Post-save hook: always run monthly summary recalculation when daily is saved (including when OD approval updates status/payable).

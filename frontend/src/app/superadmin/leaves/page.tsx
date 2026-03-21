@@ -10,10 +10,32 @@ import 'react-toastify/dist/ReactToastify.css';
 import Spinner from '@/components/Spinner';
 import LocationPhotoCapture from '@/components/LocationPhotoCapture';
 import EmployeeSelect from '@/components/EmployeeSelect';
-import { Loader2, Calendar, Briefcase, X, Clock as Clock3 } from 'lucide-react';
+import { Loader2, Calendar, Briefcase, X, Clock as Clock3, Star, CheckCircle2 } from 'lucide-react';
 
 const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
+
+// Stat Card Component
+const StatCard = ({ title, value, icon: Icon, bgClass, iconClass, dekorClass, loading }: { title: string, value: number | string, icon: any, bgClass: string, iconClass: string, dekorClass?: string, loading?: boolean }) => (
+  <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 transition-all hover:shadow-xl dark:border-slate-800 dark:bg-slate-900 group">
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-400 dark:text-slate-500 truncate group-hover:text-blue-500 transition-colors">{title}</p>
+        <div className="mt-2 flex items-baseline gap-2">
+          {loading ? (
+            <div className="h-8 w-20 bg-slate-200 dark:bg-slate-700 rounded-lg animate-pulse" />
+          ) : (
+            <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">{value}</h3>
+          )}
+        </div>
+      </div>
+      <div className={`flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl shadow-lg shrink-0 transition-transform group-hover:scale-110 ${bgClass} ${iconClass}`}>
+        <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
+      </div>
+    </div>
+    {dekorClass && <div className={`absolute -right-6 -bottom-6 h-24 w-24 sm:h-32 sm:w-32 rounded-full opacity-10 group-hover:opacity-20 transition-opacity ${dekorClass}`} />}
+  </div>
+);
 
 // Icons
 const PlusIcon = () => (
@@ -377,6 +399,51 @@ export default function LeavesPage() {
   const [loadingPending, setLoadingPending] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Pay cycle start day from settings (default 1)
+  const [payCycleStartDay, setPayCycleStartDay] = useState(1);
+
+  // Date range filter — defaults to current pay-cycle (startDay of month/prev month → today)
+  const getDefaultDateRange = (startDay: number = 1) => {
+    const now = new Date();
+    const today = now.getDate();
+    let startDate = new Date(now);
+
+    // If startDay > 1 and today < startDay, cycle started in previous month
+    if (startDay > 1 && today < startDay) {
+      startDate.setMonth(startDate.getMonth() - 1);
+    }
+
+    startDate.setDate(startDay);
+    const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { from: format(startDate), to: format(now) };
+  };
+
+  const getPreviousPayCycle = (startDay: number = 1) => {
+    const { from } = getDefaultDateRange(startDay);
+    const startDate = new Date(from);
+
+    const prevEnd = new Date(startDate);
+    prevEnd.setDate(prevEnd.getDate() - 1);
+
+    const prevStart = new Date(startDate);
+    prevStart.setMonth(prevStart.getMonth() - 1);
+
+    const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { from: format(prevStart), to: format(prevEnd) };
+  };
+
+  const getLast3MonthsPayCycle = (startDay: number = 1) => {
+    const { to } = getDefaultDateRange(startDay);
+    const { from } = getDefaultDateRange(startDay);
+    const startDate = new Date(from);
+    startDate.setMonth(startDate.getMonth() - 2); // 3 cycles total including current
+
+    const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { from: format(startDate), to };
+  };
+
+  const [dateRange, setDateRange] = useState(() => getDefaultDateRange(1));
+
   // Pagination for Leaves and OD tabs (all requests list)
   const PER_PAGE_OPTIONS = [10, 20, 50, 100];
   const [leavesLimit, setLeavesLimit] = useState(20);
@@ -427,6 +494,10 @@ export default function LeavesPage() {
   const [clBalanceForMonth, setClBalanceForMonth] = useState<number | null>(null);
   const [clBalanceLoading, setClBalanceLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
+
+  // OD Holiday Info
+  const [checkingHoliday, setCheckingHoliday] = useState(false);
+  const [holidayInfo, setHolidayInfo] = useState<{ isHolidayOrWeekOff: boolean; message: string } | null>(null);
 
   // Form state
   const [formData, setFormData] = useState<{
@@ -486,6 +557,7 @@ export default function LeavesPage() {
   const [selectedDivisionFilter, setSelectedDivisionFilter] = useState('');
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState('');
   const [selectedDesignationFilter, setSelectedDesignationFilter] = useState('');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState('');
 
   // Form validation for Apply button
   const isFormValid = () => {
@@ -547,16 +619,39 @@ export default function LeavesPage() {
   }, [selectedDivisionFilter, divisions, departments]);
 
   useEffect(() => {
-    loadData();
-    loadTypes();
-    loadEmployees();
-    loadFilterData();
     loadDashboardStats();
   }, []);
 
+  // Fetch pay cycle start day setting on mount
   useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const res = await api.getSetting('payroll_cycle_start_day');
+        if (res?.data?.value) {
+          const startDay = parseInt(res.data.value, 10);
+          if (!isNaN(startDay) && startDay >= 1 && startDay <= 31) {
+            setPayCycleStartDay(startDay);
+            // Update the default date range now that we have the actual start day
+            setDateRange(getDefaultDateRange(startDay));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch payroll_cycle_start_day:', err);
+      }
+    };
+    fetchSettings();
+  }, []);
+
+  // Re-fetch when date range changes
+  useEffect(() => {
+    loadData();
+  }, [dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    loadLeavesData(1);
+    loadODsData(1);
     loadDashboardStats();
-  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter]);
+  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, selectedStatusFilter, dateRange.from, dateRange.to]);
 
   useEffect(() => {
     if (activeTab !== 'pending') return;
@@ -565,12 +660,15 @@ export default function LeavesPage() {
     loadPendingData(1, 1);
   }, [activeTab, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, searchTerm]);
 
-  // Shared filters for Leaves and OD tabs (used for API calls)
+  // Shared filters for Leaves and OD tabs (used for API calls) — includes backend date range
   const getLeavesODFilters = () => ({
     search: searchTerm?.trim() || undefined,
+    status: selectedStatusFilter || undefined,
     department: selectedDepartmentFilter || undefined,
     division: selectedDivisionFilter || undefined,
     designation: selectedDesignationFilter || undefined,
+    fromDate: dateRange.from || undefined,
+    toDate: dateRange.to || undefined,
   });
 
   const hasActiveFilter = !!(searchTerm?.trim() || selectedDivisionFilter || selectedDepartmentFilter || selectedDesignationFilter);
@@ -578,7 +676,8 @@ export default function LeavesPage() {
   const loadDashboardStats = async () => {
     setLoadingStats(true);
     try {
-      const filters = hasActiveFilter ? getLeavesODFilters() : undefined;
+      // Always pass filters to ensure stats respect date range + search/dept/div
+      const filters = getLeavesODFilters();
       const res = await api.getLeaveDashboardStats(filters);
       const data = (res as any)?.data;
       if ((res as any)?.success && data) {
@@ -1181,6 +1280,43 @@ export default function LeavesPage() {
     setFormData(prev => (prev.toDate <= maxTo ? prev : { ...prev, toDate: maxTo }));
   }, [isCLSelected, formData.isHalfDay, formData.fromDate, formData.toDate, clBalanceForMonth]);
 
+  // Check holiday status for OD
+  useEffect(() => {
+    const checkHolidayStatus = async () => {
+      const currentUser = auth.getUser();
+      const targetEmp = selectedEmployee || (currentUser?.role === 'employee' ? { _id: (currentUser as any).id, emp_no: (currentUser as any).emp_no || (currentUser as any).employeeId } : null);
+
+      if (applyType !== 'od' || !formData.fromDate || !targetEmp) {
+        setHolidayInfo(null);
+        return;
+      }
+
+      setCheckingHoliday(true);
+      try {
+        const response = await api.checkODHoliday(
+          targetEmp._id,
+          targetEmp.emp_no,
+          formData.fromDate
+        );
+        if (response.success) {
+          setHolidayInfo({
+            isHolidayOrWeekOff: response.isHolidayOrWeekOff,
+            message: response.message || 'Holiday/Week-off detected'
+          });
+        } else {
+          setHolidayInfo(null);
+        }
+      } catch (err) {
+        console.error('Error checking holiday status:', err);
+        setHolidayInfo(null);
+      } finally {
+        setCheckingHoliday(false);
+      }
+    };
+
+    checkHolidayStatus();
+  }, [applyType, formData.fromDate, selectedEmployee]);
+
   const openApplyDialog = (type: 'leave' | 'od') => {
     setApplyType(type);
 
@@ -1569,51 +1705,43 @@ export default function LeavesPage() {
       />
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center">
-              <CalendarIcon />
-            </div>
-            <div>
-              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-slate-900 dark:text-white">{dashboardStats.totalLeaves}</div>}
-              <div className="text-sm text-slate-500">Total Leaves</div>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center">
-              <BriefcaseIcon />
-            </div>
-            <div>
-              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-slate-900 dark:text-white">{dashboardStats.totalODs}</div>}
-              <div className="text-sm text-slate-500">Total ODs</div>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-yellow-100 flex items-center justify-center">
-              <ClockIcon />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-yellow-600">{totalPending}</div>
-              <div className="text-sm text-slate-500">Actions Required</div>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center">
-              <CheckIcon />
-            </div>
-            <div>
-              {loadingStats ? <div className="h-8 w-14 bg-slate-200 dark:bg-slate-600 rounded animate-pulse" /> : <div className="text-2xl font-bold text-green-600">{dashboardStats.totalApproved}</div>}
-              <div className="text-sm text-slate-500">Approved</div>
-            </div>
-          </div>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <StatCard
+          title="Total Leaves"
+          value={dashboardStats.totalLeaves}
+          icon={Calendar}
+          bgClass="bg-blue-500/10"
+          iconClass="text-blue-600 dark:text-blue-400"
+          dekorClass="bg-blue-500/5"
+          loading={loadingStats}
+        />
+        <StatCard
+          title="Total ODs"
+          value={dashboardStats.totalODs}
+          icon={Briefcase}
+          bgClass="bg-purple-500/10"
+          iconClass="text-purple-600 dark:text-purple-400"
+          dekorClass="bg-purple-500/5"
+          loading={loadingStats}
+        />
+        <StatCard
+          title="Actions Required"
+          value={totalPending}
+          icon={Clock3}
+          bgClass="bg-amber-500/10"
+          iconClass="text-amber-600 dark:text-amber-400"
+          dekorClass="bg-amber-500/5"
+          loading={loadingStats}
+        />
+        <StatCard
+          title="Approved"
+          value={dashboardStats.totalApproved}
+          icon={CheckCircle2}
+          bgClass="bg-emerald-500/10"
+          iconClass="text-emerald-600 dark:text-emerald-400"
+          dekorClass="bg-emerald-500/5"
+          loading={loadingStats}
+        />
       </div>
 
       {/* Tabs */}
@@ -1658,15 +1786,15 @@ export default function LeavesPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="mb-6 flex flex-wrap gap-4 items-center">
+      {/* Filters Bar — Consolidated single line like Attendance Page */}
+      <div className="mb-6 flex flex-nowrap items-center gap-2 overflow-x-auto pb-2 scrollbar-hide bg-slate-100/50 dark:bg-slate-800/40 p-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 backdrop-blur-sm">
         <select
           value={selectedDivisionFilter}
           onChange={(e) => {
             setSelectedDivisionFilter(e.target.value);
             setSelectedDepartmentFilter('');
           }}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
         >
           <option value="">All Divisions</option>
           {divisions.map((div) => (
@@ -1677,7 +1805,7 @@ export default function LeavesPage() {
         <select
           value={selectedDepartmentFilter}
           onChange={(e) => setSelectedDepartmentFilter(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
         >
           <option value="">All Departments</option>
           {filteredDepartments.map((dept) => (
@@ -1688,7 +1816,7 @@ export default function LeavesPage() {
         <select
           value={selectedDesignationFilter}
           onChange={(e) => setSelectedDesignationFilter(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
         >
           <option value="">All Designations</option>
           {designations.map((desig) => (
@@ -1696,7 +1824,19 @@ export default function LeavesPage() {
           ))}
         </select>
 
-        <div className="relative flex-grow max-w-sm">
+        <select
+          value={selectedStatusFilter}
+          onChange={(e) => setSelectedStatusFilter(e.target.value)}
+          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
+        >
+          <option value="">All Status</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+
+        <div className="relative min-w-[200px] flex-grow max-w-xs">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
             <SearchIcon />
           </div>
@@ -1705,7 +1845,57 @@ export default function LeavesPage() {
             placeholder="Search employees..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="block w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+            className="block w-full h-9 rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-1 text-[11px] font-semibold shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+        </div>
+
+        <div className="h-6 w-px bg-slate-300 dark:bg-slate-700 mx-1 shrink-0" />
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {[
+            {
+              label: 'This Month',
+              get: () => getDefaultDateRange(payCycleStartDay)
+            },
+            {
+              label: 'Last Month',
+              get: () => getPreviousPayCycle(payCycleStartDay)
+            },
+            {
+              label: 'Last 3M',
+              get: () => getLast3MonthsPayCycle(payCycleStartDay)
+            }
+          ].map(preset => {
+            const r = preset.get();
+            const isActive = dateRange.from === r.from && dateRange.to === r.to;
+            return (
+              <button
+                key={preset.label}
+                onClick={() => setDateRange(r)}
+                className={`h-8 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${isActive
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20'
+                  : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/10'}`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1.5 px-3 h-9 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm shrink-0">
+          <CalendarIcon />
+          <input
+            type="date"
+            value={dateRange.from}
+            onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
+            className="bg-transparent border-0 text-[11px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer"
+          />
+          <span className="text-slate-400 text-xs font-bold px-1">→</span>
+          <input
+            type="date"
+            value={dateRange.to}
+            onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
+            className="bg-transparent border-0 text-[11px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer"
           />
         </div>
       </div>
@@ -2460,6 +2650,23 @@ export default function LeavesPage() {
                 </div>
               )}
 
+              {/* Holiday Indicator for OD */}
+              {applyType === 'od' && holidayInfo && holidayInfo.isHolidayOrWeekOff && (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500 mb-4 mt-2">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                      <Star className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                      <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                        {holidayInfo.message}. Selected day is holiday so this OD contributes to your compensatory off not on the working day.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Half Day Selection */}
               {(applyType === 'leave' || (applyType === 'od' && formData.odType_extended === 'half_day')) && (
                 <div className="flex items-center gap-4">
@@ -2698,6 +2905,23 @@ export default function LeavesPage() {
                 </div>
               </div>
 
+              {/* CO Eligibility Indicator */}
+              {detailType === 'od' && (selectedItem as any).isCOEligible && (
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-200 dark:border-indigo-800/50 animate-in fade-in zoom-in duration-500 mb-4">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+                      <Star className="w-5 h-5 fill-current" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
+                      <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
+                        This OD contributes to compensatory off as it was applied on a holiday or week-off.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Stats Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-slate-50 dark:bg-slate-700/30 p-4 sm:p-6 rounded-xl">
                 <div className="space-y-1">
@@ -2764,6 +2988,40 @@ export default function LeavesPage() {
                   </div>
                 )}
               </div>
+
+              {/* Punch Transparency / Time Details */}
+              {detailType === 'od' && (selectedItem as any).odStartTime && (
+                <div className="grid grid-cols-3 gap-4 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800/50">
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work In</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(() => {
+                        const [h, m] = ((selectedItem as any).odStartTime || '').split(':');
+                        if (!h) return 'N/A';
+                        const d = new Date(); d.setHours(parseInt(h), parseInt(m));
+                        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                      })()}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work Out</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(() => {
+                        const [h, m] = ((selectedItem as any).odEndTime || '').split(':');
+                        if (!h) return 'N/A';
+                        const d = new Date(); d.setHours(parseInt(h), parseInt(m));
+                        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                      })()}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Total Duration</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(selectedItem as any).durationHours || 0} hrs
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Photo Evidence & Location */}
               {detailType === 'od' && ((selectedItem as any).photoEvidence || (selectedItem as any).geoLocation) && (

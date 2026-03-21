@@ -2001,12 +2001,14 @@ export const api = {
   },
 
   // Dashboard stats (global or filtered) for superadmin cards
-  getLeaveDashboardStats: async (filters?: { search?: string; division?: string; department?: string; designation?: string }) => {
+  getLeaveDashboardStats: async (filters?: { search?: string; division?: string; department?: string; designation?: string; fromDate?: string; toDate?: string }) => {
     const params = new URLSearchParams();
     if (filters?.search) params.append('search', filters.search);
     if (filters?.division) params.append('division', filters.division);
     if (filters?.department) params.append('department', filters.department);
     if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.fromDate) params.append('fromDate', filters.fromDate);
+    if (filters?.toDate) params.append('toDate', filters.toDate);
     const query = params.toString() ? `?${params.toString()}` : '';
     return apiRequest<{ data: { totalLeaves: number; totalODs: number; totalPending: number; totalApproved: number } }>(`/leaves/dashboard-stats${query}`, { method: 'GET' });
   },
@@ -2297,6 +2299,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
+  },
+  
+  // Check if date is holiday for an employee (OD specific)
+  checkODHoliday: async (employeeId?: string, empNo?: string, date?: string) => {
+    const q = new URLSearchParams();
+    if (employeeId) q.append('employeeId', employeeId);
+    if (empNo) q.append('empNo', empNo);
+    if (date) q.append('date', date);
+    return apiRequest<any>(`/leaves/od/check-holiday?${q.toString()}`, { method: 'GET' });
   },
 
   // Cancel OD

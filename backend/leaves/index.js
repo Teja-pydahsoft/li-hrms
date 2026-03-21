@@ -71,6 +71,9 @@ router.put('/ccl/:id/cancel', cclController.cancelCCL);
 // Get my ODs
 router.get('/od/my', odController.getMyODs);
 
+// Check if date is holiday for an employee
+router.get('/od/check-holiday', odController.checkHoliday);
+
 // Get pending OD approvals
 router.get('/od/pending-approvals', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), odController.getPendingApprovals);
 
