@@ -128,6 +128,17 @@ const LeaveSettingsSchema = new mongoose.Schema(
 
     // General settings
     settings: {
+      // Dynamic monthly CL limit
+      monthlyCLLimitEnabled: {
+        type: Boolean,
+        default: true
+      },
+      monthlyCLLimit: {
+        type: Number,
+        default: 2,
+        min: 0,
+        max: 31
+      },
       // Allow backdated leave applications
       allowBackdated: {
         type: Boolean,

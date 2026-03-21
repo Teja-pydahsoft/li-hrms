@@ -293,7 +293,7 @@ async function createSplits(leaveId, splits, approver) {
 
     // Create new splits
     const createdSplits = [];
-    const financialYear = getFinancialYear(new Date());
+    const financialYear = await getFinancialYear(new Date());
 
     for (const splitData of splits) {
       const splitDate = new Date(splitData.date);

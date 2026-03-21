@@ -3,20 +3,16 @@ const Leave = require('../model/Leave');
 const LeaveSettings = require('../model/LeaveSettings');
 const Employee = require('../../employees/model/Employee');
 const { createISTDate, extractISTComponents } = require('../../shared/utils/dateUtils');
+const dateCycleService = require('./dateCycleService');
 
 /**
  * Get financial year from a date
  * @param {Date} date - Date to get financial year for
- * @returns {String} Financial year in format "YYYY-YYYY" (e.g., "2024-2025")
+ * @returns {Promise<String>} Financial year in format "YYYY-YYYY" (e.g., "2024-2025")
  */
-function getFinancialYear(date) {
-  const { year, month } = extractISTComponents(date);
-  // Assuming financial year starts from April (month 4)
-  if (month >= 4) {
-    return `${year}-${year + 1}`;
-  } else {
-    return `${year - 1}-${year}`;
-  }
+async function getFinancialYear(date) {
+  const periodInfo = await dateCycleService.getFinancialYearForDate(date);
+  return periodInfo.name;
 }
 
 /**
@@ -29,7 +25,7 @@ function getFinancialYear(date) {
 async function getOrCreateMonthlyRecord(employeeId, emp_no, date) {
   const { year, month: monthNumber, dateStr } = extractISTComponents(date);
   const month = dateStr.substring(0, 7); // YYYY-MM
-  const financialYear = getFinancialYear(date);
+  const financialYear = await getFinancialYear(date);
 
   let record = await MonthlyLeaveRecord.findOne({
     employeeId,
@@ -392,7 +388,7 @@ async function calculateLeaveBalance(employeeId, financialYear) {
  */
 async function getCurrentLeaveBalance(employeeId) {
   const currentDate = new Date();
-  const financialYear = getFinancialYear(currentDate);
+  const financialYear = await getFinancialYear(currentDate);
   return calculateLeaveBalance(employeeId, financialYear);
 }
 
