@@ -41,34 +41,19 @@ const processAutoODForEmployee = async (employeeNumber, dateStr, record) => {
             return;
         }
 
-        // 1. Check if OD already exists for this date and employee
-        const recordDate = new Date(record.date + 'T12:00:00Z');
-        const existingOD = await OD.findOne({
-            emp_no: record.employeeNumber,
-            fromDate: { $lte: recordDate },
-            toDate: { $gte: recordDate },
-            isActive: true,
-            status: { $nin: ['cancelled', 'rejected'] }
-        });
-
-        if (existingOD) {
-            return; // Already exists
-        }
-
-        // 2. Extract punch details for fields and remarks
+        // 2. Extract punch details FIRST (needed regardless of create/update path)
         let punchDetails = '';
         let startT = null;
         let endT = null;
-        
+
         if (record.shifts && record.shifts.length > 0) {
             const sortedShifts = [...record.shifts].sort((a, b) => new Date(a.inTime) - new Date(b.inTime));
             const firstIn = sortedShifts[0].inTime;
             const lastOut = sortedShifts[sortedShifts.length - 1].outTime;
-            
+
             const formatTime = (date) => {
                 if (!date) return null;
                 const d = new Date(date);
-                // Extract HH:mm in IST
                 return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
             };
 
@@ -76,11 +61,69 @@ const processAutoODForEmployee = async (employeeNumber, dateStr, record) => {
                 if (!date) return 'N/A';
                 return new Date(date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
             };
-            
+
             startT = formatTime(firstIn);
             endT = formatTime(lastOut);
             punchDetails = ` [IN: ${formatTimeDisplay(firstIn)}, OUT: ${formatTimeDisplay(lastOut)}, Duration: ${record.totalWorkingHours} hrs]`;
         }
+
+        // 1. Check if OD already exists for this date and employee
+        // ODs are stored with fromDate = IST midnight = UTC prev-day 18:30
+        // So we must use a FULL IST calendar day window to match reliably
+        const dayStart = new Date(dateStr + 'T00:00:00+05:30'); // IST midnight = UTC 18:30 prev day
+        const dayEnd   = new Date(dateStr + 'T23:59:59+05:30'); // IST end of day = UTC 18:29 same day
+
+        console.log(`[AutoOD] Checking for existing OD: emp=${record.employeeNumber}, dateStr=${dateStr}, window=[${dayStart.toISOString()} → ${dayEnd.toISOString()}]`);
+
+        // Look for ANY active OD on this date — pending, approved, partially-approved
+        const existingActiveOD = await OD.findOne({
+            emp_no: record.employeeNumber,
+            fromDate: { $gte: dayStart, $lte: dayEnd },
+            isActive: true,
+            status: { $nin: ['cancelled', 'rejected'] }
+        });
+
+        if (existingActiveOD) {
+            // UPDATE the existing OD with fresh punch details
+            const prevStartT = existingActiveOD.odStartTime;
+            const prevEndT   = existingActiveOD.odEndTime;
+            const prevHours  = existingActiveOD.durationHours;
+
+            existingActiveOD.odStartTime   = startT   || existingActiveOD.odStartTime;
+            existingActiveOD.odEndTime     = endT     || existingActiveOD.odEndTime;
+            existingActiveOD.durationHours = record.totalWorkingHours || existingActiveOD.durationHours;
+
+            const updateNote = `Biometric punches updated by system.${punchDetails}`;
+            existingActiveOD.workflow.history.push({
+                step: 'system',
+                action: 'status_changed',
+                actionBy: null,
+                actionByName: 'System (Auto-OD)',
+                actionByRole: 'system',
+                comments: updateNote,
+                timestamp: new Date(),
+            });
+
+            await existingActiveOD.save();
+            console.log(`[AutoOD] ✏️  Updated existing OD (${existingActiveOD._id}) for ${record.employeeNumber} on ${dateStr} — was [${prevStartT}→${prevEndT} ${prevHours}hrs], now [${startT}→${endT} ${record.totalWorkingHours}hrs]`);
+            return;
+        }
+
+        // Check if there is a fully-rejected OD on this date.
+        // If so we CAN create a new one; add a note about the previous rejection.
+        const rejectedOD = await OD.findOne({
+            emp_no: record.employeeNumber,
+            fromDate: { $gte: dayStart, $lte: dayEnd },
+            isActive: true,
+            status: { $in: ['rejected', 'cancelled'] }
+        }).sort({ updatedAt: -1 });
+
+        let previousRejectionNote = '';
+        if (rejectedOD) {
+            const rejectedAt = rejectedOD.updatedAt ? new Date(rejectedOD.updatedAt).toLocaleDateString('en-IN') : 'N/A';
+            previousRejectionNote = ` | Note: A previous OD (${rejectedOD.status}) on this date was found (${rejectedAt}). New OD auto-generated.`;
+        }
+
 
         // 3. Get OD workflow settings
         const workflowSettings = await LeaveSettings.getActiveSettings('od');
@@ -95,11 +138,12 @@ const processAutoODForEmployee = async (employeeNumber, dateStr, record) => {
             return;
         }
 
-        // 5. Initialize workflow (Mirroring odController.js logic)
+        // 5. Initialize workflow — exactly mirrors odController.js
         const approvalSteps = [];
         const reportingManagers = employee.dynamicFields?.reporting_to || employee.dynamicFields?.reporting_to_ || [];
         const hasReportingManager = Array.isArray(reportingManagers) && reportingManagers.length > 0;
 
+        // Phase 1: Always set the FIRST step (reporting_manager if available, else HOD as fallback)
         if (hasReportingManager) {
             approvalSteps.push({
                 stepOrder: 1,
@@ -108,21 +152,30 @@ const processAutoODForEmployee = async (employeeNumber, dateStr, record) => {
                 status: 'pending',
                 isCurrent: true
             });
-        } else if (workflowSettings?.workflow?.steps?.length) {
-            workflowSettings.workflow.steps.forEach((s, i) => {
-                approvalSteps.push({
-                    stepOrder: i + 1,
-                    role: s.approverRole,
-                    label: s.stepName || `${s.approverRole?.toUpperCase()} Approval`,
-                    status: 'pending',
-                    isCurrent: i === 0,
-                });
-            });
         } else {
-            approvalSteps.push(
-                { stepOrder: 1, role: 'hod', label: 'HOD Approval', status: 'pending', isCurrent: true },
-                { stepOrder: 2, role: 'hr', label: 'HR Approval', status: 'pending', isCurrent: false }
-            );
+            // Guaranteed fallback — HOD is always first if no reporting manager
+            approvalSteps.push({
+                stepOrder: 1,
+                role: 'hod',
+                label: 'HOD Approval',
+                status: 'pending',
+                isCurrent: true
+            });
+        }
+
+        // Phase 2: Append remaining steps from workflow settings (skip HOD — already added above)
+        if (workflowSettings?.workflow?.steps?.length > 0) {
+            workflowSettings.workflow.steps.forEach(step => {
+                if (step.approverRole !== 'hod') {
+                    approvalSteps.push({
+                        stepOrder: approvalSteps.length + 1,
+                        role: step.approverRole,
+                        label: step.stepName || `${step.approverRole?.toUpperCase()} Approval`,
+                        status: 'pending',
+                        isCurrent: false,
+                    });
+                }
+            });
         }
 
         const workflowData = {

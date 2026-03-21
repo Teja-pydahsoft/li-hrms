@@ -2840,6 +2840,40 @@ export default function LeavesPage() {
                 )}
               </div>
 
+              {/* Punch Transparency / Time Details */}
+              {detailType === 'od' && (selectedItem as any).odStartTime && (
+                <div className="grid grid-cols-3 gap-4 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800/50">
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work In</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(() => {
+                        const [h, m] = ((selectedItem as any).odStartTime || '').split(':');
+                        if (!h) return 'N/A';
+                        const d = new Date(); d.setHours(parseInt(h), parseInt(m));
+                        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                      })()}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Work Out</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(() => {
+                        const [h, m] = ((selectedItem as any).odEndTime || '').split(':');
+                        if (!h) return 'N/A';
+                        const d = new Date(); d.setHours(parseInt(h), parseInt(m));
+                        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                      })()}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase font-bold text-purple-400 tracking-wider">Total Duration</p>
+                    <p className="text-sm font-black text-purple-700 dark:text-purple-300">
+                      {(selectedItem as any).durationHours || 0} hrs
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Photo Evidence & Location */}
               {detailType === 'od' && ((selectedItem as any).photoEvidence || (selectedItem as any).geoLocation) && (
                 <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-5 border border-slate-200 dark:border-slate-700">
