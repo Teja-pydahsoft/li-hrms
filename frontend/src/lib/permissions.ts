@@ -134,11 +134,11 @@ export function canViewAttendance(user: User): boolean {
 }
 
 export function canEditAttendance(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod']) && canManageFeature(user, 'ATTENDANCE');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod']) && canManageFeature(user, 'ATTENDANCE');
 }
 
 export function canApproveAttendance(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod']) && canManageFeature(user, 'ATTENDANCE');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod']) && canManageFeature(user, 'ATTENDANCE');
 }
 
 export function canExportAttendance(user: User): boolean {
@@ -174,15 +174,15 @@ export function canDeleteLeaves(user: User): boolean {
 // ==========================================
 
 export function canViewPayroll(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'PAYMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'PAYMENTS');
 }
 
 export function canProcessPayroll(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYMENTS');
 }
 
 export function canEditPayroll(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYMENTS');
 }
 
 export function canViewPayslips(user: User): boolean {
@@ -190,7 +190,7 @@ export function canViewPayslips(user: User): boolean {
 }
 
 export function canGeneratePayslips(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYSLIPS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'PAYSLIPS');
 }
 
 export function canViewPayRegister(user: User): boolean {
@@ -202,11 +202,11 @@ export function canManagePayRegister(user: User): boolean {
 }
 
 export function canViewAllowances(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'ALLOWANCES_DEDUCTIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'ALLOWANCES_DEDUCTIONS');
 }
 
 export function canManageAllowances(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'ALLOWANCES_DEDUCTIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'ALLOWANCES_DEDUCTIONS');
 }
 
 export function canViewLoans(user: User): boolean {
@@ -218,11 +218,11 @@ export function canManageLoans(user: User): boolean {
 }
 
 export function canViewArrears(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'ARREARS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'ARREARS');
 }
 
 export function canManageArrears(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'ARREARS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'ARREARS');
 }
 
 // ==========================================
@@ -230,7 +230,7 @@ export function canManageArrears(user: User): boolean {
 // ==========================================
 
 export function canViewDepartments(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'employee']) && canViewFeature(user, 'DEPARTMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager']) && canViewFeature(user, 'DEPARTMENTS');
 }
 
 export function canCreateDepartment(user: User): boolean {
@@ -242,7 +242,7 @@ export function canEditDepartment(user: User): boolean {
 }
 
 export function canDeleteDepartment(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
 }
 
 export function canViewDepartmentSettings(user: User): boolean {
@@ -258,11 +258,11 @@ export function canManageDepartmentSettings(user: User): boolean {
 // ==========================================
 
 export function canViewDivisions(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr']) && canViewFeature(user, 'DIVISIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr']) && canViewFeature(user, 'DIVISIONS');
 }
 
 export function canManageDivisions(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr']) && canManageFeature(user, 'DIVISIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr']) && canManageFeature(user, 'DIVISIONS');
 }
 
 // ==========================================
@@ -270,11 +270,11 @@ export function canManageDivisions(user: User): boolean {
 // ==========================================
 
 export function canViewEmployeeUpdates(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr']) && canViewFeature(user, 'EMPLOYEE_UPDATES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr']) && canViewFeature(user, 'EMPLOYEE_UPDATES');
 }
 
 export function canManageEmployeeUpdates(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr']) && canManageFeature(user, 'EMPLOYEE_UPDATES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr']) && canManageFeature(user, 'EMPLOYEE_UPDATES');
 }
 
 // ==========================================
@@ -282,7 +282,7 @@ export function canManageEmployeeUpdates(user: User): boolean {
 // ==========================================
 
 export function canViewShifts(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'employee']) && canViewFeature(user, 'SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager']) && canViewFeature(user, 'SHIFTS');
 }
 
 export function canCreateShift(user: User): boolean {
@@ -302,19 +302,19 @@ export function canAssignShifts(user: User): boolean {
 }
 
 export function canViewShiftRoster(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'SHIFT_ROSTER');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'SHIFT_ROSTER');
 }
 
 export function canManageShiftRoster(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFT_ROSTER');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFT_ROSTER');
 }
 
 export function canViewConfusedShifts(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'CONFUSED_SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'CONFUSED_SHIFTS');
 }
 
 export function canResolveConfusedShifts(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'CONFUSED_SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'CONFUSED_SHIFTS');
 }
 
 // ==========================================
@@ -382,11 +382,11 @@ export function canViewFinancialReports(user: User): boolean {
 // ==========================================
 
 export function canViewSettings(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'GENERAL_SETTINGS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'GENERAL_SETTINGS');
 }
 
 export function canEditSettings(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'GENERAL_SETTINGS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'GENERAL_SETTINGS');
 }
 
 // ==========================================
@@ -394,23 +394,23 @@ export function canEditSettings(user: User): boolean {
 // ==========================================
 
 export function canViewBonusPolicies(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_POLICIES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_POLICIES');
 }
 
 export function canManageBonusPolicies(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'BONUS_POLICIES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'BONUS_POLICIES');
 }
 
 export function canViewBonusCalculator(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_CALCULATOR');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_CALCULATOR');
 }
 
 export function canViewBonusBatches(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_BATCHES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canViewFeature(user, 'BONUS_BATCHES');
 }
 
 export function canManageBonusBatches(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'BONUS_BATCHES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'BONUS_BATCHES');
 }
 
 // ==========================================
@@ -503,7 +503,7 @@ export function canBankUpdateFeature(user: User, featureCode: string): boolean {
  * Specifically for bank details update workflow
  */
 export function canUpdateBankDetails(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager']) && canBankUpdateFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager']) && canBankUpdateFeature(user, 'EMPLOYEES');
 }
 
 // ==========================================

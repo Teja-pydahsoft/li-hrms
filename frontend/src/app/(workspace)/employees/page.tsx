@@ -2977,8 +2977,8 @@ export default function EmployeesPage() {
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-1 group-hover:opacity-100 transition-opacity">
-                            {/* {hasManagePermission && (
+                          <div className="flex items-center justify-end gap-1  group-hover:opacity-100 transition-opacity">
+                            {hasManagePermission && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleEdit(employee); }}
                                 className="w-8 h-8 flex items-center justify-center rounded-lg text-text-secondary hover:bg-indigo-500/10 hover:text-indigo-500 transition-all font-bold"
@@ -2986,7 +2986,7 @@ export default function EmployeesPage() {
                               >
                                 <Edit2 className="h-3.5 w-3.5" />
                               </button>
-                            )} */}
+                            )}
                             <button
                               onClick={(e) => { e.stopPropagation(); handleViewEmployee(employee); }}
                               className="w-8 h-8 flex items-center justify-center rounded-lg text-text-secondary hover:bg-indigo-500/10 hover:text-indigo-500 transition-all font-bold"
@@ -3221,7 +3221,7 @@ export default function EmployeesPage() {
                       <Eye className="h-2.5 w-2.5" />
                       <span>View</span>
                     </button>
-                    {/* {hasManagePermission && (
+                    {hasManagePermission && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleEdit(employee); }}
                         className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-blue-500/10 px-1.5 py-1.5 text-[9px] font-black uppercase tracking-wider text-blue-500 transition-colors hover:bg-blue-500/20"
@@ -3230,7 +3230,7 @@ export default function EmployeesPage() {
                         <Edit2 className="h-2.5 w-2.5" />
                         <span>Edit</span>
                       </button>
-                    )} */}
+                    )}
                     {hasManagePermission && (
                       <>
                         {employee.leftDate ? (
@@ -3891,8 +3891,8 @@ export default function EmployeesPage() {
                           { id: 'applyESI', label: 'ESI' },
                           { id: 'applyProfessionTax', label: 'Profession Tax' }
                         ].map((pref) => (
-                          <label 
-                            key={pref.id} 
+                          <label
+                            key={pref.id}
                             title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
                             className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
                           >
@@ -3923,8 +3923,8 @@ export default function EmployeesPage() {
                           { id: 'deductPermission', label: 'Permission' },
                           { id: 'deductAbsent', label: 'Absents (extra LOP)' }
                         ].map((pref) => (
-                          <label 
-                            key={pref.id} 
+                          <label
+                            key={pref.id}
                             title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""}
                             className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}
                           >
@@ -5969,13 +5969,13 @@ export default function EmployeesPage() {
           </div>
         </div>
       )}
-        <BankUpdateDialog
-          isOpen={showBankUpdateDialog}
-          onClose={() => setShowBankUpdateDialog(false)}
-          employee={viewingEmployee}
-          onSubmit={handleSubmitBankUpdate}
-          submitting={submittingBankUpdate}
-        />
-      </div>
+      <BankUpdateDialog
+        isOpen={showBankUpdateDialog}
+        onClose={() => setShowBankUpdateDialog(false)}
+        employee={viewingEmployee}
+        onSubmit={handleSubmitBankUpdate}
+        submitting={submittingBankUpdate}
+      />
+    </div>
   );
 }
