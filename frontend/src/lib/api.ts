@@ -371,6 +371,7 @@ export interface ApiResponse<T> {
   syncError?: any;
   identifier?: string;
   generatedPassword?: string;
+  isHolidayOrWeekOff?: boolean;
 }
 
 export interface LoginResponse {

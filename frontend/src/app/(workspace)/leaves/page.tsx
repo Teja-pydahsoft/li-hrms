@@ -1464,7 +1464,7 @@ export default function LeavesPage() {
         );
         if (response.success) {
           setHolidayInfo({
-            isHolidayOrWeekOff: response.isHolidayOrWeekOff,
+            isHolidayOrWeekOff: response.isHolidayOrWeekOff || false,
             message: response.message || 'Holiday/Week-off detected'
           });
         } else {
