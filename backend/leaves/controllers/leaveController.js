@@ -1498,7 +1498,7 @@ exports.processLeaveAction = async (req, res) => {
 
         if (isFinishingChain || isFinalAuth || userRole === 'hr') {
           const { validateLeaveRequest } = require('../../shared/services/conflictValidationService');
-          const validation = await validateLeaveRequest(leave.employeeId, leave.emp_no, leave.fromDate, leave.toDate, leave.isHalfDay || false, leave.halfDayType || null, false);
+          const validation = await validateLeaveRequest(leave.employeeId, leave.emp_no, leave.fromDate, leave.toDate, leave.isHalfDay || false, leave.halfDayType || null, false, leave._id);
           if (!validation.isValid) {
             return res.status(400).json({ success: false, error: validation.errors[0] || 'Conflict with approved records' });
           }

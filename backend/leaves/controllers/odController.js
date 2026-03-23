@@ -1508,7 +1508,7 @@ exports.processODAction = async (req, res) => {
 
         if (isFinishingChain || isFinalAuth || userRole === 'hr') {
           const { validateODRequest } = require('../../shared/services/conflictValidationService');
-          const validation = await validateODRequest(od.employeeId, od.emp_no, od.fromDate, od.toDate, od.isHalfDay || false, od.halfDayType || null, false);
+          const validation = await validateODRequest(od.employeeId, od.emp_no, od.fromDate, od.toDate, od.isHalfDay || false, od.halfDayType || null, false, od._id);
           if (!validation.isValid) {
             return res.status(400).json({ success: false, error: validation.errors[0] || 'Conflict with approved records' });
           }

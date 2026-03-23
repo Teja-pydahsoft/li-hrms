@@ -439,8 +439,14 @@ export default function LeavesPage() {
     }
 
     startDate.setDate(startDay);
+    
+    // Default end date: End of next month to show future applications/holidays
+    const endDate = new Date(now);
+    endDate.setMonth(endDate.getMonth() + 2);
+    endDate.setDate(0);
+
     const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    return { from: format(startDate), to: format(now) };
+    return { from: format(startDate), to: format(endDate) };
   };
 
   const getPreviousPayCycle = (startDay: number = 1) => {
@@ -871,7 +877,7 @@ export default function LeavesPage() {
               employee_name: currentUser!.name,
               email: currentUser!.email,
               role: 'employee',
-              phone_number: (currentUser as any).phone || '',
+              phone_number: (currentUser as any).phone_number || (currentUser as any).phone || '',
               department: currentUser!.department,
             };
             setEmployees([syntheticEmployee]);
@@ -1099,6 +1105,15 @@ export default function LeavesPage() {
   const openApplyDialog = (type: 'leave' | 'od') => {
     setApplyType(type);
     resetForm();
+    
+    // Immediate prefill for employees from currentUser object (faster than waiting for Employees list)
+    if (currentUser?.role === 'employee' && (currentUser.phone_number || currentUser.phone)) {
+      setFormData(prev => ({ 
+        ...prev, 
+        contactNumber: currentUser.phone_number || currentUser.phone || '' 
+      }));
+    }
+    
     setShowApplyDialog(true);
   };
 
@@ -1106,9 +1121,10 @@ export default function LeavesPage() {
     setSelectedEmployee(employee);
     setEmployeeSearch('');
     setShowEmployeeDropdown(false);
-    if (employee.phone_number) {
-      setFormData(prev => ({ ...prev, contactNumber: employee.phone_number || '' }));
-    }
+    
+    // Always update contact number from profile if available, otherwise clear it to avoid stale data
+    const phoneNumber = employee.phone_number || (employee as any).phone || '';
+    setFormData(prev => ({ ...prev, contactNumber: phoneNumber }));
   };
 
   // Auto-select employee for employee role when dialog opens

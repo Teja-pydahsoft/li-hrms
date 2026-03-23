@@ -137,6 +137,7 @@ exports.login = async (req, res) => {
           featureControl: userType === 'user' ? user.featureControl : undefined,
           dataScope: userType === 'user' ? user.dataScope : 'own',
           divisionMapping: userType === 'user' ? user.divisionMapping : undefined,
+          phone_number: userType === 'employee' ? user.phone_number : (user.employeeRef ? (await Employee.findById(user.employeeRef)).phone_number : null),
         },
       },
     });
@@ -208,6 +209,7 @@ exports.getMe = async (req, res) => {
           profilePhoto,
           createdAt: joined,
           lastLogin,
+          phone_number: userType === 'employee' ? user.phone_number : (user.employeeRef ? (await Employee.findById(user.employeeRef).select('phone_number')).phone_number : null),
         },
       },
     });

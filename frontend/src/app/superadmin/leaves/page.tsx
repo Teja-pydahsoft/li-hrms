@@ -1194,7 +1194,7 @@ export default function LeavesPage() {
     setEmployeeSearch('');
     setShowEmployeeDropdown(false);
     // Pre-fill contact number if available
-    const phone = employee.phone_number || employee.phone_number;
+    const phone = employee.phone_number || (employee as any).phone || '';
     if (phone) {
       setFormData(prev => ({ ...prev, contactNumber: phone }));
     }
