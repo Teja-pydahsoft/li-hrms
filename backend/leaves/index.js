@@ -4,7 +4,6 @@ const leaveController = require('./controllers/leaveController');
 const odController = require('./controllers/odController');
 const cclController = require('./controllers/cclController');
 const settingsController = require('./controllers/leaveSettingsController');
-const leaveRegisterController = require('./controllers/leaveRegisterController');
 const earnedLeaveController = require('./controllers/earnedLeaveController');
 const annualCLResetController = require('./controllers/annualCLResetController');
 const accrualController = require('./controllers/accrualController');
@@ -105,14 +104,6 @@ router.put('/od/:id/outcome', odController.updateODOutcome);
 router.delete('/od/:id', authorize('employee', 'sub_admin', 'super_admin'), odController.deleteOD);
 
 // ==========================================
-// LEAVE REGISTER ROUTES
-// ==========================================
-router.get('/register', authorize('employee', 'manager', 'hod', 'hr', 'sub_admin', 'super_admin'), applyScopeFilter, leaveRegisterController.getRegister);
-router.get('/register/employee/:employeeId', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), leaveRegisterController.getEmployeeRegister);
-router.get('/register/employee/:employeeId/ledger/:leaveType', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), leaveRegisterController.getEmployeeLedger);
-router.post('/register/adjust', authorize('hr', 'sub_admin', 'super_admin'), leaveRegisterController.adjustLeaveBalance);
-
-// ==========================================
 // EARNED LEAVE ROUTES
 // ==========================================
 // Calculate EL for employee
@@ -144,6 +135,9 @@ router.post('/annual-reset/preview', authorize('hr', 'sub_admin', 'super_admin')
 
 // Apply initial CL balance from policy to all employees (manual; not annual reset)
 router.post('/initial-cl-sync', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.performInitialCLSync);
+router.get('/initial-cl-sync/preview', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.previewInitialCLSync);
+router.post('/initial-cl-sync/preview', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.previewInitialCLSync);
+router.post('/initial-cl-sync/apply', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.applyInitialCLSync);
 
 // ==========================================
 // ACCRUAL ROUTES (run monthly CL/EL accrual; no cron – call manually or from external scheduler)

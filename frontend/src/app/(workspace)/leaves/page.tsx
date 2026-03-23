@@ -518,6 +518,12 @@ export default function LeavesPage() {
   const [clAnnualBalance, setClAnnualBalance] = useState<number | null>(null);
   const [cclBalance, setCclBalance] = useState<number | null>(null);
   const [clBalanceLoading, setClBalanceLoading] = useState(false);
+  const [clMonthlyCap, setClMonthlyCap] = useState<number | null>(null);
+  const [pendingDaysInCycle, setPendingDaysInCycle] = useState<number | null>(null);
+  const [isCCLIncluded, setIsCCLIncluded] = useState(false);
+  const [isELIncluded, setIsELIncluded] = useState(false);
+  const [elBalance, setElBalance] = useState<number | null>(null);
+  const [pooledLimit, setPooledLimit] = useState<number | null>(null);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
 
   // Form state
@@ -1166,26 +1172,6 @@ export default function LeavesPage() {
           setLoading(false);
           return;
         }
-        // CL: validate only on frontend — require balance to be loaded, then cap by balance
-        const isCL = formData.leaveType === 'CL' || formData.leaveType?.toUpperCase() === 'CL';
-        if (isCL) {
-          if (clBalanceForMonth === null && !clBalanceLoading) {
-            toast.error('CL balance could not be loaded. Please select employee and from date again, or try again.');
-            setLoading(false);
-            return;
-          }
-          if (clBalanceForMonth === null) {
-            toast.error('Please wait for CL balance to load.');
-            setLoading(false);
-            return;
-          }
-          const requestedDays = getRequestedDays(formData.fromDate, formData.toDate, formData.isHalfDay);
-          if (requestedDays > clBalanceForMonth) {
-            toast.error(`CL allowed for this pay period is ${clBalanceForMonth} day(s). You selected ${requestedDays} day(s). Please reduce the date range.`);
-            setLoading(false);
-            return;
-          }
-        }
       } else {
         if (!formData.odType || !formData.fromDate || !formData.toDate || !formData.purpose || !formData.placeVisited) {
           toast.error('Please fill all required fields');
@@ -1491,69 +1477,7 @@ export default function LeavesPage() {
   const hasValidEmpNo = targetEmpNo && String(targetEmpNo).trim() !== '' && String(targetEmpNo) !== 'UNKNOWN';
   const canFetchCLBalance = hasValidEmployeeId || hasValidEmpNo;
 
-  useEffect(() => {
-    if (!isCLSelected || !formData.fromDate || !canFetchCLBalance) {
-      setClBalanceForMonth(null);
-      return;
-    }
-
-    let cancelled = false;
-    setClBalanceLoading(true);
-    setClBalanceForMonth(null);
-
-    // Determine pay-cycle period from the selected date: send baseDate (not calendar month/year)
-    // so the backend resolves the correct period (e.g. 26 Jan–25 Feb for 31 Jan when cycle is 26–25).
-    const raw = formData.fromDate?.includes('T') ? formData.fromDate.split('T')[0] : (formData.fromDate || '');
-    const baseDateForApi = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : toISODate(formData.fromDate) || raw;
-    const registerParams = hasValidEmployeeId
-      ? { employeeId: String(targetEmployeeId), baseDate: baseDateForApi, balanceAsOf: true }
-      : { empNo: String(targetEmpNo), baseDate: baseDateForApi, balanceAsOf: true };
-    api.getLeaveRegister(registerParams)
-      .then((res: any) => {
-        if (cancelled) return;
-        const data = res?.data;
-        if (Array.isArray(data) && data.length > 0 && data[0].casualLeave) {
-          const entry = data[0];
-          const cl = entry.casualLeave;
-          const balance = Number(cl.balance);
-          
-          // Use monthlyAllowedLimit if available (reflects pooled CL + CCL + EL limits)
-          const pooledLimit = entry.monthlyAllowedLimit != null ? Number(entry.monthlyAllowedLimit) : null;
-          const allowedRaw = pooledLimit !== null ? pooledLimit : (cl.allowedRemaining != null ? Number(cl.allowedRemaining) : balance);
-          
-          const clCap = Number.isFinite(allowedRaw) ? Math.max(0, allowedRaw) : (Number.isFinite(balance) ? balance : 0);
-          setClBalanceForMonth(clCap);
-
-          setClAnnualBalance(Number.isFinite(balance) ? Math.max(0, balance) : null);
-          const cclRaw = data[0].compensatoryOff?.balance;
-          const cclVal = Number(cclRaw);
-          setCclBalance(Number.isFinite(cclVal) ? Math.max(0, cclVal) : 0);
-        } else {
-          setClBalanceForMonth(0);
-          setClAnnualBalance(null);
-          setCclBalance(null);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setClBalanceForMonth(null);
-      })
-      .finally(() => {
-        if (!cancelled) setClBalanceLoading(false);
-      });
-
-    return () => { cancelled = true; };
-  }, [isCLSelected, formData.fromDate, canFetchCLBalance, targetEmployeeId, targetEmpNo, hasValidEmployeeId]);
-
-  // When CL balance is known, clamp toDate so requested days do not exceed balance
-  useEffect(() => {
-    if (!isCLSelected || formData.isHalfDay || clBalanceForMonth == null || !formData.fromDate || !formData.toDate) return;
-    const requested = getRequestedDays(formData.fromDate, formData.toDate, false);
-    if (requested <= clBalanceForMonth) return;
-    const d = new Date(formData.fromDate);
-    d.setDate(d.getDate() + Math.max(0, Math.floor(clBalanceForMonth) - 1));
-    const maxTo = d.toISOString().split('T')[0];
-    setFormData(prev => (prev.toDate <= maxTo ? prev : { ...prev, toDate: maxTo }));
-  }, [isCLSelected, formData.isHalfDay, formData.fromDate, formData.toDate, clBalanceForMonth]);
+  // CL monthly-limit validation is enforced on backend during apply.
 
   const buildInitialSplits = (leave: LeaveApplication) => {
     if (!leave) return [];
@@ -3431,54 +3355,80 @@ export default function LeavesPage() {
 
                 {/* CL summary for month/year – show when Casual Leave selected */}
                 {isCLSelected && (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-3 space-y-1.5">
-                    {!formData.fromDate || !canFetchCLBalance ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        {currentUser?.role === 'employee'
-                          ? 'Select from date to see your CL balance and monthly limit for that month.'
-                          : 'Select employee and from date to see CL balance and monthly limit for that month.'}
-                      </p>
-                    ) : clBalanceLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Loading CL balance and monthly limit...
-                      </div>
-                    ) : clBalanceForMonth !== null ? (
-                      <>
-                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                          {clAnnualBalance !== null && (
-                            <>
-                              <span className="text-slate-600 dark:text-slate-300">
-                                Yearly CL balance (remaining):{' '}
-                              </span>
-                              <span className="font-semibold">
-                                {clAnnualBalance} day{clAnnualBalance !== 1 ? 's' : ''}.
-                              </span>
-                            </>
-                          )}
+                  <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30 overflow-hidden">
+                    <div className="bg-slate-100/50 dark:bg-slate-800/50 px-4 py-2 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Leave Limits Breakdown</span>
+                      {clBalanceLoading && <Loader2 className="w-3 h-3 animate-spin text-blue-500" />}
+                    </div>
+                    
+                    <div className="p-4 space-y-3">
+                      {!formData.fromDate || !canFetchCLBalance ? (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 italic text-center py-2">
+                          {currentUser?.role === 'employee'
+                            ? 'Select from date to view your available limits.'
+                            : 'Select employee and from date to view limits.'}
                         </p>
-                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                          <span className="text-green-600 dark:text-green-400">
-                            Leaves allowed this pay period: <strong>{clBalanceForMonth}</strong> day{clBalanceForMonth !== 1 ? 's' : ''} (Pooled CL/CCL/EL limits).
-                          </span>
-                        </p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                          You can apply for up to <strong>{clBalanceForMonth}</strong> day{clBalanceForMonth !== 1 ? 's' : ''} in this pay cycle based on your available balance and organization policy.
-                        </p>
-                        <p className="text-sm text-slate-700 dark:text-slate-300">
-                          Compensatory off (CCL):{' '}
-                          <span className="font-semibold">
-                            {cclBalance ?? 0} day{(cclBalance ?? 0) !== 1 ? 's' : ''}.
-                          </span>{' '}
-                          CCL is included in the pooled Monthly Limit shown above.
-                        </p>
+                      ) : clBalanceLoading ? (
+                        <div className="flex flex-col gap-2 py-2">
+                          <div className="h-3 w-full bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                          <div className="h-3 w-4/5 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                        </div>
+                      ) : clBalanceForMonth !== null ? (
+                        <>
+                          <div className="flex items-center justify-between mb-2 pb-2 border-b border-dashed border-slate-200 dark:border-slate-700">
+                             <div className="flex flex-col">
+                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">Net Allowed to Apply</span>
+                               <span className="text-xs text-slate-500 italic">After deducting pending leaves</span>
+                             </div>
+                             <span className="text-lg font-black text-blue-600 dark:text-blue-400">{clBalanceForMonth} Days</span>
+                          </div>
 
-                      </>
-                    ) : (
-                      <p className="text-sm text-amber-600 dark:text-amber-400">
-                        Could not load CL balance. You must have a valid balance to apply for CL; try again or select employee/from date again.
-                      </p>
-                    )}
+                          <div className="grid grid-cols-1 gap-2.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-500">Monthly CL Cap (Max Allowed)</span>
+                              <span className="font-semibold text-slate-700 dark:text-slate-300">{clMonthlyCap ?? 0} Days</span>
+                            </div>
+
+                            {isCCLIncluded && (
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500">Substitutable CCL Balance</span>
+                                <span className="font-semibold text-slate-700 dark:text-slate-300">{cclBalance ?? 0} Days</span>
+                              </div>
+                            )}
+
+                            {isELIncluded && (
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500">Substitutable EL Balance</span>
+                                <span className="font-semibold text-slate-700 dark:text-slate-300">{elBalance ?? 0} Days</span>
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100 dark:border-slate-800">
+                              <span className="text-slate-500 font-medium">Combined Limit for Period</span>
+                              <span className="font-bold text-slate-700 dark:text-slate-300">{pooledLimit ?? 0} Days</span>
+                            </div>
+
+                            {pendingDaysInCycle > 0 && (
+                              <div className="flex items-center justify-between text-xs text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 p-2 rounded-lg border border-orange-100 dark:border-orange-900/30">
+                                <span className="flex items-center gap-1.5 font-bold uppercase tracking-tight text-[10px]">
+                                  <AlertCircle className="w-3 h-3" /> Already Pending
+                                </span>
+                                <span className="font-black text-sm">{pendingDaysInCycle} Days</span>
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase tracking-tight pt-2 border-t border-slate-100 dark:border-slate-800">
+                              <span>Total Yearly CL Balance</span>
+                              <span>{clAnnualBalance ?? 0} Days</span>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-xs text-red-500 dark:text-red-400 text-center py-2 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                           Could not load balance information. Please try again.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
 

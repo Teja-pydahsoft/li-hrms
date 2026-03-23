@@ -190,6 +190,13 @@ const leaveRegisterSchema = new mongoose.Schema({
         default: null
     },
 
+    // Detailed Limit Snapshots (at time of transaction)
+    monthlyCLLimit: { type: Number, default: 0 },
+    monthlyCCLLimit: { type: Number, default: 0 },
+    monthlyELLimit: { type: Number, default: 0 },
+    monthlyCombinedLimit: { type: Number, default: 0 },
+    pendingLeavesBeforeAction: { type: Number, default: 0 },
+
     // Calculation Breakdown (for auto-generated entries)
     calculationBreakdown: {
         attendanceDays: Number,
@@ -234,11 +241,11 @@ leaveRegisterSchema.index({ createdAt: -1 });
 leaveRegisterSchema.statics.getEmployeeBalance = function (employeeId, leaveType, asOfDate = new Date()) {
     const targetDate = new Date(asOfDate);
 
-    // Find the latest transaction where the leave period ended strictly before the target date
+    // Find the latest transaction where the leave period ended on or before the target date
     return this.findOne({
         employeeId,
         leaveType,
-        endDate: { $lt: targetDate }
+        endDate: { $lte: targetDate }
     }).sort({ endDate: -1, createdAt: -1 });
 };
 

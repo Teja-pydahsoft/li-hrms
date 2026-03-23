@@ -719,23 +719,28 @@ exports.applyLeave = async (req, res) => {
         const registerResult = await leaveRegisterService.getLeaveRegister(
           {
             employeeId: employee._id,
-            leaveType: 'CL',
             balanceAsOf: true,
           },
           periodInfo.payrollCycle.month,
           periodInfo.payrollCycle.year
         );
 
-        // leaveRegisterService.getLeaveRegister returns the array directly, not { data: array }
-        const registerList = Array.isArray(registerResult) ? registerResult : (registerResult?.data || []);
-        const clEntry = registerList.find(e => e.casualLeave) || null;
-        const allowedRemaining = clEntry?.casualLeave?.allowedRemaining ?? null;
+        // use periodInfo.payrollCycle for month/year consistency
+        const targetMonth = periodInfo.payrollCycle.month;
+        const targetYear = periodInfo.payrollCycle.year;
 
-        if (allowedRemaining !== null && allowedRemaining !== undefined) {
-          if (numberOfDays > allowedRemaining) {
+        const registerList = Array.isArray(registerResult) ? registerResult : (registerResult?.data || []);
+        const empEntry = registerList[0];
+        const targetSub = empEntry?.monthlySubLedgers?.find(s => s.month === targetMonth && s.year === targetYear);
+        
+        // Use monthlyAllowedLimit (which includes substituted CCL/EL if configured) instead of just cl-cap
+        const allowedLimit = targetSub?.monthlyAllowedLimit ?? targetSub?.casualLeave?.allowedRemaining ?? null;
+
+        if (allowedLimit !== null && allowedLimit !== undefined) {
+          if (numberOfDays > allowedLimit) {
             return res.status(400).json({
               success: false,
-              error: `Casual Leave monthly limit exceeded for this payroll cycle. Remaining allowed days: ${allowedRemaining}, requested: ${numberOfDays}.`,
+              error: `Combined monthly leave limit exceeded for this payroll cycle. Total allowed days (including credits): ${allowedLimit}, requested: ${numberOfDays}.`,
             });
           }
         }

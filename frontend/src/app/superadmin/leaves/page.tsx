@@ -490,9 +490,6 @@ export default function LeavesPage() {
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
 
-  // CL balance for selected month (when leave type is CL)
-  const [clBalanceForMonth, setClBalanceForMonth] = useState<number | null>(null);
-  const [clBalanceLoading, setClBalanceLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
 
   // OD Holiday Info
@@ -620,6 +617,11 @@ export default function LeavesPage() {
 
   useEffect(() => {
     loadDashboardStats();
+  }, []);
+
+  // Load leave/OD type settings for apply dialogs (same source as workspace leaves page)
+  useEffect(() => {
+    loadTypes();
   }, []);
 
   // Fetch pay cycle start day setting on mount
@@ -997,25 +999,6 @@ export default function LeavesPage() {
         }
       }
 
-      if (applyType === 'leave') {
-        const isCL = formData.leaveType === 'CL' || formData.leaveType?.toUpperCase() === 'CL';
-        if (isCL) {
-          if (clBalanceForMonth === null && !clBalanceLoading) {
-            toast.error('CL balance could not be loaded. Please select employee and from date again, or try again.');
-            return;
-          }
-          if (clBalanceForMonth === null) {
-            toast.error('Please wait for CL balance to load.');
-            return;
-          }
-          const requestedDays = getRequestedDays(formData.fromDate, formData.toDate, formData.isHalfDay);
-          if (requestedDays > clBalanceForMonth) {
-            toast.error(`Casual Leave balance for this month is ${clBalanceForMonth} day(s). You selected ${requestedDays} day(s). Please reduce the date range.`);
-            return;
-          }
-        }
-      }
-
       setLoadingMessage('Saving application to database...');
       let response;
       const contactNum = formData.contactNumber || selectedEmployee.phone_number || '';
@@ -1231,54 +1214,8 @@ export default function LeavesPage() {
     checkApprovedRecords();
   }, [selectedEmployee, formData.fromDate, formData.toDate]);
 
-  const isCLSelected = applyType === 'leave' && (formData.leaveType === 'CL' || formData.leaveType?.toUpperCase() === 'CL');
   const targetEmployeeId = selectedEmployee?._id;
   const hasValidEmployeeId = targetEmployeeId && String(targetEmployeeId).length === 24 && !String(targetEmployeeId).startsWith('current');
-
-  useEffect(() => {
-    if (!isCLSelected || !formData.fromDate || !hasValidEmployeeId || !targetEmployeeId) {
-      setClBalanceForMonth(null);
-      return;
-    }
-    // Determine pay-cycle period from the selected date: send baseDate (not calendar month/year)
-    // so the backend resolves the correct period (e.g. 26 Jan–25 Feb for 31 Jan when cycle is 26–25).
-    const raw = formData.fromDate?.includes('T') ? formData.fromDate.split('T')[0] : (formData.fromDate || '');
-    const baseDateForApi = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : toISODate(formData.fromDate) || raw;
-    let cancelled = false;
-    setClBalanceLoading(true);
-    setClBalanceForMonth(null);
-    api.getLeaveRegister({
-      employeeId: String(targetEmployeeId),
-      baseDate: baseDateForApi,
-      balanceAsOf: true,
-    })
-      .then((res: any) => {
-        if (cancelled) return;
-        const data = res?.data;
-        if (Array.isArray(data) && data.length > 0 && data[0].casualLeave) {
-          const cl = data[0].casualLeave;
-          const balance = Number(cl.balance);
-          const allowedRaw = cl.allowedRemaining != null ? Number(cl.allowedRemaining) : balance;
-          const clCap = Number.isFinite(allowedRaw) ? Math.max(0, allowedRaw) : (Number.isFinite(balance) ? balance : 0);
-          setClBalanceForMonth(clCap);
-        } else {
-          setClBalanceForMonth(0);
-        }
-      })
-      .catch(() => { if (!cancelled) setClBalanceForMonth(null); })
-      .finally(() => { if (!cancelled) setClBalanceLoading(false); });
-    return () => { cancelled = true; };
-  }, [isCLSelected, formData.fromDate, hasValidEmployeeId, targetEmployeeId]);
-
-  useEffect(() => {
-    if (!isCLSelected || formData.isHalfDay || clBalanceForMonth == null || !formData.fromDate || !formData.toDate) return;
-    const requested = getRequestedDays(formData.fromDate, formData.toDate, false);
-    if (requested <= clBalanceForMonth) return;
-    const d = new Date(formData.fromDate);
-    d.setDate(d.getDate() + Math.max(0, Math.floor(clBalanceForMonth) - 1));
-    const maxTo = d.toISOString().split('T')[0];
-    setFormData(prev => (prev.toDate <= maxTo ? prev : { ...prev, toDate: maxTo }));
-  }, [isCLSelected, formData.isHalfDay, formData.fromDate, formData.toDate, clBalanceForMonth]);
 
   // Check holiday status for OD
   useEffect(() => {
@@ -2434,26 +2371,6 @@ export default function LeavesPage() {
                 )}
               </div>
 
-              {/* CL balance for month – show when Casual Leave selected */}
-              {isCLSelected && (
-                <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-3">
-                  {!formData.fromDate || !selectedEmployee ? (
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Select employee and from date to see CL balance for that month.</p>
-                  ) : clBalanceLoading ? (
-                    <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Loading CL balance...
-                    </div>
-                  ) : clBalanceForMonth !== null ? (
-                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                      <span className="text-green-600 dark:text-green-400">CL balance for this month: {clBalanceForMonth} day{clBalanceForMonth !== 1 ? 's' : ''}.</span>
-                      {' '}You can apply for up to <strong>{clBalanceForMonth}</strong> day{clBalanceForMonth !== 1 ? 's' : ''} only.
-                    </p>
-                  ) : (
-                    <p className="text-sm text-amber-600 dark:text-amber-400">Could not load CL balance. You must have a valid balance to apply for CL; try again or select employee/from date again.</p>
-                  )}
-                </div>
-              )}
 
               {/* OD Type Extended - Full Day / Half Day / Hours Selector */}
               {applyType === 'od' && (

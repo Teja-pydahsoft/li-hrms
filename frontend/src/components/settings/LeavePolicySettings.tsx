@@ -84,10 +84,26 @@ interface LeavePolicySettings {
     };
 }
 
+interface InitialSyncPreviewRow {
+    employeeId: string;
+    empNo: string;
+    employeeName: string;
+    designation?: string;
+    department?: string;
+    division?: string;
+    currentBalances: { CL: number; EL: number; CCL: number };
+    proposedBalances: { CL: number; EL: number; CCL: number };
+}
+
 const LeavePolicySettings = () => {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [settings, setSettings] = useState<any>(null);
+    const [syncPreviewOpen, setSyncPreviewOpen] = useState(false);
+    const [syncPreviewLoading, setSyncPreviewLoading] = useState(false);
+    const [syncPreviewRows, setSyncPreviewRows] = useState<InitialSyncPreviewRow[]>([]);
+    const [syncPreviewSearch, setSyncPreviewSearch] = useState('');
+    const [syncApplyReason, setSyncApplyReason] = useState('');
 
     useEffect(() => {
         loadSettings();
@@ -301,6 +317,78 @@ const LeavePolicySettings = () => {
         };
         
         updateSettings('earnedLeave.attendanceRules.attendanceRanges', '', updatedRanges);
+    };
+
+    const openInitialSyncPreview = async () => {
+        try {
+            setSyncPreviewLoading(true);
+            const res = await api.previewInitialCLSync({ page: 1, limit: 1000 });
+            if (!res?.success) {
+                toast.error(res?.message || 'Failed to load initial sync preview');
+                return;
+            }
+            const rows = (res?.data?.employees || []) as InitialSyncPreviewRow[];
+            setSyncPreviewRows(
+                rows.map((r) => ({
+                    ...r,
+                    proposedBalances: {
+                        CL: Number(r?.proposedBalances?.CL ?? r?.currentBalances?.CL ?? 0),
+                        EL: Number(r?.proposedBalances?.EL ?? r?.currentBalances?.EL ?? 0),
+                        CCL: Number(r?.proposedBalances?.CCL ?? r?.currentBalances?.CCL ?? 0),
+                    },
+                }))
+            );
+            setSyncPreviewSearch('');
+            setSyncApplyReason('');
+            setSyncPreviewOpen(true);
+        } catch (e: any) {
+            const msg = String(e?.message || '');
+            if (msg.toLowerCase().includes('not found')) {
+                toast.error('Preview API not available yet. Please restart backend and try again.');
+            } else {
+                toast.error(msg || 'Failed to load preview');
+            }
+        } finally {
+            setSyncPreviewLoading(false);
+        }
+    };
+
+    const applyInitialSyncFromPreview = async () => {
+        if (syncPreviewRows.length === 0) {
+            toast.info('No employees to apply');
+            return;
+        }
+        const { isConfirmed } = await alertConfirm(
+            'Apply reviewed initial sync?',
+            `This will create adjustment transactions for ${syncPreviewRows.length} employees.`,
+            'Apply'
+        );
+        if (!isConfirmed) return;
+
+        try {
+            setSaving(true);
+            const payload = {
+                confirm: true,
+                reason: syncApplyReason?.trim() || undefined,
+                employees: syncPreviewRows.map((r) => ({
+                    employeeId: r.employeeId,
+                    targetCL: Number(r.proposedBalances.CL ?? 0),
+                    targetEL: Number(r.proposedBalances.EL ?? 0),
+                    targetCCL: Number(r.proposedBalances.CCL ?? 0),
+                })),
+            };
+            const res = await api.applyInitialCLSync(payload);
+            if (res?.success) {
+                toast.success(res?.message || 'Initial sync applied successfully.');
+                setSyncPreviewOpen(false);
+            } else {
+                toast.error(res?.message || 'Initial sync apply failed.');
+            }
+        } catch (e: any) {
+            toast.error(e?.message || 'Initial sync apply failed.');
+        } finally {
+            setSaving(false);
+        }
     };
 
     if (loading) return <SettingsSkeleton />;
@@ -984,31 +1072,11 @@ const LeavePolicySettings = () => {
                                 <p className="text-xs text-gray-500 dark:text-gray-400">Sets each employee&apos;s CL to current policy (default or experience-based) + optional carry forward. Creates one ADJUSTMENT transaction per employee. Use after configuring settings or to align balances. This is not the annual reset.</p>
                                 <button
                                     type="button"
-                                    onClick={async () => {
-                                        const { isConfirmed } = await alertConfirm(
-                                            'Apply initial CL from policy?',
-                                            'This will set each employee\'s CL to current policy (default or experience-based) + optional carry forward, and create one ADJUSTMENT transaction per employee. This is not the annual reset.',
-                                            'Apply'
-                                        );
-                                        if (!isConfirmed) return;
-                                        try {
-                                            setSaving(true);
-                                            const res = await api.performInitialCLSync(true);
-                                            if (res?.success) {
-                                                toast.success(res.message || 'Initial CL sync completed.');
-                                            } else {
-                                                toast.error(res?.message || 'Initial CL sync failed.');
-                                            }
-                                        } catch (e: any) {
-                                            toast.error(e?.message || 'Initial CL sync failed.');
-                                        } finally {
-                                            setSaving(false);
-                                        }
-                                    }}
-                                    disabled={saving}
+                                    onClick={openInitialSyncPreview}
+                                    disabled={saving || syncPreviewLoading}
                                     className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl shadow-sm transition-colors"
                                 >
-                                    {saving ? 'Applying...' : 'Apply initial CL from policy'}
+                                    {syncPreviewLoading ? 'Preparing preview...' : 'Apply initial CL from policy'}
                                 </button>
                             </div>
                         </div>
@@ -1057,6 +1125,167 @@ const LeavePolicySettings = () => {
                     </section>
                 </div>
             </div>
+
+            {syncPreviewOpen && (
+                <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-6xl max-h-[90vh] overflow-hidden bg-white dark:bg-[#1E293B] rounded-2xl border border-gray-200 dark:border-gray-700 shadow-2xl flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Initial Sync Preview</h3>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">Review and edit CL / EL / CCL target balances before applying.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSyncPreviewOpen(false)}
+                                className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-700 grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <input
+                                type="text"
+                                value={syncPreviewSearch}
+                                onChange={(e) => setSyncPreviewSearch(e.target.value)}
+                                placeholder="Search employee / emp no / department"
+                                className="px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#0F172A] text-sm"
+                            />
+                            <input
+                                type="text"
+                                value={syncApplyReason}
+                                onChange={(e) => setSyncApplyReason(e.target.value)}
+                                placeholder="Reason (optional)"
+                                className="px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#0F172A] text-sm"
+                            />
+                            <div className="text-xs text-gray-500 dark:text-gray-400 self-center">
+                                Rows: {
+                                    syncPreviewRows.filter((r) => {
+                                        const t = syncPreviewSearch.toLowerCase().trim();
+                                        if (!t) return true;
+                                        return (
+                                            (r.employeeName || '').toLowerCase().includes(t) ||
+                                            (r.empNo || '').toLowerCase().includes(t) ||
+                                            (r.department || '').toLowerCase().includes(t)
+                                        );
+                                    }).length
+                                }
+                            </div>
+                        </div>
+
+                        <div className="overflow-auto p-4">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="text-left text-xs uppercase text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                                        <th className="py-2 pr-2">Employee</th>
+                                        <th className="py-2 pr-2">Current CL</th>
+                                        <th className="py-2 pr-2">Target CL</th>
+                                        <th className="py-2 pr-2">Current EL</th>
+                                        <th className="py-2 pr-2">Target EL</th>
+                                        <th className="py-2 pr-2">Current CCL</th>
+                                        <th className="py-2 pr-2">Target CCL</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {syncPreviewRows
+                                        .filter((r) => {
+                                            const t = syncPreviewSearch.toLowerCase().trim();
+                                            if (!t) return true;
+                                            return (
+                                                (r.employeeName || '').toLowerCase().includes(t) ||
+                                                (r.empNo || '').toLowerCase().includes(t) ||
+                                                (r.department || '').toLowerCase().includes(t)
+                                            );
+                                        })
+                                        .map((row) => (
+                                            <tr key={row.employeeId} className="border-b border-gray-100 dark:border-gray-800">
+                                                <td className="py-2 pr-2">
+                                                    <div className="font-medium text-gray-900 dark:text-white">{row.employeeName}</div>
+                                                    <div className="text-xs text-gray-500">{row.empNo} • {row.department || 'N/A'}</div>
+                                                </td>
+                                                <td className="py-2 pr-2">{Number(row.currentBalances?.CL || 0)}</td>
+                                                <td className="py-2 pr-2">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step={0.5}
+                                                        value={row.proposedBalances.CL}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value || 0);
+                                                            setSyncPreviewRows((prev) => {
+                                                                return prev.map((p) => p.employeeId === row.employeeId
+                                                                    ? { ...p, proposedBalances: { ...p.proposedBalances, CL: v } }
+                                                                    : p
+                                                                );
+                                                            });
+                                                        }}
+                                                        className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
+                                                    />
+                                                </td>
+                                                <td className="py-2 pr-2">{Number(row.currentBalances?.EL || 0)}</td>
+                                                <td className="py-2 pr-2">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step={0.5}
+                                                        value={row.proposedBalances.EL}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value || 0);
+                                                            setSyncPreviewRows((prev) => {
+                                                                return prev.map((p) => p.employeeId === row.employeeId
+                                                                    ? { ...p, proposedBalances: { ...p.proposedBalances, EL: v } }
+                                                                    : p
+                                                                );
+                                                            });
+                                                        }}
+                                                        className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
+                                                    />
+                                                </td>
+                                                <td className="py-2 pr-2">{Number(row.currentBalances?.CCL || 0)}</td>
+                                                <td className="py-2 pr-2">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step={0.5}
+                                                        value={row.proposedBalances.CCL}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value || 0);
+                                                            setSyncPreviewRows((prev) => {
+                                                                return prev.map((p) => p.employeeId === row.employeeId
+                                                                    ? { ...p, proposedBalances: { ...p.proposedBalances, CCL: v } }
+                                                                    : p
+                                                                );
+                                                            });
+                                                        }}
+                                                        className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
+                                                    />
+                                                </td>
+                                            </tr>
+                                        ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setSyncPreviewOpen(false)}
+                                className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={applyInitialSyncFromPreview}
+                                disabled={saving}
+                                className="px-4 py-2 text-sm rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                                {saving ? 'Applying...' : 'Proceed Apply'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Save — full width */}
             <div className="flex justify-end pt-6 border-t border-gray-200 dark:border-gray-800">

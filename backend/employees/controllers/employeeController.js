@@ -34,6 +34,7 @@ const { generatePassword, sendCredentials } = require('../../shared/services/pas
 const s3UploadService = require('../../shared/services/s3UploadService');
 const { getNextEmpNo } = require('../services/empNoService');
 const EmployeeHistory = require('../model/EmployeeHistory');
+const { initializeEmployeeLeaves } = require('../../leaves/services/employeeLeaveInitializationService');
 
 // ============== Helper Functions ==============
 
@@ -844,6 +845,10 @@ exports.createEmployee = async (req, res) => {
       .populate('department_id', 'name code')
       .populate('designation_id', 'name code');
 
+    // Initialize prorated leave balances for the new employee
+    const leaveInitResults = await initializeEmployeeLeaves(createdEmployee._id);
+    console.log('[createEmployee] Leave initialization results:', leaveInitResults);
+
     // Send notifications
     const notificationResults = await sendCredentials(
       createdEmployee,
@@ -857,6 +862,7 @@ exports.createEmployee = async (req, res) => {
         ? 'Employee created successfully in both databases'
         : 'Employee created successfully in MongoDB. MSSQL sync skipped/failed.',
       savedTo: results,
+      leaveInitialization: leaveInitResults,
       notificationResults,
       data: createdEmployee,
     });

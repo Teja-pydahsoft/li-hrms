@@ -28,7 +28,6 @@ import ShiftSettings from '@/components/settings/ShiftSettings';
 import EmployeeSettings from '@/components/settings/EmployeeSettings';
 import LeaveSettings from '@/components/settings/LeaveSettings';
 import LeavePolicySettings from '@/components/settings/LeavePolicySettings';
-import LeaveRegisterPage from '@/components/admin/LeaveRegisterPage';
 import LoanSettings from '@/components/settings/LoanSettings';
 import PayrollSettings from '@/components/settings/PayrollSettings';
 import AttendanceSettings from '@/components/settings/AttendanceSettings';
@@ -45,7 +44,6 @@ type TabType =
   | 'employee'
   | 'leave'
   | 'leave_policy'
-  | 'leave_register'
   | 'od'
   | 'ccl'
   | 'resignation'

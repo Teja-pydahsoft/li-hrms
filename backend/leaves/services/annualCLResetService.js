@@ -8,7 +8,7 @@ const Employee = require('../../employees/model/Employee');
 const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const leaveRegisterService = require('./leaveRegisterService');
 const dateCycleService = require('./dateCycleService');
-const { createISTDate, getTodayISTDateString } = require('../../shared/utils/dateUtils');
+const { createISTDate, getTodayISTDateString, extractISTComponents } = require('../../shared/utils/dateUtils');
 
 /**
  * Full years of experience from DOJ to asOfDate (inclusive of asOfDate).
@@ -377,7 +377,7 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate) {
             const maxCF = settings.carryForward.casualLeave.maxMonths || 12;
             carryForwardAllowed = Math.min(currentBalance, maxCF);
         }
-        const entitlement = getCasualLeaveEntitlement(settings, employee.doj, effectiveDate);
+        const { entitlement, proration } = await getInitialSyncEntitlement(settings, employee.doj, effectiveDate);
         const newBalance = entitlement + carryForwardAllowed;
 
         await leaveRegisterService.addTransaction({
@@ -405,6 +405,7 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate) {
             success: true,
             previousBalance: currentBalance,
             entitlement,
+            proration,
             carryForwarded: carryForwardAllowed,
             newBalance
         };
@@ -413,9 +414,66 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate) {
     }
 }
 
+/**
+ * Initial-sync entitlement with proration:
+ * - If DOJ is before FY start: full entitlement.
+ * - If DOJ is within current FY: prorated by remaining months in FY.
+ * - If DOJ is after FY end: 0.
+ */
+async function getInitialSyncEntitlement(settings, doj, effectiveDate) {
+    const fullEntitlement = getCasualLeaveEntitlement(settings, doj, effectiveDate);
+    if (!doj) {
+        return {
+            entitlement: fullEntitlement,
+            proration: { applied: false, reason: 'missing_doj', fullEntitlement, remainingMonths: 12, totalMonths: 12 }
+        };
+    }
+
+    const fy = await dateCycleService.getFinancialYearForDate(effectiveDate);
+    const fyStartIst = extractISTComponents(fy.startDate);
+    const fyEndIst = extractISTComponents(fy.endDate);
+    const dojIst = extractISTComponents(doj);
+
+    const dojYmd = `${dojIst.year}-${String(dojIst.month).padStart(2, '0')}-${String(dojIst.day).padStart(2, '0')}`;
+    const fyStartYmd = `${fyStartIst.year}-${String(fyStartIst.month).padStart(2, '0')}-${String(fyStartIst.day).padStart(2, '0')}`;
+    const fyEndYmd = `${fyEndIst.year}-${String(fyEndIst.month).padStart(2, '0')}-${String(fyEndIst.day).padStart(2, '0')}`;
+
+    if (dojYmd > fyEndYmd) {
+        return {
+            entitlement: 0,
+            proration: { applied: true, reason: 'joined_after_fy_end', fullEntitlement, remainingMonths: 0, totalMonths: 12 }
+        };
+    }
+    if (dojYmd <= fyStartYmd) {
+        return {
+            entitlement: fullEntitlement,
+            proration: { applied: false, reason: 'joined_before_fy_start', fullEntitlement, remainingMonths: 12, totalMonths: 12 }
+        };
+    }
+
+    const remainingMonths = ((fyEndIst.year - dojIst.year) * 12) + (fyEndIst.month - dojIst.month) + 1;
+    const safeRemaining = Math.max(0, Math.min(12, remainingMonths));
+    const raw = (Number(fullEntitlement) * safeRemaining) / 12;
+    const rounded = Math.round(raw * 2) / 2; // nearest 0.5
+
+    return {
+        entitlement: rounded,
+        proration: {
+            applied: true,
+            reason: 'joined_within_fy',
+            fullEntitlement,
+            remainingMonths: safeRemaining,
+            totalMonths: 12,
+            raw,
+            rounded
+        }
+    };
+}
+
 module.exports = {
     performAnnualCLReset,
     performInitialCLSync,
+    getInitialSyncEntitlement,
     getCLResetStatus,
     getNextResetDate,
     getResetDate

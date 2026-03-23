@@ -1,7 +1,11 @@
 const mongoose = require('mongoose');
 const LeaveRegister = require('../model/LeaveRegister');
+const LeaveRegisterMonthlySnapshot = require('../model/LeaveRegisterMonthlySnapshot');
 const Employee = require('../../employees/model/Employee');
 const Leave = require('../model/Leave');
+const LeaveSettings = require('../model/LeaveSettings');
+const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
+const { extractISTComponents, createISTDate } = require('../../shared/utils/dateUtils');
 
 /**
  * Leave Register Service
@@ -54,7 +58,10 @@ class LeaveRegisterService {
 
             return savedTransaction;
         } catch (error) {
-            console.error('Error adding leave transaction:', error);
+            if (error.name === 'ValidationError') {
+                console.error('[LeaveRegister] ValidationError fields:', Object.keys(error.errors || {}).join(', '));
+            }
+            console.error('Error adding leave transaction:', error.message);
             throw error;
         }
     }
@@ -103,6 +110,9 @@ class LeaveRegisterService {
 
     /**
      * Add leave debit (when leave is availed)
+     * Supports smart priority-based substitution (CL > CCL > EL) for CL applications.
+     * @param {Object} leaveRecord - The approved leave document
+     * @param {mongoose.Types.ObjectId} [approvedByUserId] - User ID of the approver
      */
     async addLeaveDebit(leaveRecord, approvedByUserId = null) {
         try {
@@ -115,22 +125,129 @@ class LeaveRegisterService {
             const designation = (employee.designation_id && employee.designation_id.name) || employee.designation?.name || 'N/A';
             const department = (employee.department_id && employee.department_id.name) || employee.department?.name || 'N/A';
 
-            const leaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
+            const originalLeaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
             const statusUpper = String(leaveRecord.status || 'approved').toUpperCase();
             const status = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'].includes(statusUpper) ? statusUpper : 'APPROVED';
-            
+            const approvedBy = approvedByUserId && mongoose.Types.ObjectId.isValid(approvedByUserId) ? approvedByUserId : undefined;
+
+            // --- SMART DEDUCTION LOGIC FOR CL ---
+            let clEntry = undefined;
+            let useCCL = false;
+            let useEL = false;
+
+            if (originalLeaveType === 'CL') {
+                const policy = await LeavePolicySettings.getSettings();
+                const settings = await LeaveSettings.getActiveSettings('leave');
+                const limitConfig = policy.monthlyLimitSettings;
+
+                // Priority Substitution only if CCL/EL are included in limit AND hidden from types list
+                const isCCLHidden = !settings?.types?.some(t => t.code === 'CCL' && t.isActive);
+                const isELHidden = !settings?.types?.some(t => t.code === 'EL' && t.isActive);
+                
+                useCCL = limitConfig.includeCCL && isCCLHidden;
+                useEL = limitConfig.includeEL && isELHidden;
+
+                const dateCycleService = require('./dateCycleService');
+                const periodInfo = await dateCycleService.getPeriodInfo(leaveRecord.fromDate);
+                
+                // Fetch current limits/balances snapshot for ALL relevant types (no leaveType filter)
+                const registerResult = await this.getLeaveRegister(
+                    { employeeId: leaveRecord.employeeId, balanceAsOf: true },
+                    periodInfo.payrollCycle.month,
+                    periodInfo.payrollCycle.year
+                );
+                const registerList = (Array.isArray(registerResult) ? registerResult : (registerResult?.data || []));
+                const empEntry = registerList[0]; // We filtered by employeeId
+                clEntry = empEntry?.monthlySubLedgers?.find(s => s.month === periodInfo.payrollCycle.month && s.year === periodInfo.payrollCycle.year);
+
+                if (useCCL || useEL) {
+                    // Priority 1: Use CL up to its monthly cap
+                    const clCap = clEntry?.casualLeave?.allowedRemaining ?? 0;
+                    const totalDaysRequested = leaveRecord.numberOfDays;
+                    
+                    let remainingToDeduct = totalDaysRequested;
+                    const deductions = [];
+
+                    // 1. CL (Priority 1)
+                    if (remainingToDeduct > 0) {
+                        const clSpend = Math.min(remainingToDeduct, clCap);
+                        if (clSpend > 0) {
+                            deductions.push({ type: 'CL', days: clSpend, reason: leaveRecord.purpose });
+                            remainingToDeduct -= clSpend;
+                        }
+                    }
+
+                    // 2. CCL (Priority 2)
+                    if (remainingToDeduct > 0 && useCCL) {
+                        const cclBalance = await this.getCurrentBalance(leaveRecord.employeeId, 'CCL', leaveRecord.fromDate);
+                        const cclSpend = Math.min(remainingToDeduct, cclBalance);
+                        if (cclSpend > 0) {
+                            deductions.push({ type: 'CCL', days: cclSpend, reason: `Substituted for CL Application: ${leaveRecord.purpose}` });
+                            remainingToDeduct -= cclSpend;
+                        }
+                    }
+
+                    // 3. EL (Priority 3)
+                    if (remainingToDeduct > 0 && useEL) {
+                        const elBalance = await this.getCurrentBalance(leaveRecord.employeeId, 'EL', leaveRecord.fromDate);
+                        const elSpend = Math.min(remainingToDeduct, elBalance);
+                        if (elSpend > 0) {
+                            deductions.push({ type: 'EL', days: elSpend, reason: `Substituted for CL Application: ${leaveRecord.purpose}` });
+                            remainingToDeduct -= elSpend;
+                        }
+                    }
+
+                    // 4. Any leftover (Force back to CL if total limit allowed but specific hidden credits exhausted)
+                    if (remainingToDeduct > 0) {
+                        // Find if we already have a CL entry to merge, or add new
+                        const clIdx = deductions.findIndex(d => d.type === 'CL');
+                        if (clIdx > -1) deductions[clIdx].days += remainingToDeduct;
+                        else deductions.push({ type: 'CL', days: remainingToDeduct, reason: leaveRecord.purpose });
+                    }
+
+                    // Execute Transactions
+                    let lastResult = null;
+                    for (const d of deductions) {
+                        lastResult = await this.addTransaction({
+                            employeeId: leaveRecord.employeeId,
+                            empNo: employee.emp_no,
+                            employeeName, designation, department,
+                            divisionId: employee.division_id,
+                            departmentId: employee.department_id,
+                            dateOfJoining: employee.doj,
+                            employmentStatus: employee.is_active ? 'active' : 'inactive',
+                            leaveType: d.type,
+                            transactionType: 'DEBIT',
+                            startDate: leaveRecord.fromDate,
+                            endDate: leaveRecord.toDate,
+                            days: d.days,
+                            applicationId: leaveRecord._id,
+                            applicationDate: leaveRecord.createdAt,
+                            approvalDate: leaveRecord.updatedAt,
+                            approvedBy, status,
+                            reason: d.reason,
+                            // Snapshot limits
+                            monthlyCLLimit: clEntry?.casualLeave?.monthlyCLLimit ?? 0,
+                            monthlyCCLLimit: useCCL ? (clEntry?.compensatoryOff?.cclBalance ?? 0) : 0,
+                            monthlyELLimit: useEL ? (clEntry?.earnedLeave?.elBalance ?? 0) : 0,
+                            monthlyCombinedLimit: clEntry?.monthlyAllowedLimit ?? 0,
+                            pendingLeavesBeforeAction: clEntry?.pendingAllDays ?? 0
+                        });
+                    }
+                    return lastResult;
+                }
+            }
+
+            // Fallback: Standard single-type debit
             const transactionData = {
                 employeeId: leaveRecord.employeeId,
                 empNo: employee.emp_no,
-                employeeName,
-                designation,
-                department,
+                employeeName, designation, department,
                 divisionId: employee.division_id,
                 departmentId: employee.department_id,
                 dateOfJoining: employee.doj,
                 employmentStatus: employee.is_active ? 'active' : 'inactive',
-
-                leaveType,
+                leaveType: originalLeaveType,
                 transactionType: 'DEBIT',
                 startDate: leaveRecord.fromDate,
                 endDate: leaveRecord.toDate,
@@ -138,9 +255,14 @@ class LeaveRegisterService {
                 applicationId: leaveRecord._id,
                 applicationDate: leaveRecord.createdAt,
                 approvalDate: leaveRecord.updatedAt,
-                approvedBy: approvedByUserId,
-                status,
-                reason: leaveRecord.purpose
+                approvedBy, status,
+                reason: leaveRecord.purpose,
+                // Snapshot limits if available
+                monthlyCLLimit: typeof clEntry !== 'undefined' ? (clEntry?.casualLeave?.monthlyCLLimit ?? 0) : 0,
+                monthlyCCLLimit: typeof clEntry !== 'undefined' ? (clEntry?.compensatoryOff?.cclBalance ?? 0) : 0,
+                monthlyELLimit: typeof clEntry !== 'undefined' ? (clEntry?.earnedLeave?.elBalance ?? 0) : 0,
+                monthlyCombinedLimit: typeof clEntry !== 'undefined' ? (clEntry?.monthlyAllowedLimit ?? 0) : 0,
+                pendingLeavesBeforeAction: typeof clEntry !== 'undefined' ? (clEntry?.pendingAllDays ?? 0) : 0
             };
 
             return await this.addTransaction(transactionData);
@@ -298,59 +420,6 @@ class LeaveRegisterService {
         }
     }
 
-    /**
-     * Add leave debit (when leave is availed)
-     * @param {Object} leaveRecord - The approved leave document
-     * @param {mongoose.Types.ObjectId} [approvedByUserId] - User ID of the approver (required for register; do not pass workflow.currentStepRole string)
-     */
-    async addLeaveDebit(leaveRecord, approvedByUserId = null) {
-        try {
-            const employee = await Employee.findById(leaveRecord.employeeId)
-                .populate('department_id', 'name')
-                .populate('designation_id', 'name');
-            if (!employee) {
-                throw new Error('Employee not found');
-            }
-
-            const employeeName = employee.employee_name || 'N/A';
-            const designation = (employee.designation_id && employee.designation_id.name) || employee.designation?.name || 'N/A';
-            const department = (employee.department_id && employee.department_id.name) || employee.department?.name || 'N/A';
-
-            const leaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
-            const statusUpper = String(leaveRecord.status || 'approved').toUpperCase();
-            const status = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'].includes(statusUpper) ? statusUpper : 'APPROVED';
-            const approvedBy = approvedByUserId && mongoose.Types.ObjectId.isValid(approvedByUserId) ? approvedByUserId : undefined;
-
-            const transactionData = {
-                employeeId: leaveRecord.employeeId,
-                empNo: employee.emp_no,
-                employeeName,
-                designation,
-                department,
-                divisionId: employee.division_id,
-                departmentId: employee.department_id,
-                dateOfJoining: employee.doj,
-                employmentStatus: employee.is_active ? 'active' : 'inactive',
-
-                leaveType,
-                transactionType: 'DEBIT',
-                startDate: leaveRecord.fromDate,
-                endDate: leaveRecord.toDate,
-                days: leaveRecord.numberOfDays,
-                applicationId: leaveRecord._id,
-                applicationDate: leaveRecord.createdAt,
-                approvalDate: leaveRecord.updatedAt,
-                approvedBy,
-                status,
-                reason: leaveRecord.purpose
-            };
-
-            return await this.addTransaction(transactionData);
-        } catch (error) {
-            console.error('Error adding leave debit:', error);
-            throw error;
-        }
-    }
 
     /**
      * Add an ADJUSTMENT transaction for an employee's leave balance.
@@ -467,6 +536,7 @@ class LeaveRegisterService {
             const fyStart = periodInfo.financialYear.startDate;
 
             const registerData = await LeaveRegister.getLeaveRegister(filters, null, null); // Pass null, null to use financialYear
+            console.log(`[DEBUG] getLeaveRegister: Filtered by FY=${fyName}, Found ${registerData.length} records`);
 
 
             // Batch-fetch all employees so we always have designation/department/division (model populate only has name, email)
@@ -515,7 +585,30 @@ class LeaveRegisterService {
             });
 
             // Group by employee and provide yearly ledger with monthly sub-ledgers
-            let groupedData = this.groupByEmployeeYearly(populatedData, fyStart);
+            // For UI month labels we must follow payroll-cycle month/year, not just calendar month.
+            let monthsInOrderOverride = null;
+            try {
+                const dateCycleService = require('./dateCycleService');
+                if (fyStart) {
+                    const base = new Date(fyStart);
+                    base.setDate(15);
+                    monthsInOrderOverride = [];
+                    for (let i = 0; i < 12; i++) {
+                        const repDate = new Date(base);
+                        repDate.setMonth(base.getMonth() + i);
+                        repDate.setDate(15);
+                        const periodInfo = await dateCycleService.getPeriodInfo(repDate);
+                        const m = periodInfo.payrollCycle.month;
+                        const y = periodInfo.payrollCycle.year;
+                        monthsInOrderOverride.push({ month: m, year: y, key: `${y}-${m}` });
+                    }
+                }
+            } catch (e) {
+                // Fallback to old behavior if period resolution fails.
+                monthsInOrderOverride = null;
+            }
+
+            let groupedData = this.groupByEmployeeYearly(populatedData, fyStart, monthsInOrderOverride);
 
 
 
@@ -630,12 +723,40 @@ class LeaveRegisterService {
             
             // Generate list of months in FY up to target month
             const monthsToProcess = [];
-            let curr = new Date(fyStart);
-            curr.setUTCDate(15); // middle of month
-            while (curr <= midOfMonth) {
-                monthsToProcess.push({ month: curr.getUTCMonth() + 1, year: curr.getUTCFullYear() });
-                curr.setUTCMonth(curr.getUTCMonth() + 1);
+            const fyIst = extractISTComponents(fyStart);
+            const targetIst = extractISTComponents(midOfMonth);
+            let cursor = createISTDate(`${fyIst.year}-${String(fyIst.month).padStart(2, '0')}-15`);
+            while (true) {
+                const cIst = extractISTComponents(cursor);
+                monthsToProcess.push({ month: cIst.month, year: cIst.year });
+                if (cIst.year > targetIst.year || (cIst.year === targetIst.year && cIst.month >= targetIst.month)) {
+                    break;
+                }
+                const nextMonth = cIst.month === 12 ? 1 : cIst.month + 1;
+                const nextYear = cIst.month === 12 ? cIst.year + 1 : cIst.year;
+                cursor = createISTDate(`${nextYear}-${String(nextMonth).padStart(2, '0')}-15`);
             }
+
+            // Precompute payroll-cycle windows for each month we might use in carry-forward.
+            // We bucket pending leaves by where their `fromDate` falls, matching how ledger debits
+            // are attributed (ledger uses leave.startDate derived from fromDate -> periodInfo).
+            const pendingStatuses = ['pending', 'hod_approved', 'manager_approved', 'hr_approved'];
+            const monthPayrollWindows = [];
+            {
+                for (const mInfo of monthsToProcess) {
+                    const mid = new Date(mInfo.year, mInfo.month - 1, 15);
+                    const pInfo = await dateCycleService.getPeriodInfo(mid);
+                    monthPayrollWindows.push({
+                        month: mInfo.month,
+                        year: mInfo.year,
+                        key: `${mInfo.year}-${mInfo.month}`,
+                        start: pInfo.payrollCycle.startDate,
+                        end: pInfo.payrollCycle.endDate
+                    });
+                }
+            }
+            const windowStartMs = monthPayrollWindows.length > 0 ? monthPayrollWindows[0].start.getTime() : null;
+            const windowEndMs = monthPayrollWindows.length > 0 ? monthPayrollWindows[monthPayrollWindows.length - 1].end.getTime() : null;
 
 
             for (const entry of groupedData) {
@@ -665,6 +786,49 @@ class LeaveRegisterService {
                 let limitCarrier = 0;
                 let finalMonthAllowed = 0;
 
+                // Pending lock buckets per month (used + pending should reduce carried quota).
+                const pendingByMonthKey = {};
+                for (const w of monthPayrollWindows) {
+                    pendingByMonthKey[w.key] = { pendingCLDays: 0, pendingAllDays: 0 };
+                }
+
+                // Fetch pending leaves once for the whole window, then bucket by monthPayrollWindows.
+                // This avoids querying per month.
+                if (windowStartMs != null && windowEndMs != null) {
+                    const pendingLeaves = await Leave.find({
+                        employeeId: empId,
+                        fromDate: { $gte: new Date(windowStartMs), $lte: new Date(windowEndMs) },
+                        status: { $in: pendingStatuses },
+                        isActive: true
+                    }).select('leaveType numberOfDays fromDate').lean();
+
+                    for (const l of pendingLeaves) {
+                        const leaveFromMs = new Date(l.fromDate).getTime();
+                        let bucketed = false;
+                        for (const w of monthPayrollWindows) {
+                            const startMs = w.start.getTime();
+                            const endMs = w.end.getTime();
+                            if (leaveFromMs >= startMs && leaveFromMs <= endMs) {
+                                const isCL = l.leaveType === 'CL';
+                                pendingByMonthKey[w.key].pendingAllDays += (l.numberOfDays || 0);
+                                if (isCL) pendingByMonthKey[w.key].pendingCLDays += (l.numberOfDays || 0);
+                                bucketed = true;
+                                break;
+                            }
+                        }
+                        // If a leaveFromMs doesn't fall in any window (edge case), ignore it for locking.
+                        if (!bucketed) continue;
+                    }
+
+                    // (Optional for UI drill-down): write pending into all month sub-ledgers we return.
+                    for (const sub of entry.monthlySubLedgers) {
+                        const key = `${sub.year}-${sub.month}`;
+                        if (!pendingByMonthKey[key]) continue;
+                        sub.casualLeave.pendingThisMonth = pendingByMonthKey[key].pendingCLDays;
+                        sub.pendingAllDays = pendingByMonthKey[key].pendingAllDays;
+                    }
+                }
+
                 for (let i = 0; i < monthsToProcess.length; i++) {
                     const mInfo = monthsToProcess[i];
                     const sub = entry.monthlySubLedgers.find(s => s.month === mInfo.month && s.year === mInfo.year);
@@ -690,6 +854,8 @@ class LeaveRegisterService {
 
                     // How much was used?
                     const used = sub?.casualLeave?.usedThisMonth || 0;
+                    const pendingCLDays = pendingByMonthKey[`${mInfo.year}-${mInfo.month}`]?.pendingCLDays || 0;
+                    const lockedCLDays = used + pendingCLDays;
                     
                     if (mInfo.month === baseMonthNum && mInfo.year === baseYearNum) {
                         finalMonthAllowed = monthLimit;
@@ -697,8 +863,10 @@ class LeaveRegisterService {
 
                     // Update carrier for next month
                     if (mode === 'accumulative') {
-                        limitCarrier = Math.max(0, monthLimit - used);
+                        // Carry forward only the un-locked (un-used AND not pending) quota.
+                        limitCarrier = Math.max(0, monthLimit - lockedCLDays);
                     } else {
+                        // strict/unrestricted: do not carry locked quota forward as per policy mode
                         limitCarrier = 0;
                     }
                 }
@@ -709,32 +877,69 @@ class LeaveRegisterService {
                     const clBalance = targetSub.casualLeave.balance || 0;
                     const cclBalance = targetSub.compensatoryOff.balance || 0;
                     const elBalance = targetSub.earnedLeave.balance || 0;
-
-                    const pendingLeaves = await Leave.find({
-                        employeeId: empId,
-                        fromDate: { $lte: targetPeriod.payrollCycle.endDate },
-                        toDate: { $gte: targetPeriod.payrollCycle.startDate },
-                        status: { $in: ['pending', 'hod_approved', 'manager_approved', 'hr_approved'] },
-                        isActive: true
-                    }).select('leaveType numberOfDays').lean();
-
-                    const pendingCLDays = pendingLeaves.filter(l => l.leaveType === 'CL').reduce((sum, l) => sum + (l.numberOfDays || 0), 0);
-                    const pendingAllDays = pendingLeaves.reduce((sum, l) => sum + (l.numberOfDays || 0), 0);
+                    const targetKey = `${baseYearNum}-${baseMonthNum}`;
+                    const pendingCLDays = pendingByMonthKey[targetKey]?.pendingCLDays || 0;
+                    const pendingAllDays = pendingByMonthKey[targetKey]?.pendingAllDays || 0;
 
                     targetSub.casualLeave.monthlyCLLimit = finalMonthAllowed;
                     targetSub.casualLeave.pendingThisMonth = pendingCLDays;
+                    targetSub.pendingAllDays = pendingAllDays;
+                    targetSub.casualLeave.clBalance = Math.max(0, clBalance);
+                    targetSub.compensatoryOff.cclBalance = Math.max(0, cclBalance);
+                    targetSub.compensatoryOff.isIncluded = !!limitConfig.includeCCL;
+                    targetSub.earnedLeave.elBalance = Math.max(0, elBalance);
+                    targetSub.earnedLeave.isIncluded = !!limitConfig.includeEL;
 
                     // Absolute Cap (Inclusive Mode) or Additive
                     if (limitConfig.logicType === 'CAP_INCLUSIVE') {
                         const totalPotential = clBalance + (limitConfig.includeCCL ? cclBalance : 0) + (limitConfig.includeEL ? elBalance : 0);
-                        targetSub.monthlyAllowedLimit = Math.max(0, Math.min(totalPotential, finalMonthAllowed));
+                        targetSub.monthlyLimitPooled = finalMonthAllowed;
+                        targetSub.monthlyAllowedLimit = Math.max(0, Math.min(totalPotential, finalMonthAllowed) - pendingAllDays);
                         targetSub.casualLeave.allowedRemaining = Math.max(0, Math.min(clBalance, finalMonthAllowed) - pendingCLDays);
                     } else {
+                        targetSub.monthlyLimitPooled = finalMonthAllowed + (limitConfig.includeCCL ? cclBalance : 0) + (limitConfig.includeEL ? elBalance : 0);
                         targetSub.casualLeave.allowedRemaining = Math.max(0, Math.min(clBalance, finalMonthAllowed) - pendingCLDays);
                         targetSub.monthlyAllowedLimit = targetSub.casualLeave.allowedRemaining + 
                                                       (limitConfig.includeCCL ? cclBalance : 0) + 
                                                       (limitConfig.includeEL ? elBalance : 0);
                     }
+
+                    // Persist monthly projection so reporting does not depend only on read-time calculations.
+                    // This stores monthly cap + usage/pending locks and pooled allowed values.
+                    await LeaveRegisterMonthlySnapshot.findOneAndUpdate(
+                        {
+                            employeeId: empId,
+                            financialYear: fyName,
+                            month: baseMonthNum,
+                            year: baseYearNum
+                        },
+                        {
+                            $set: {
+                                empNo: entry.employee?.empNo || emp?.emp_no || '',
+                                monthlyCLLimit: Number(finalMonthAllowed) || 0,
+                                clUsedThisMonth: Number(targetSub.casualLeave?.usedThisMonth || 0),
+                                clPendingThisMonth: Number(pendingCLDays || 0),
+                                clLockedThisMonth: Number((targetSub.casualLeave?.usedThisMonth || 0) + (pendingCLDays || 0)),
+                                clAllowedRemaining: Number(targetSub.casualLeave?.allowedRemaining || 0),
+                                monthlyLimitPooled: Number(targetSub.monthlyLimitPooled || 0),
+                                monthlyAllowedLimit: Number(targetSub.monthlyAllowedLimit || 0),
+                                pendingAllDays: Number(pendingAllDays || 0),
+                                clBalance: Number(clBalance || 0),
+                                cclBalance: Number(cclBalance || 0),
+                                elBalance: Number(elBalance || 0),
+                                policySnapshot: {
+                                    mode: mode || 'accumulative',
+                                    defaultMonthlyCap: Number(defaultMonthlyCap ?? 1),
+                                    maxUsableLimit: Number(maxUsableLimit ?? 4),
+                                    protectFutureMonths: !!protectFutureMonths,
+                                    includeCCL: !!limitConfig.includeCCL,
+                                    includeEL: !!limitConfig.includeEL,
+                                    logicType: limitConfig.logicType || 'ADDITIVE'
+                                }
+                            }
+                        },
+                        { upsert: true, new: false }
+                    );
                 }
             }
 
@@ -773,20 +978,57 @@ class LeaveRegisterService {
     /**
      * Get employee's complete leave register
      */
-    async getEmployeeRegister(employeeId) {
+    async getEmployeeRegister(employeeId, options = {}) {
         try {
+            const { financialYear = null, fyStart = null } = options;
+            const ledgerQuery = { employeeId };
+            if (financialYear) ledgerQuery.financialYear = financialYear;
+
             // Get all leave transactions for this employee
-            const allTransactions = await LeaveRegister.find({ employeeId })
+            const allTransactions = await LeaveRegister.find(ledgerQuery)
                 .sort({ year: 1, month: 1, createdAt: 1 })
                 .lean();
 
+            // For UI year drill-down we must build the 12-month sequence using payroll-cycle
+            // month/year (because ledger month label is based on payroll cycle end month).
+            let monthsInOrderOverride = null;
+            if (fyStart) {
+                const dateCycleService = require('./dateCycleService');
+                monthsInOrderOverride = [];
+                const base = new Date(fyStart);
+                base.setDate(15);
+                for (let i = 0; i < 12; i++) {
+                    const repDate = new Date(base);
+                    repDate.setMonth(base.getMonth() + i);
+                    repDate.setDate(15);
+                    const periodInfo = await dateCycleService.getPeriodInfo(repDate);
+                    const m = periodInfo.payrollCycle.month;
+                    const y = periodInfo.payrollCycle.year;
+                    monthsInOrderOverride.push({ month: m, year: y, key: `${y}-${m}` });
+                }
+            }
+
             // Use the yearly grouping logic
-            const grouped = this.groupByEmployeeYearly(allTransactions);
-            const employeeLedger = grouped[0] || {
+            const grouped = this.groupByEmployeeYearly(allTransactions, fyStart, monthsInOrderOverride);
+
+            let employeeLedger = grouped[0] || {
                 employeeId,
                 monthlySubLedgers: [],
                 yearlySummary: {}
             };
+
+            // If there are no transactions, still return a full 12-month sequence for UI stability.
+            if ((!employeeLedger.monthlySubLedgers || employeeLedger.monthlySubLedgers.length === 0) && monthsInOrderOverride) {
+                employeeLedger.monthlySubLedgers = monthsInOrderOverride.map(mi => ({
+                    month: mi.month,
+                    year: mi.year,
+                    casualLeave: { openingBalance: 0, accruedThisMonth: 0, earnedCCL: 0, usedThisMonth: 0, expired: 0, balance: 0, carryForward: 0, adjustments: 0 },
+                    earnedLeave: { openingBalance: 0, accruedThisMonth: 0, usedThisMonth: 0, balance: 0, adjustments: 0 },
+                    compensatoryOff: { openingBalance: 0, earned: 0, used: 0, expired: 0, balance: 0, adjustments: 0 },
+                    totalPaidBalance: 0,
+                    transactions: []
+                }));
+            }
 
             // Enhance with yearly summary
             const yearlySummary = {
@@ -865,7 +1107,7 @@ class LeaveRegisterService {
     /**
      * Group transactions by employee with monthly sub-ledgers and individual transactions.
      */
-    groupByEmployeeYearly(transactions, financialYearStart = null) {
+    groupByEmployeeYearly(transactions, fyStart = null, monthsInOrderOverride = null) {
         const grouped = {};
 
         // 1. Group transactions by employee
@@ -943,12 +1185,27 @@ class LeaveRegisterService {
             // Determine full sequence of months to show if fyStart was provided
             let monthsInOrder = [];
             if (fyStart) {
-                let curr = new Date(fyStart);
-                curr.setUTCDate(15);
-                for (let i = 0; i < 12; i++) {
-                    const m = curr.getUTCMonth() + 1;
-                    const y = curr.getUTCFullYear();
-                    const key = `${y}-${m}`;
+                const monthsInOrderSource = Array.isArray(monthsInOrderOverride) && monthsInOrderOverride.length > 0
+                    ? monthsInOrderOverride
+                    : (() => {
+                        const fyIst = extractISTComponents(fyStart);
+                        const seq = [];
+                        let m = fyIst.month;
+                        let y = fyIst.year;
+                        for (let i = 0; i < 12; i++) {
+                            seq.push({ month: m, year: y, key: `${y}-${m}` });
+                            if (m === 12) {
+                                m = 1;
+                                y += 1;
+                            } else {
+                                m += 1;
+                            }
+                        }
+                        return seq;
+                    })();
+
+                for (const mi of monthsInOrderSource) {
+                    const { month: m, year: y, key } = mi;
                     
                     if (empEntry.months[key]) {
                         monthsInOrder.push(empEntry.months[key]);
@@ -964,7 +1221,6 @@ class LeaveRegisterService {
                             transactions: []
                         });
                     }
-                    curr.setUTCMonth(curr.getUTCMonth() + 1);
                 }
             } else {
                 monthsInOrder = Object.values(empEntry.months).sort((a, b) => (a.year - b.year) || (a.month - b.month));
@@ -1062,10 +1318,11 @@ class LeaveRegisterService {
 
     async updateEmployeeBalance(employeeId, leaveType) {
         try {
-            const currentBalance = await this.getCurrentBalance(employeeId, leaveType);
+            // Get the absolute latest balance regardless of date for the employee model sync
+            const currentBalance = await this.getCurrentBalance(employeeId, leaveType, new Date('9999-12-31'));
 
-            // Update employee model based on leave type
             const updateField = this.getEmployeeBalanceField(leaveType);
+            console.log(`[LeaveRegister] Syncing ${leaveType} balance (${currentBalance}) to Employee field ${updateField}`);
             await Employee.findByIdAndUpdate(employeeId, {
                 [updateField]: currentBalance
             });

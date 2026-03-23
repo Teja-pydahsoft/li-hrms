@@ -212,22 +212,36 @@ class DateCycleService {
     }
 
     /**
-     * Format period info for display
+     * Calculate remaining payroll periods in financial year from a given date
+     * Used for prorated leave allocation based on payroll cycles
      */
-    formatPeriodInfo(periodInfo) {
-        const { payrollCycle, financialYear } = periodInfo;
-        
-        return {
-            payrollCycle: {
-                display: `${payrollCycle.startDate.toLocaleDateString()} - ${payrollCycle.endDate.toLocaleDateString()}`,
-                monthYear: `${payrollCycle.month}/${payrollCycle.year}`,
-                isCustom: payrollCycle.isCustomCycle
-            },
-            financialYear: {
-                display: financialYear.name,
-                isCustom: financialYear.isCustomYear
+    async calculateRemainingPayrollPeriodsInFY(dateOfJoining, fyEnd, payrollCycle) {
+        try {
+            const doj = new Date(dateOfJoining);
+            const endDate = new Date(fyEnd);
+            
+            // Get all payroll cycles from DOJ to FY end
+            const allCycles = await this.getPayrollCyclesInRange(doj, endDate);
+            
+            // Count cycles where DOJ falls within the cycle or cycles that start after DOJ
+            let remainingPeriods = 0;
+            
+            for (const cycle of allCycles) {
+                // If DOJ is within this cycle or cycle starts after DOJ, count it
+                if (doj <= cycle.endDate) {
+                    remainingPeriods++;
+                }
             }
-        };
+            
+            // If DOJ is in the middle of a cycle, we still count it as a full period
+            // for prorated calculation purposes (simplified approach)
+            
+            return Math.max(1, remainingPeriods); // At least 1 period
+            
+        } catch (error) {
+            console.error('Error calculating remaining payroll periods:', error);
+            return 12; // Fallback to 12 months
+        }
     }
 }
 
