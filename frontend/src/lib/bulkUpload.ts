@@ -447,6 +447,10 @@ export const matchUserByName = (
 export interface ValidateEmployeeRowOptions {
   /** When true, emp_no is optional and empty values are shown as (Auto) in preview */
   autoGenerateEmpNo?: boolean;
+  /** When true, resolve group_name / group to employee_group_id */
+  customEmployeeGroupingEnabled?: boolean;
+  /** Active employee groups (name → id) */
+  employeeGroups?: { _id: string; name: string; isActive?: boolean }[];
 }
 
 /**
@@ -504,6 +508,11 @@ const HEADER_MAP: { [key: string]: string } = {
   'ifsc': 'ifsc_code',
   'salary_mode': 'salary_mode',
   'salary mode': 'salary_mode',
+  'group_name': 'group_name',
+  'group': 'group_name',
+  'employee group': 'group_name',
+  'employee_group': 'group_name',
+  'employee_group_name': 'group_name',
 };
 
 /**
@@ -520,7 +529,11 @@ export const validateEmployeeRow = (
   const errors: string[] = [];
   const fieldErrors: { [key: string]: string } = {};
   const mappedRow: ParsedRow = { ...row };
-  const { autoGenerateEmpNo = false } = options;
+  const {
+    autoGenerateEmpNo = false,
+    customEmployeeGroupingEnabled = false,
+    employeeGroups = [],
+  } = options;
 
   // Required fields: emp_no only when auto-generate is OFF
   const empNoBlank = row.emp_no == null || String(row.emp_no || '').trim() === '';
@@ -583,6 +596,26 @@ export const validateEmployeeRow = (
   } else if (desigInput) {
     errors.push(`Designation "${desigInput}" not found`);
     fieldErrors.designation_name = 'Not found';
+  }
+
+  // Map employee group (optional)
+  if (customEmployeeGroupingEnabled && employeeGroups.length > 0) {
+    const gInput = mappedRow.group_name || mappedRow.group || mappedRow.employee_group_name;
+    if (gInput) {
+      const activeGroups = employeeGroups.filter((g) => g.isActive !== false);
+      const g = activeGroups.find(
+        (x) => x.name.toLowerCase().trim() === String(gInput).toLowerCase().trim()
+      );
+      if (g) {
+        mappedRow.employee_group_id = g._id;
+        mappedRow.group_name = g.name;
+      } else {
+        errors.push(`Employee group "${gInput}" not found`);
+        fieldErrors.group_name = 'Not found';
+      }
+    }
+  } else {
+    delete mappedRow.employee_group_id;
   }
 
   // Map reporting_to (if provided by name)

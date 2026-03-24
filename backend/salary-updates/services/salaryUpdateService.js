@@ -5,11 +5,12 @@ const AllowanceDeductionMaster = require('../../allowances-deductions/model/Allo
 const Division = require('../../departments/model/Division');
 const Department = require('../../departments/model/Department');
 const Designation = require('../../departments/model/Designation');
+const EmployeeGroup = require('../../employees/model/EmployeeGroup');
 const SecondSalarySyncService = require('../../payroll/services/secondSalarySyncService');
 const { getTodayISTDateString } = require('../../shared/utils/dateUtils');
 
 /** Field IDs that store ObjectIds; we show names in template and resolve names on upload */
-const REF_FIELD_IDS = ['division_id', 'department_id', 'designation_id'];
+const REF_FIELD_IDS = ['division_id', 'department_id', 'designation_id', 'employee_group_id'];
 
 /** Top-level Employee schema paths (excluding _id, __v, timestamps, dynamicFields). Non-schema fields go into dynamicFields. */
 const EMPLOYEE_TOP_LEVEL_PATHS = new Set(
@@ -37,6 +38,9 @@ const STATIC_HEADER_TO_FIELD = {
     [normalizeHeader('Gross Salary')]: 'gross_salary',
     [normalizeHeader('proposedSalary')]: 'proposedSalary',
     [normalizeHeader('Proposed Salary')]: 'proposedSalary',
+    [normalizeHeader('employee_group_id')]: 'employee_group_id',
+    [normalizeHeader('Employee Group')]: 'employee_group_id',
+    [normalizeHeader('employee_group')]: 'employee_group_id',
 };
 
 /**
@@ -182,17 +186,20 @@ const generateEmployeeUpdateTemplateData = async (selectedFieldIds) => {
         const employees = await Employee.find({ is_active: true }).sort({ emp_no: 1 }).lean();
 
         // Fetch ref collections to show names instead of ObjectIds in template
-        const [divisions, departments, designations] = await Promise.all([
+        const [divisions, departments, designations, employeeGroups] = await Promise.all([
             Division.find({ isActive: true }).select('_id name code').lean(),
             Department.find({ isActive: true }).select('_id name code').lean(),
-            Designation.find({ isActive: true }).select('_id name code').lean()
+            Designation.find({ isActive: true }).select('_id name code').lean(),
+            EmployeeGroup.find({}).select('_id name code isActive').lean(),
         ]);
         const divisionIdToName = {};
         const departmentIdToName = {};
         const designationIdToName = {};
+        const employeeGroupIdToName = {};
         divisions.forEach(d => { divisionIdToName[String(d._id)] = d.name || d.code || ''; });
         departments.forEach(d => { departmentIdToName[String(d._id)] = d.name || d.code || ''; });
         designations.forEach(d => { designationIdToName[String(d._id)] = d.name || d.code || ''; });
+        employeeGroups.forEach(g => { employeeGroupIdToName[String(g._id)] = g.name || g.code || ''; });
 
         const headers = ['Employee ID'];
         ids.forEach(id => {
@@ -215,6 +222,7 @@ const generateEmployeeUpdateTemplateData = async (selectedFieldIds) => {
                     if (id === 'division_id') val = divisionIdToName[idStr] || '';
                     else if (id === 'department_id') val = departmentIdToName[idStr] || '';
                     else if (id === 'designation_id') val = designationIdToName[idStr] || '';
+                    else if (id === 'employee_group_id') val = employeeGroupIdToName[idStr] || '';
                     else val = idStr;
                 }
                 if (val === undefined || val === null) val = '';
@@ -236,10 +244,11 @@ const generateEmployeeUpdateTemplateData = async (selectedFieldIds) => {
  * Build lookup maps: name/code -> _id for Division, Department, Designation (resolve names on upload)
  */
 const buildRefLookups = async () => {
-    const [divisions, departments, designations] = await Promise.all([
+    const [divisions, departments, designations, employeeGroups] = await Promise.all([
         Division.find({ isActive: true }).select('_id name code').lean(),
         Department.find({ isActive: true }).select('_id name code').lean(),
-        Designation.find({ isActive: true }).select('_id name code').lean()
+        Designation.find({ isActive: true }).select('_id name code').lean(),
+        EmployeeGroup.find({}).select('_id name code isActive').lean(),
     ]);
     const byKey = (list) => {
         const map = {};
@@ -253,7 +262,8 @@ const buildRefLookups = async () => {
     return {
         divisionByKey: byKey(divisions),
         departmentByKey: byKey(departments),
-        designationByKey: byKey(designations)
+        designationByKey: byKey(designations),
+        employeeGroupByKey: byKey(employeeGroups),
     };
 };
 
@@ -267,7 +277,8 @@ const resolveRefValue = (value, fieldId, lookups) => {
     if (mongoose.Types.ObjectId.isValid(str) && str.length === 24) return new mongoose.Types.ObjectId(str);
     const byKey = fieldId === 'division_id' ? lookups.divisionByKey
         : fieldId === 'department_id' ? lookups.departmentByKey
-            : fieldId === 'designation_id' ? lookups.designationByKey : null;
+            : fieldId === 'designation_id' ? lookups.designationByKey
+                : fieldId === 'employee_group_id' ? lookups.employeeGroupByKey : null;
     if (!byKey) return null;
     return byKey[str.toLowerCase()] || byKey[str.toUpperCase()] || null;
 };

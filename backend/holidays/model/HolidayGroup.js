@@ -28,6 +28,13 @@ const holidayGroupSchema = new mongoose.Schema(
                     },
                 ],
                 // If departments array is empty, it applies to ALL departments in this division
+                employeeGroups: [
+                    {
+                        type: mongoose.Schema.Types.ObjectId,
+                        ref: 'EmployeeGroup',
+                    },
+                ],
+                // If employeeGroups array is empty, it applies to ALL employee groups in the selected scope
             },
         ],
         isActive: {

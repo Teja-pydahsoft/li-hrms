@@ -81,6 +81,7 @@ interface DynamicEmployeeFormProps {
   departments?: Array<{ _id: string; name: string }>;
   designations?: Array<{ _id: string; name: string; department: string }>;
   divisions?: Array<{ _id: string; name: string }>;
+  employeeGroups?: Array<{ _id: string; name: string; isActive?: boolean }>;
   onSettingsLoaded?: (settings: FormSettings) => void;
   simpleUpload?: boolean;
   isViewMode?: boolean;
@@ -99,12 +100,15 @@ export default function DynamicEmployeeForm({
   simpleUpload = false,
   isViewMode = false,
   divisions = [],
+  employeeGroups = [],
   excludeFields = [],
   isEditingExistingEmployee = false,
 }: DynamicEmployeeFormProps) {
   const [settings, setSettings] = useState<FormSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<Array<{ _id: string; name: string; email: string; role?: string; divisionMapping?: Array<{ division?: { _id: string } | string }> }>>([]);
+  const [groupingEnabled, setGroupingEnabled] = useState(false);
+  const [fallbackEmployeeGroups, setFallbackEmployeeGroups] = useState<Array<{ _id: string; name: string; isActive?: boolean }>>([]);
 
   // Reporting-to dropdown: filter by selected division using each user's divisionMapping; super_admin and sub_admin shown for all divisions
   const divisionId = typeof formData?.division_id === 'object' ? (formData?.division_id as any)?._id : formData?.division_id;
@@ -127,6 +131,7 @@ export default function DynamicEmployeeForm({
   useEffect(() => {
     loadSettings();
     loadUsers();
+    loadGroupingConfig();
   }, []);
 
   const loadUsers = async () => {
@@ -160,6 +165,29 @@ export default function DynamicEmployeeForm({
       setLoading(false);
     }
   };
+
+  const loadGroupingConfig = async () => {
+    try {
+      const settingRes = await api.getSetting('custom_employee_grouping_enabled');
+      const isEnabled = !!(settingRes?.success && settingRes?.data?.value);
+      setGroupingEnabled(isEnabled);
+      if (!isEnabled) {
+        setFallbackEmployeeGroups([]);
+        return;
+      }
+      const groupsRes = await api.getEmployeeGroups(true);
+      if (groupsRes.success && Array.isArray(groupsRes.data)) {
+        setFallbackEmployeeGroups(groupsRes.data);
+      } else {
+        setFallbackEmployeeGroups([]);
+      }
+    } catch {
+      setGroupingEnabled(false);
+      setFallbackEmployeeGroups([]);
+    }
+  };
+
+  const effectiveEmployeeGroups = employeeGroups.length > 0 ? employeeGroups : fallbackEmployeeGroups;
 
   const handleFieldChange = (fieldId: string, value: any) => {
     const newData = {
@@ -206,6 +234,12 @@ export default function DynamicEmployeeForm({
     handleFieldChange(fieldId, newArray);
   };
 
+  const getEntityIdValue = (val: any): string => {
+    if (val == null || val === '') return '';
+    if (typeof val === 'object') return String(val._id || '');
+    return String(val);
+  };
+
   const renderField = (field: Field, groupId: string, arrayIndex?: number) => {
     if (excludeFields.includes(field.id)) return null;
 
@@ -227,15 +261,22 @@ export default function DynamicEmployeeForm({
         ? 'Gross Salary'
         : field.label;
 
-    // Special handling for division_id, department_id and designation_id
+  // Special handling for division_id, department_id, designation_id and employee_group_id
     if (field.id === 'division_id') {
+      const selectedDivisionId = getEntityIdValue(value);
+      const selectedDivisionOptionMissing =
+        selectedDivisionId && !divisions.some((div) => String(div._id) === selectedDivisionId);
+      const selectedDivisionLabel =
+        typeof value === 'object'
+          ? String((value as any)?.name || selectedDivisionId)
+          : selectedDivisionId;
       return (
         <div key={fieldKey}>
           <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
             {field.label} {field.isRequired && '*'}
           </label>
           <select
-            value={value || ''}
+            value={selectedDivisionId}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode}
@@ -243,6 +284,9 @@ export default function DynamicEmployeeForm({
               }`}
           >
             <option value="">Select Division</option>
+            {selectedDivisionOptionMissing && (
+              <option value={selectedDivisionId}>{selectedDivisionLabel}</option>
+            )}
             {divisions.map((div) => (
               <option key={div._id} value={div._id}>
                 {div.name}
@@ -283,13 +327,20 @@ export default function DynamicEmployeeForm({
         });
       }
 
+      const selectedDepartmentId = getEntityIdValue(value);
+      const selectedDepartmentOptionMissing =
+        selectedDepartmentId && !filteredDepartments.some((dept) => String(dept._id) === selectedDepartmentId);
+      const selectedDepartmentLabel =
+        typeof value === 'object'
+          ? String((value as any)?.name || selectedDepartmentId)
+          : selectedDepartmentId;
       return (
         <div key={fieldKey}>
           <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
             {field.label} {field.isRequired && '*'}
           </label>
           <select
-            value={value || ''}
+            value={selectedDepartmentId}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode || (divisions.length > 0 && !formData.division_id)}
@@ -297,6 +348,9 @@ export default function DynamicEmployeeForm({
               }`}
           >
             <option value="">{formData.division_id ? 'Select Department' : 'Please select a Division first'}</option>
+            {selectedDepartmentOptionMissing && (
+              <option value={selectedDepartmentId}>{selectedDepartmentLabel}</option>
+            )}
             {filteredDepartments.map((dept) => (
               <option key={dept._id} value={dept._id}>
                 {dept.name}
@@ -311,13 +365,20 @@ export default function DynamicEmployeeForm({
     if (field.id === 'designation_id') {
       // Show all designations (no department filtering)
       const filteredDesignations = designations;
+      const selectedDesignationId = getEntityIdValue(value);
+      const selectedDesignationOptionMissing =
+        selectedDesignationId && !filteredDesignations.some((desig) => String(desig._id) === selectedDesignationId);
+      const selectedDesignationLabel =
+        typeof value === 'object'
+          ? String((value as any)?.name || selectedDesignationId)
+          : selectedDesignationId;
       return (
         <div key={fieldKey}>
           <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
             {field.label} {field.isRequired && '*'}
           </label>
           <select
-            value={value || ''}
+            value={selectedDesignationId}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode}
@@ -325,9 +386,43 @@ export default function DynamicEmployeeForm({
               }`}
           >
             <option value="">Select Designation</option>
+            {selectedDesignationOptionMissing && (
+              <option value={selectedDesignationId}>{selectedDesignationLabel}</option>
+            )}
             {filteredDesignations.map((desig) => (
               <option key={desig._id} value={desig._id}>
                 {desig.name}
+              </option>
+            ))}
+          </select>
+          {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
+        </div>
+      );
+    }
+
+    if (field.id === 'employee_group_id') {
+      const activeGroups = effectiveEmployeeGroups.filter((g) => g.isActive !== false);
+      const selectedGroupId =
+        value && typeof value === 'object'
+          ? ((value as any)._id || '')
+          : (value || '');
+      return (
+        <div key={fieldKey}>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            {field.label} {field.isRequired && '*'}
+          </label>
+          <select
+            value={selectedGroupId}
+            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            required={field.isRequired}
+            disabled={isViewMode}
+            className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
+              }`}
+          >
+            <option value="">Select Employee Group</option>
+            {activeGroups.map((group) => (
+              <option key={group._id} value={group._id}>
+                {group.name}
               </option>
             ))}
           </select>
@@ -1469,6 +1564,10 @@ export default function DynamicEmployeeForm({
   };
 
   const qualificationsBlock = renderQualifications();
+  const shouldRenderEmployeeGroup =
+    groupingEnabled &&
+    effectiveEmployeeGroups.length > 0 &&
+    !excludeFields.includes('employee_group_id');
 
   return (
     <div className="space-y-6">
@@ -1507,6 +1606,16 @@ export default function DynamicEmployeeForm({
                   }`}
               >
                 {sortedFields.map((field) => renderField(field, group.id))}
+                {group.id === 'basic_info' && shouldRenderEmployeeGroup && renderField({
+                  id: 'employee_group_id',
+                  label: 'Employee Group',
+                  type: 'select',
+                  dataType: 'string',
+                  isRequired: false,
+                  isSystem: true,
+                  order: 9999,
+                  isEnabled: true,
+                } as Field, group.id)}
               </div>
             </div>
 
@@ -1517,64 +1626,6 @@ export default function DynamicEmployeeForm({
           </div>
         );
       })}
-
-      {/* Deduction preferences: statutory (PT, ESI, PF) and attendance (late/early/permission/absent). Default all true. */}
-      {!excludeFields.includes('deductionPreferences') && (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Deduction preferences
-          </h3>
-          <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
-            Choose which statutory and attendance deductions apply to this employee. Unchecked items are not calculated (amount 0).
-          </p>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Statutory</p>
-              <div className="space-y-2">
-                {[
-                  { key: 'applyProfessionTax', label: 'Profession Tax' },
-                  { key: 'applyESI', label: 'ESI' },
-                  { key: 'applyPF', label: 'PF' },
-                ].map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData[key] !== false}
-                      onChange={(e) => handleFieldChange(key, e.target.checked)}
-                      disabled={isViewMode}
-                      className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500 dark:border-slate-600 dark:bg-slate-800"
-                    />
-                    <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Attendance deduction</p>
-              <div className="space-y-2">
-                {[
-                  { key: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
-                  { key: 'deductLateIn', label: 'Late-ins' },
-                  { key: 'deductEarlyOut', label: 'Early-outs' },
-                  { key: 'deductPermission', label: 'Permission' },
-                  { key: 'deductAbsent', label: 'Absents (extra LOP)' },
-                ].map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData[key] !== false}
-                      onChange={(e) => handleFieldChange(key, e.target.checked)}
-                      disabled={isViewMode}
-                      className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500 dark:border-slate-600 dark:bg-slate-800"
-                    />
-                    <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* If no personal info group exists, still show qualifications at the end */}
       {!sortedGroups.some((g) => g.id === 'personal_info') && qualificationsBlock}

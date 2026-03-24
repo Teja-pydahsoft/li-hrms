@@ -56,6 +56,8 @@ interface Employee {
   division_id?: string | { _id: string; name: string };
   department_id?: string | { _id: string; name: string };
   designation_id?: string | { _id: string; name: string };
+  employee_group_id?: string | { _id: string; name: string };
+  employee_group?: { _id: string; name: string };
   division?: { _id: string; name: string; code?: string };
   department?: { _id: string; name: string; code?: string };
   designation?: { _id: string; name: string; code?: string };
@@ -103,6 +105,8 @@ interface EmployeeApplication {
   division_id?: string | { _id: string; name: string; code?: string };
   department_id?: string | { _id: string; name: string; code?: string };
   designation_id?: string | { _id: string; name: string; code?: string };
+  employee_group_id?: string | { _id: string; name: string; code?: string };
+  employee_group?: { _id: string; name: string; code?: string };
   department?: { _id: string; name: string; code?: string };
   designation?: { _id: string; name: string; code?: string };
   proposedSalary: number;
@@ -152,6 +156,7 @@ const initialFormState: Partial<Employee> = {
   division_id: '',
   department_id: '',
   designation_id: '',
+  employee_group_id: '',
   doj: '',
   dob: '',
   gross_salary: undefined,
@@ -218,6 +223,8 @@ export default function EmployeesPage() {
   const [applicationSearchTerm, setApplicationSearchTerm] = useState('');
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [allowEmployeeBulkProcess, setAllowEmployeeBulkProcess] = useState(false);
+  const [customEmployeeGroupingEnabled, setCustomEmployeeGroupingEnabled] = useState(false);
+  const [employeeGroups, setEmployeeGroups] = useState<{ _id: string; name: string; isActive?: boolean }[]>([]);
   const [autoGenerateEmployeeNumber, setAutoGenerateEmployeeNumber] = useState(false);
   /** Toggle in bulk preview: when true, ignore emp numbers from file (auto-generate). Defaults from settings when dialog opens. */
   const [bulkPreviewAutoGenerateEmpNo, setBulkPreviewAutoGenerateEmpNo] = useState(false);
@@ -779,6 +786,35 @@ export default function EmployeesPage() {
       .catch(() => setAllowEmployeeBulkProcess(false));
   }, []);
 
+  const loadEmployeeGroupingConfig = async () => {
+    try {
+      const res = await api.getSetting('custom_employee_grouping_enabled');
+      const on = !!(res?.success && res?.data != null && res.data.value);
+      setCustomEmployeeGroupingEnabled(on);
+      if (!on) {
+        setEmployeeGroups([]);
+        return;
+      }
+      const g = await api.getEmployeeGroups(true);
+      if (g.success && Array.isArray(g.data)) setEmployeeGroups(g.data);
+      else setEmployeeGroups([]);
+    } catch {
+      setCustomEmployeeGroupingEnabled(false);
+      setEmployeeGroups([]);
+    }
+  };
+
+  useEffect(() => {
+    loadEmployeeGroupingConfig();
+  }, []);
+
+  // Re-check latest grouping setting when dialogs open (setting might have changed in another page).
+  useEffect(() => {
+    if (showApplicationDialog || showDialog || showBulkUpload) {
+      loadEmployeeGroupingConfig();
+    }
+  }, [showApplicationDialog, showDialog, showBulkUpload]);
+
   // Load employee settings when bulk upload dialog opens; sync toggle default for preview
   useEffect(() => {
     if (!showBulkUpload) return;
@@ -815,14 +851,13 @@ export default function EmployeesPage() {
       const response = await api.getFormSettings();
       if (response.success && response.data) {
         setFormSettings(response.data);
-        generateDynamicTemplate(response.data);
       }
     } catch (err) {
       console.error('Error loading form settings:', err);
     }
   };
 
-  const generateDynamicTemplate = (settings: any) => {
+  const generateDynamicTemplate = (settings: any, opts?: { includeEmployeeGroup?: boolean }) => {
     if (!settings || !settings.groups) return;
 
     const headers: string[] = [];
@@ -855,6 +890,12 @@ export default function EmployeesPage() {
     headers.push('designation_name');
     sample['designation_name'] = 'Software Developer';
     columns.push({ key: 'designation_name', label: 'Designation' });
+
+    if (opts?.includeEmployeeGroup) {
+      headers.push('group_name');
+      sample['group_name'] = 'Example Group';
+      columns.push({ key: 'group_name', label: 'Employee group' });
+    }
 
     // Add fields from settings
     settings.groups.forEach((group: any) => {
@@ -917,6 +958,12 @@ export default function EmployeesPage() {
       columns: columns.map(c => ({ ...c, width: c.width || '150px' }))
     });
   };
+
+  useEffect(() => {
+    if (formSettings) {
+      generateDynamicTemplate(formSettings, { includeEmployeeGroup: customEmployeeGroupingEnabled });
+    }
+  }, [formSettings, customEmployeeGroupingEnabled]);
 
   const toggleSelectApplication = (id: string) => {
     setSelectedApplicationIds(prev =>
@@ -1062,6 +1109,9 @@ export default function EmployeesPage() {
       const designationId = employeeFilters['designation.name']
         ? designations.find((d) => d.name === employeeFilters['designation.name'])?._id
         : undefined;
+      const employeeGroupId = employeeFilters['employee_group.name']
+        ? employeeGroups.find((g) => g.name === employeeFilters['employee_group.name'])?._id
+        : undefined;
       const response = await api.getEmployees({
         ...(includeLeftEmployees ? { includeLeft: true } : {}),
         page: pageNum,
@@ -1070,6 +1120,7 @@ export default function EmployeesPage() {
         ...(divisionId ? { division_id: divisionId } : {}),
         ...(departmentId ? { department_id: departmentId } : {}),
         ...(designationId ? { designation_id: designationId } : {}),
+        ...(employeeGroupId ? { employee_group_id: employeeGroupId } : {}),
       });
       if (response.success) {
         // Ensure paidLeaves is always included and is a number
@@ -1182,11 +1233,15 @@ export default function EmployeesPage() {
       const designationId = employeeFilters['designation.name']
         ? designations.find((d) => d.name === employeeFilters['designation.name'])?._id
         : undefined;
+      const employeeGroupId = employeeFilters['employee_group.name']
+        ? employeeGroups.find((g) => g.name === employeeFilters['employee_group.name'])?._id
+        : undefined;
       const search = (applicationSearchTerm || searchTerm || '').trim() || undefined;
       const response = await api.getEmployeeApplications({
         ...(divisionId ? { division_id: divisionId } : {}),
         ...(departmentId ? { department_id: departmentId } : {}),
         ...(designationId ? { designation_id: designationId } : {}),
+        ...(employeeGroupId ? { employee_group_id: employeeGroupId } : {}),
         ...(search ? { search } : {}),
       });
       if (response.success) {
@@ -1194,7 +1249,8 @@ export default function EmployeesPage() {
           ...app,
           status: app.status || 'pending',
           department: app.department || (typeof app.department_id === 'object' ? app.department_id : undefined),
-          designation: app.designation || (typeof app.designation_id === 'object' ? app.designation_id : undefined)
+          designation: app.designation || (typeof app.designation_id === 'object' ? app.designation_id : undefined),
+          employee_group: app.employee_group || (typeof app.employee_group_id === 'object' ? app.employee_group_id : undefined),
         }));
         setApplications(apps);
         setSelectedApplicationIds([]); // Reset selection on reload
@@ -1263,6 +1319,23 @@ export default function EmployeesPage() {
     }
 
     try {
+      const normalizeEntityRef = (val: any) => {
+        if (val === undefined || val === null || val === '') return val;
+        if (typeof val === 'object') return val._id || val.id || '';
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              const parsed = JSON.parse(trimmed);
+              return parsed?._id || parsed?.id || '';
+            } catch {
+              return val;
+            }
+          }
+        }
+        return val;
+      };
+
       // Build allowances and deductions from form overrides
       let employeeAllowances = buildOverridePayload(componentDefaults.allowances, overrideAllowances, overrideAllowancesBasedOnPresentDays, 'allowance');
       let employeeDeductions = buildOverridePayload(componentDefaults.deductions, overrideDeductions, overrideDeductionsBasedOnPresentDays, 'deduction');
@@ -1302,6 +1375,11 @@ export default function EmployeesPage() {
         ctcSalary: salarySummary.ctcSalary,
         calculatedSalary: salarySummary.netSalary,
       };
+
+      // Ensure ObjectId refs are submitted as plain IDs, never serialized objects.
+      ['division_id', 'department_id', 'designation_id', 'employee_group_id'].forEach((key) => {
+        (submitData as any)[key] = normalizeEntityRef((submitData as any)[key]);
+      });
 
       const enumFields = ['gender', 'marital_status', 'blood_group'];
       enumFields.forEach(field => {
@@ -1574,8 +1652,10 @@ export default function EmployeesPage() {
     // Create form data object - merge all fields including dynamicFields
     const newFormData: any = {
       ...employee,
+      division_id: employee.division?._id || employee.division_id || '',
       department_id: employee.department?._id || employee.department_id || '',
       designation_id: employee.designation?._id || employee.designation_id || '',
+      employee_group_id: (employee as any).employee_group?._id || (employee as any).employee_group_id || '',
       doj: employee.doj ? new Date(employee.doj).toISOString().split('T')[0] : '',
       dob: employee.dob ? new Date(employee.dob).toISOString().split('T')[0] : '',
       paidLeaves: paidLeavesValue,
@@ -1861,7 +1941,7 @@ export default function EmployeesPage() {
     const matchesActive = includeLeftEmployees || emp.is_active !== false;
 
     // Apply only non-scope header filters (e.g. status); division/department/designation are server-side
-    const scopeFilterKeys = ['division.name', 'department.name', 'designation.name'];
+    const scopeFilterKeys = ['division.name', 'department.name', 'designation.name', 'employee_group.name'];
     const matchesHeaderFilters = Object.entries(employeeFilters).every(([key, value]) => {
       if (!value || scopeFilterKeys.includes(key)) return true;
       const [mainKey, subKey] = key.split('.');
@@ -1897,6 +1977,10 @@ export default function EmployeesPage() {
     const appDesigName = app.designation?.name || (app.designation_id as any)?.name || '';
     const matchesDesignation = !desigFilter || appDesigName === desigFilter;
 
+    const groupFilter = employeeFilters['employee_group.name'] || applicationFilters['employee_group.name'];
+    const appGroupName = (app as any).employee_group?.name || (app.employee_group_id as any)?.name || '';
+    const matchesGroup = !groupFilter || appGroupName === groupFilter;
+
     const matchesHeaderFilters = Object.entries(applicationFilters).every(([key, value]) => {
       if (!value) return true;
       const [mainKey, subKey] = key.split('.');
@@ -1904,7 +1988,7 @@ export default function EmployeesPage() {
       return String(actualValue || '') === value;
     });
 
-    return matchesSearch && matchesDivision && matchesDepartment && matchesDesignation && matchesHeaderFilters;
+    return matchesSearch && matchesDivision && matchesDepartment && matchesDesignation && matchesGroup && matchesHeaderFilters;
   });
 
 
@@ -2761,6 +2845,9 @@ export default function EmployeesPage() {
                   <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Division</th>
                   {!hideDepartmentColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Department</th>}
                   {activeTab === 'employees' && !hideDesignationColumn && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Designation</th>}
+                  {activeTab === 'employees' && customEmployeeGroupingEnabled && (
+                    <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Group</th>
+                  )}
                   {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
                     <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
                   )}
@@ -2783,6 +2870,9 @@ export default function EmployeesPage() {
                     <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
                     {!hideDepartmentColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
                     {activeTab === 'employees' && !hideDesignationColumn && <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>}
+                    {activeTab === 'employees' && customEmployeeGroupingEnabled && (
+                      <td className="px-6 py-4"><div className="h-4 w-24 rounded bg-bg-base" /></td>
+                    )}
                     {activeTab === 'employees' && userRole !== 'hod' && userRole !== 'employee' && (
                       <td className="px-6 py-4"><div className="h-4 w-20 rounded bg-bg-base" /></td>
                     )}
@@ -2862,6 +2952,18 @@ export default function EmployeesPage() {
                           setFilters={setEmployeeFilters}
                         />
                       )}
+                      {customEmployeeGroupingEnabled && (
+                        <RenderFilterHeader
+                          label="Group"
+                          filterKey="employee_group.name"
+                          options={Array.from(new Set(employees.map((e) => {
+                            const eg = employeeGroups.find((g) => g._id === ((e as any).employee_group_id || (e as any).employee_group?._id));
+                            return eg?.name || (e as any).employee_group?.name || ((e as any).employee_group_id as any)?.name;
+                          }).filter((x) => !!x))) as string[]}
+                          currentFilters={employeeFilters}
+                          setFilters={setEmployeeFilters}
+                        />
+                      )}
                       {userRole !== 'hod' && userRole !== 'employee' && (
                         <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Gross Salary</th>
                       )}
@@ -2929,6 +3031,11 @@ export default function EmployeesPage() {
                         {!hideDesignationColumn && (
                           <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                             {employee.designation?.name || '-'}
+                          </td>
+                        )}
+                        {customEmployeeGroupingEnabled && (
+                          <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
+                            {(employee as any).employee_group?.name || ((employee as any).employee_group_id as any)?.name || '-'}
                           </td>
                         )}
                         {userRole !== 'hod' && userRole !== 'employee' && (
@@ -3444,6 +3551,18 @@ export default function EmployeesPage() {
                           currentFilters={applicationFilters}
                           setFilters={setApplicationFilters}
                         />
+                        {customEmployeeGroupingEnabled && (
+                          <RenderFilterHeader
+                            label="Group"
+                            filterKey="employee_group.name"
+                            options={Array.from(new Set(pendingApplications.map((a) => {
+                              const g = employeeGroups.find((x) => x._id === ((a as any).employee_group_id || (a as any).employee_group?._id));
+                              return g?.name || (a as any).employee_group?.name || ((a as any).employee_group_id as any)?.name;
+                            }).filter((x) => !!x))) as string[]}
+                            currentFilters={applicationFilters}
+                            setFilters={setApplicationFilters}
+                          />
+                        )}
                         {userRole !== 'hod' && userRole !== 'employee' && <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Proposed Salary</th>}
                         <th className="px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest text-text-secondary">Created By</th>
                         <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest text-text-secondary">Actions</th>
@@ -3452,7 +3571,7 @@ export default function EmployeesPage() {
                     <tbody className="divide-y divide-border-base">
                       {pendingApplications.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-6 py-12 text-center text-xs font-bold text-text-secondary uppercase">No pending approvals</td>
+                          <td colSpan={customEmployeeGroupingEnabled ? 9 : 8} className="px-6 py-12 text-center text-xs font-bold text-text-secondary uppercase">No pending approvals</td>
                         </tr>
                       ) : (
                         pendingApplications.map((app) => (
@@ -3482,6 +3601,11 @@ export default function EmployeesPage() {
                             <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
                               {app.department?.name || (app.department_id as { name?: string })?.name || '-'}
                             </td>
+                            {customEmployeeGroupingEnabled && (
+                              <td className="whitespace-nowrap px-6 py-4 text-xs font-bold text-text-secondary">
+                                {(app as any).employee_group?.name || ((app as any).employee_group_id as any)?.name || '-'}
+                              </td>
+                            )}
                             {userRole !== 'hod' && userRole !== 'employee' && (
                               <td className="whitespace-nowrap px-6 py-4 text-sm font-black text-text-primary">
                                 ₹{app.proposedSalary.toLocaleString()}
@@ -3690,6 +3814,7 @@ export default function EmployeesPage() {
                   errors={formErrors}
                   departments={getScopedDepartments(getEntityId(applicationFormData.division_id) || '')}
                   divisions={scopedDivisions}
+                  employeeGroups={employeeGroups}
                   designations={filteredApplicationDesignations as any}
                   excludeFields={[
                     ...(userRole === 'hod' ? SENSITIVE_FIELDS : []),
@@ -4576,6 +4701,7 @@ export default function EmployeesPage() {
                   errors={{}}
                   departments={departments}
                   divisions={divisions}
+                  employeeGroups={employeeGroups}
                   designations={filteredDesignations as any}
                   onSettingsLoaded={setFormSettings}
                   excludeFields={[
@@ -4818,6 +4944,66 @@ export default function EmployeesPage() {
                   </div>
                 )}
 
+                {/* Deduction Preferences */}
+                {userRole !== 'hod' && (
+                  <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyPF', label: 'PF' },
+                            { id: 'applyESI', label: 'ESI' },
+                            { id: 'applyProfessionTax', label: 'Profession Tax' }
+                          ].map((pref) => (
+                            <label key={pref.id} title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""} className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}>
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  if (!hasManagePermission) return;
+                                  const newVal = !((formData as any)[pref.id] ?? true);
+                                  setFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((formData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((formData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                            { id: 'deductLateIn', label: 'Late-ins' },
+                            { id: 'deductEarlyOut', label: 'Early-outs' },
+                            { id: 'deductPermission', label: 'Permission' },
+                            { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                          ].map((pref) => (
+                            <label key={pref.id} title={!hasManagePermission ? "Write permission (EMPLOYEES:write) required to toggle preferences" : ""} className={`flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all dark:border-slate-800 dark:bg-slate-900/50 ${hasManagePermission ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}>
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  if (!hasManagePermission) return;
+                                  const newVal = !((formData as any)[pref.id] ?? true);
+                                  setFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 rounded-full transition-colors duration-200 ease-in-out ${hasManagePermission ? 'cursor-pointer' : 'cursor-not-allowed'} ${((formData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((formData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
 
                 {/* Actions */}
                 <div className="flex gap-3 pt-2">
@@ -4906,6 +5092,13 @@ export default function EmployeesPage() {
                   options: designations.map(d => ({ value: d.name, label: d.name }))
                 };
               }
+              if (col.key === 'group_name') {
+                return {
+                  ...col,
+                  type: 'select',
+                  options: employeeGroups.filter((g) => g.isActive !== false).map((g) => ({ value: g.name, label: g.name })),
+                };
+              }
               if (col.key === 'gender') {
                 return { ...col, type: 'select', options: [{ value: 'Male', label: 'Male' }, { value: 'Female', label: 'Female' }, { value: 'Other', label: 'Other' }] };
               }
@@ -4929,7 +5122,11 @@ export default function EmployeesPage() {
             })}
             validateRow={(row, index, allData) => {
               const mappedUsers = employees.map(e => ({ _id: e._id, name: e.employee_name }));
-              const result = validateEmployeeRow(row, divisions, departments, designations as any, mappedUsers, { autoGenerateEmpNo: bulkPreviewAutoGenerateEmpNo });
+              const result = validateEmployeeRow(row, divisions, departments, designations as any, mappedUsers, {
+                autoGenerateEmpNo: bulkPreviewAutoGenerateEmpNo,
+                customEmployeeGroupingEnabled,
+                employeeGroups: employeeGroups.filter((g) => g.isActive !== false),
+              });
               const errors = [...result.errors];
               const fieldErrors = { ...result.fieldErrors };
 
@@ -4957,7 +5154,7 @@ export default function EmployeesPage() {
                     if (!field.isEnabled) return;
 
                     const value = row[field.id];
-                    const handledFields = ['emp_no', 'employee_name', 'division_name', 'department_name', 'designation_name', 'gender', 'dob', 'doj', 'marital_status', 'blood_group'];
+                    const handledFields = ['emp_no', 'employee_name', 'division_name', 'department_name', 'designation_name', 'group_name', 'gender', 'dob', 'doj', 'marital_status', 'blood_group'];
 
                     if (!handledFields.includes(field.id) && field.isRequired) {
                       if (value === undefined || value === null || value === '') {
@@ -4988,13 +5185,25 @@ export default function EmployeesPage() {
                     (d.code && String(d.code).toLowerCase().trim() === desigInput)
                   )?._id;
 
+                  const groupNameInput = String(row.group_name || '').trim();
+                  const groupIdSubmit =
+                    customEmployeeGroupingEnabled && groupNameInput
+                      ? employeeGroups.find(
+                          (g) =>
+                            g.isActive !== false &&
+                            g.name.toLowerCase().trim() === groupNameInput.toLowerCase()
+                        )?._id
+                      : undefined;
+
                   const employeeData: any = {
                     ...row,
                     division_id: divId || undefined,
                     department_id: deptId || undefined,
                     designation_id: desigId || undefined,
+                    employee_group_id: groupIdSubmit || undefined,
                     proposedSalary: row.proposedSalary || row.gross_salary || 0
                   };
+                  delete employeeData.group_name;
                   // Never send the display placeholder "(Auto)" as emp_no. Send empty so backend assigns.
                   const empNoRaw = String(employeeData.emp_no || '').trim();
                   if (empNoRaw.toUpperCase() === '(AUTO)' || bulkPreviewAutoGenerateEmpNo) {
@@ -5002,7 +5211,7 @@ export default function EmployeesPage() {
                   }
 
                   // Handle dynamic fields based on form settings
-                  const coreFields = ['emp_no', 'employee_name', 'proposedSalary', 'gross_salary', 'division_id', 'department_id', 'designation_id', 'division_name', 'department_name', 'designation_name', 'doj', 'dob', 'gender', 'marital_status', 'blood_group', 'qualifications', 'experience', 'address', 'location', 'aadhar_number', 'phone_number', 'alt_phone_number', 'email', 'pf_number', 'esi_number', 'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code'];
+                  const coreFields = ['emp_no', 'employee_name', 'proposedSalary', 'gross_salary', 'division_id', 'department_id', 'designation_id', 'employee_group_id', 'division_name', 'department_name', 'designation_name', 'group_name', 'doj', 'dob', 'gender', 'marital_status', 'blood_group', 'qualifications', 'experience', 'address', 'location', 'aadhar_number', 'phone_number', 'alt_phone_number', 'email', 'pf_number', 'esi_number', 'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code'];
 
                   if (formSettings?.groups) {
                     const dynamicFields: any = {};
@@ -5150,6 +5359,14 @@ export default function EmployeesPage() {
                       <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Designation</label>
                       <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.designation?.name || '-'}</p>
                     </div>
+                    {customEmployeeGroupingEnabled && (
+                      <div>
+                        <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Group</label>
+                        <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {(viewingEmployee as any).employee_group?.name || ((viewingEmployee as any).employee_group_id as any)?.name || '-'}
+                        </p>
+                      </div>
+                    )}
                     {userRole !== 'hod' && userRole !== 'employee' && (
                       <>
                         <div>
@@ -5856,6 +6073,14 @@ export default function EmployeesPage() {
                       {designations.find(d => d._id === (getEntityId(viewingApplication.designation_id) || getEntityId((viewingApplication as any).designation)))?.name || (viewingApplication.designation_id as any)?.name || (viewingApplication as any).designation?.name || '-'}
                     </p>
                   </div>
+                  {customEmployeeGroupingEnabled && (
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Group</label>
+                      <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100 uppercase">
+                        {employeeGroups.find(g => g._id === (getEntityId((viewingApplication as any).employee_group_id) || getEntityId((viewingApplication as any).employee_group)))?.name || ((viewingApplication as any).employee_group_id as any)?.name || (viewingApplication as any).employee_group?.name || '-'}
+                      </p>
+                    </div>
+                  )}
                   {userRole !== 'hod' && (
                     <div>
                       <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Proposed Salary</label>

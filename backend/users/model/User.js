@@ -52,7 +52,7 @@ const userSchema = new mongoose.Schema(
     }, // Link to MongoDB employee
     dataScope: {
       type: String,
-      enum: ['own', 'department', 'departments', 'division', 'divisions', 'all'],
+      enum: ['own', 'department', 'departments', 'division', 'divisions', 'group', 'groups', 'all'],
       default: function () {
         switch (this.role) {
           case 'employee': return 'own';
@@ -77,6 +77,12 @@ const userSchema = new mongoose.Schema(
             ref: 'Department',
           }
         ] // If empty, means 'All Departments' in this division
+      }
+    ],
+    groupMapping: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'EmployeeGroup',
       }
     ],
     preferences: {

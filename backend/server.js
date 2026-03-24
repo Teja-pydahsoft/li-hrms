@@ -82,6 +82,9 @@ app.use('/api/settings', settingsRoutes);
 const employeeRoutes = require('./employees/index.js');
 app.use('/api/employees', employeeRoutes);
 
+const employeeGroupRoutes = require('./employees/employeeGroupRoutes.js');
+app.use('/api/employee-groups', employeeGroupRoutes);
+
 // Employee Applications routes
 const employeeApplicationRoutes = require('./employee-applications/index.js');
 app.use('/api/employee-applications', employeeApplicationRoutes);

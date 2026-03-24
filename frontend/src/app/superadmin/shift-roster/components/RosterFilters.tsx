@@ -14,6 +14,9 @@ interface RosterFiltersProps {
     selectedDept: string;
     setSelectedDept: (val: string) => void;
     departments: Array<{ _id: string; name: string }>;
+    selectedGroup: string;
+    setSelectedGroup: (val: string) => void;
+    groups: Array<{ _id: string; name: string }>;
     month: string;
     setMonth: (val: string) => void;
     setPage: (p: number) => void;
@@ -27,15 +30,18 @@ const RosterFilters = memo(({
     selectedDept,
     setSelectedDept,
     departments,
+    selectedGroup,
+    setSelectedGroup,
+    groups,
     month,
     setMonth,
     setPage,
     cycleDates
 }: RosterFiltersProps) => {
     return (
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="w-full flex flex-wrap items-center gap-2.5">
             {/* Division Filter */}
-            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 transition-all hover:border-blue-500/30">
+            <div className="flex-1 min-w-[160px] sm:flex-none flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 transition-all hover:border-blue-500/30">
                 <Building2 size={14} className="text-slate-400" />
                 <select
                     value={selectedDivision}
@@ -54,7 +60,7 @@ const RosterFilters = memo(({
             </div>
 
             {/* Department Filter */}
-            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 transition-all hover:border-blue-500/30">
+            <div className="flex-1 min-w-[160px] sm:flex-none flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 transition-all hover:border-blue-500/30">
                 <Filter size={14} className="text-slate-400" />
                 <select
                     value={selectedDept}
@@ -71,8 +77,26 @@ const RosterFilters = memo(({
                 </select>
             </div>
 
+            {/* Group Filter */}
+            <div className="flex-1 min-w-[160px] sm:flex-none flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 transition-all hover:border-blue-500/30">
+                <Filter size={14} className="text-slate-400" />
+                <select
+                    value={selectedGroup}
+                    onChange={(e) => {
+                        setSelectedGroup(e.target.value);
+                        setPage(1);
+                    }}
+                    className="bg-transparent text-[10px] font-black uppercase tracking-widest text-slate-700 dark:text-slate-300 focus:outline-none min-w-[120px]"
+                >
+                    <option value="">All Groups</option>
+                    {groups.map((g) => (
+                        <option key={g._id} value={g._id}>{g.name}</option>
+                    ))}
+                </select>
+            </div>
+
             {/* Month Navigator: Prev / Cycle Label / Next */}
-            <div className="flex items-center gap-0 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm bg-white dark:bg-slate-900">
+            <div className="w-full sm:w-auto flex items-center gap-0 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm bg-white dark:bg-slate-900">
                 <button
                     onClick={() => { setMonth(navigateMonth(month, 'prev')); setPage(1); }}
                     className="flex items-center justify-center w-8 h-9 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors border-r border-slate-200 dark:border-slate-800"

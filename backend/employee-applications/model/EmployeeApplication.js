@@ -42,6 +42,11 @@ const employeeApplicationSchema = new mongoose.Schema(
       ref: 'Designation',
       default: null,
     },
+    employee_group_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmployeeGroup',
+      default: null,
+    },
     doj: {
       type: Date,
       default: null,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { api, Holiday, HolidayGroup, Division, Department } from '@/lib/api';
+import { api, Holiday, HolidayGroup, Division, Department, EmployeeGroup } from '@/lib/api';
 import { toast } from 'react-toastify';
 import Swal from 'sweetalert2';
 
@@ -28,6 +28,7 @@ export default function HolidayManagementPage() {
     const [groups, setGroups] = useState<HolidayGroup[]>([]);
     const [divisions, setDivisions] = useState<Division[]>([]);
     const [departments, setDepartments] = useState<Department[]>([]);
+    const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
     const [selectedGroupId, setSelectedGroupId] = useState<string>('GLOBAL');
 
     // Form States
@@ -65,12 +66,14 @@ export default function HolidayManagementPage() {
 
     const loadDivisionsAndDepartments = useCallback(async () => {
         try {
-            const [divRes, deptRes] = await Promise.all([
+            const [divRes, deptRes, groupRes] = await Promise.all([
                 api.getDivisions(),
-                api.getDepartments()
+                api.getDepartments(),
+                api.getEmployeeGroups(true)
             ]);
             if (divRes.success) setDivisions(divRes.data || []);
             if (deptRes.success) setDepartments(deptRes.data || []);
+            if (groupRes.success) setEmployeeGroups(groupRes.data || []);
         } catch (err) {
             console.error('Error loading metadata:', err);
         }
@@ -92,7 +95,7 @@ export default function HolidayManagementPage() {
 
         if (!confirm('Are you sure you want to delete this holiday?')) return;
         try {
-            await api.deleteHoliday(id);
+            await api.deleteHoliday(id, { onDeleteAction: 'RESTORE_PATTERN' });
             loadData();
         } catch (err) {
             console.error('Error deleting holiday:', err);
@@ -512,7 +515,7 @@ export default function HolidayManagementPage() {
                                             } else {
                                                 data._id = editingHoliday._id;
                                             }
-                                            const res = await api.updateHoliday(data);
+                                            const res = await api.updateHoliday({ ...data, rosterFillMode: 'HOL' });
                                             if (!res.success) throw new Error(res.message);
 
                                             await Swal.fire({
@@ -524,7 +527,7 @@ export default function HolidayManagementPage() {
                                                 customClass: { popup: 'rounded-2xl' }
                                             });
                                         } else {
-                                            const res = await api.createHoliday(data);
+                                            const res = await api.createHoliday({ ...data, rosterFillMode: 'HOL' });
                                             if (!res.success) throw new Error(res.message);
 
                                             await Swal.fire({
@@ -817,6 +820,7 @@ export default function HolidayManagementPage() {
                                 editing={editingGroup}
                                 divisions={divisions}
                                 departments={departments}
+                                employeeGroups={employeeGroups}
                                 onClose={() => setShowGroupForm(false)}
                                 onSave={() => {
                                     setShowGroupForm(false);
@@ -831,26 +835,28 @@ export default function HolidayManagementPage() {
     );
 }
 
-function HolidayGroupForm({ editing, divisions, departments, onClose, onSave }: {
+function HolidayGroupForm({ editing, divisions, departments, employeeGroups, onClose, onSave }: {
     editing: HolidayGroup | null;
     divisions: Division[];
     departments: Department[];
+    employeeGroups: EmployeeGroup[];
     onClose: () => void;
     onSave: () => void;
 }) {
     const [name, setName] = useState(editing?.name || '');
     const [description, setDescription] = useState(editing?.description || '');
-    const [mapping, setMapping] = useState<{ division: string; departments: string[] }[]>(
+    const [mapping, setMapping] = useState<{ division: string; departments: string[]; employeeGroups: string[] }[]>(
         editing?.divisionMapping?.map(m => ({
             division: typeof m.division === 'object' ? m.division._id : m.division,
-            departments: m.departments.map(d => typeof d === 'object' ? d._id : d)
-        })) || [{ division: '', departments: [] }]
+            departments: m.departments.map(d => typeof d === 'object' ? d._id : d),
+            employeeGroups: (m.employeeGroups || []).map(g => typeof g === 'object' ? g._id : g)
+        })) || [{ division: '', departments: [], employeeGroups: [] }]
     );
 
-    const addMapping = () => setMapping([...mapping, { division: '', departments: [] }]);
+    const addMapping = () => setMapping([...mapping, { division: '', departments: [], employeeGroups: [] }]);
     const removeMapping = (idx: number) => setMapping(mapping.filter((_, i) => i !== idx));
 
-    const updateMapping = (idx: number, field: 'division' | 'departments', value: string | string[]) => {
+    const updateMapping = (idx: number, field: 'division' | 'departments' | 'employeeGroups', value: string | string[]) => {
         const newMapping = [...mapping];
         newMapping[idx] = { ...newMapping[idx], [field]: value };
         setMapping(newMapping);
@@ -929,7 +935,11 @@ function HolidayGroupForm({ editing, divisions, departments, onClose, onSave }: 
                                     <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Division *</label>
                                     <select
                                         value={m.division}
-                                        onChange={(e) => updateMapping(idx, 'division', e.target.value)}
+                                        onChange={(e) => {
+                                            const newMapping = [...mapping];
+                                            newMapping[idx] = { division: e.target.value, departments: [], employeeGroups: [] };
+                                            setMapping(newMapping);
+                                        }}
                                         required
                                         className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
                                     >
@@ -940,41 +950,45 @@ function HolidayGroupForm({ editing, divisions, departments, onClose, onSave }: 
                                     </select>
                                 </div>
                                 <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400">Departments</label>
-                                        <label className="flex items-center gap-1.5 cursor-pointer group">
-                                            <input
-                                                type="checkbox"
-                                                checked={m.departments.length === 0}
-                                                onChange={(e) => {
-                                                    if (e.target.checked) {
-                                                        // "All Departments" checked -> Clear specific departments
-                                                        updateMapping(idx, 'departments', []);
-                                                    } else {
-                                                        // "All Departments" unchecked -> Select first available department to exit "All" mode
+                                    <div className="space-y-2">
+                                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400">Department Targeting</label>
+                                        <div className="flex items-center gap-4 text-xs">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    checked={m.departments.length === 0}
+                                                    onChange={() => updateMapping(idx, 'departments', [])}
+                                                    className="h-3.5 w-3.5 text-blue-600"
+                                                />
+                                                <span className="text-slate-700 dark:text-slate-300">All departments</span>
+                                            </label>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    checked={m.departments.length > 0}
+                                                    onChange={() => {
                                                         const availableDepts = departments
                                                             .filter(dept => (dept.divisions || [])
                                                                 .some((div: string | Division) => (typeof div === 'object' ? div._id : div) === m.division));
-
                                                         if (availableDepts.length > 0) {
                                                             updateMapping(idx, 'departments', [availableDepts[0]._id]);
                                                         }
-                                                    }
-                                                }}
-                                                className="w-3.5 h-3.5 rounded text-blue-600 border-slate-300 focus:ring-blue-500"
-                                            />
-                                            <span className="text-[10px] font-bold text-slate-500 group-hover:text-blue-600 transition-colors uppercase">All Departments</span>
-                                        </label>
+                                                    }}
+                                                    className="h-3.5 w-3.5 text-blue-600"
+                                                />
+                                                <span className="text-slate-700 dark:text-slate-300">Select multiple departments</span>
+                                            </label>
+                                        </div>
                                     </div>
                                     <select
                                         multiple
                                         value={m.departments}
-                                        disabled={m.departments.length === 0}
+                                        disabled={!m.division || m.departments.length === 0}
                                         onChange={(e) => {
                                             const values = Array.from(e.target.selectedOptions).map(opt => opt.value);
                                             updateMapping(idx, 'departments', values);
                                         }}
-                                        className={`w-full h-24 px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:border-slate-600 dark:text-white transition-opacity ${m.departments.length === 0 ? 'opacity-50 grayscale-[0.5]' : 'opacity-100'}`}
+                                        className={`w-full h-24 px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:border-slate-600 dark:text-white transition-opacity ${(!m.division || m.departments.length === 0) ? 'opacity-50 grayscale-[0.5]' : 'opacity-100'}`}
                                     >
                                         {departments.filter(dept => (dept.divisions || []).some((div: string | Division) => (typeof div === 'object' ? div._id : div) === m.division)).map(dept => (
                                             <option key={dept._id} value={dept._id}>{dept.name}</option>
@@ -982,6 +996,52 @@ function HolidayGroupForm({ editing, divisions, departments, onClose, onSave }: 
                                     </select>
                                     <p className="mt-1 text-[10px] text-slate-500">
                                         {m.departments.length === 0 ? 'Currently targeting ALL departments in this division.' : 'Ctrl+Click to select multiple.'}
+                                    </p>
+                                </div>
+                                <div>
+                                    <div className="space-y-2">
+                                        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400">Employee Group Targeting</label>
+                                        <div className="flex items-center gap-4 text-xs">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    checked={m.employeeGroups.length === 0}
+                                                    onChange={() => updateMapping(idx, 'employeeGroups', [])}
+                                                    className="h-3.5 w-3.5 text-blue-600"
+                                                />
+                                                <span className="text-slate-700 dark:text-slate-300">All groups</span>
+                                            </label>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    checked={m.employeeGroups.length > 0}
+                                                    onChange={() => {
+                                                        if (employeeGroups.length > 0) {
+                                                            updateMapping(idx, 'employeeGroups', [employeeGroups[0]._id]);
+                                                        }
+                                                    }}
+                                                    className="h-3.5 w-3.5 text-blue-600"
+                                                />
+                                                <span className="text-slate-700 dark:text-slate-300">Select multiple groups</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <select
+                                        multiple
+                                        value={m.employeeGroups}
+                                        disabled={m.employeeGroups.length === 0}
+                                        onChange={(e) => {
+                                            const values = Array.from(e.target.selectedOptions).map(opt => opt.value);
+                                            updateMapping(idx, 'employeeGroups', values);
+                                        }}
+                                        className={`w-full h-24 px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:border-slate-600 dark:text-white transition-opacity ${m.employeeGroups.length === 0 ? 'opacity-50 grayscale-[0.5]' : 'opacity-100'}`}
+                                    >
+                                        {employeeGroups.map((eg) => (
+                                            <option key={eg._id} value={eg._id}>{eg.name}</option>
+                                        ))}
+                                    </select>
+                                    <p className="mt-1 text-[10px] text-slate-500">
+                                        {m.employeeGroups.length === 0 ? 'Currently targeting ALL employee groups in this scope.' : 'Ctrl+Click to select multiple groups.'}
                                     </p>
                                 </div>
                             </div>

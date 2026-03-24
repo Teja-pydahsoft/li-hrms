@@ -624,6 +624,16 @@ export interface User {
   updatedAt: string;
 }
 
+export interface EmployeeGroup {
+  _id: string;
+  name: string;
+  code?: string;
+  description?: string;
+  isActive?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Employee {
   _id: string;
   emp_no: string;
@@ -631,6 +641,7 @@ export interface Employee {
   division_id?: any;
   department_id?: any;
   designation_id?: any;
+  employee_group_id?: any;
   doj?: string;
   dob?: string;
   gross_salary?: number;
@@ -672,6 +683,7 @@ export interface Employee {
   department?: any;
   division?: any;
   designation?: any;
+  employee_group?: any;
   profilePhoto?: string;
 }
 
@@ -792,6 +804,7 @@ export interface HolidayGroup {
   divisionMapping: {
     division: string | Division; // ID or Populated
     departments: (string | Department)[]; // IDs or Populated
+    employeeGroups?: (string | EmployeeGroup)[]; // IDs or Populated
   }[];
   isActive: boolean;
   createdAt?: string;
@@ -817,6 +830,8 @@ export interface Holiday {
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+  rosterFillMode?: 'HOL' | 'WEEK_OFF';
+  onDeleteAction?: 'RESTORE_PATTERN' | 'WEEK_OFF';
 }
 
 export const api = {
@@ -958,22 +973,25 @@ export const api = {
     });
   },
 
-  createHoliday: async (data: Partial<Holiday>) => {
+  createHoliday: async (data: Partial<Holiday> & { rosterFillMode?: 'HOL' | 'WEEK_OFF' }) => {
     return apiRequest<Holiday>('/holidays', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  updateHoliday: async (data: Partial<Holiday>) => {
+  updateHoliday: async (data: Partial<Holiday> & { rosterFillMode?: 'HOL' | 'WEEK_OFF' }) => {
     return apiRequest<Holiday>('/holidays', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  deleteHoliday: async (id: string) => {
-    return apiRequest<void>(`/holidays/${id}`, { method: 'DELETE' });
+  deleteHoliday: async (id: string, options?: { onDeleteAction?: 'RESTORE_PATTERN' | 'WEEK_OFF' }) => {
+    return apiRequest<void>(`/holidays/${id}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options || {})
+    });
   },
 
   // Shifts
@@ -1177,6 +1195,35 @@ export const api = {
 
   deleteDivision: async (id: string) => {
     return apiRequest<void>(`/divisions/${id}`, { method: 'DELETE' });
+  },
+
+  getEmployeeGroups: async (isActive?: boolean) => {
+    const params = new URLSearchParams();
+    if (isActive !== undefined) params.append('isActive', String(isActive));
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return apiRequest<EmployeeGroup[]>(`/employee-groups${q}`, { method: 'GET' });
+  },
+
+  getEmployeeGroup: async (id: string) => {
+    return apiRequest<EmployeeGroup>(`/employee-groups/${id}`, { method: 'GET' });
+  },
+
+  createEmployeeGroup: async (data: Partial<EmployeeGroup>) => {
+    return apiRequest<EmployeeGroup>('/employee-groups', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateEmployeeGroup: async (id: string, data: Partial<EmployeeGroup>) => {
+    return apiRequest<EmployeeGroup>(`/employee-groups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteEmployeeGroup: async (id: string) => {
+    return apiRequest<void>(`/employee-groups/${id}`, { method: 'DELETE' });
   },
 
   linkDepartmentsToDivision: async (id: string, data: { departmentIds: string[]; action: 'link' | 'unlink' }) => {
@@ -1445,14 +1492,17 @@ export const api = {
   },
 
   // Employees
-  getEmployees: async (filters?: { is_active?: boolean; department_id?: string; division_id?: string; designation_id?: string; includeLeft?: boolean; search?: string; page?: number; limit?: number }) => {
+  getEmployees: async (filters?: { is_active?: boolean; department_id?: string; division_id?: string; designation_id?: string; employee_group_id?: string; includeLeft?: boolean; search?: string; startDate?: string; endDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.is_active !== undefined) params.append('is_active', String(filters.is_active));
     if (filters?.department_id) params.append('department_id', filters.department_id);
     if (filters?.division_id) params.append('division_id', filters.division_id);
     if (filters?.designation_id) params.append('designation_id', filters.designation_id);
+    if (filters?.employee_group_id) params.append('employee_group_id', filters.employee_group_id);
     if (filters?.includeLeft !== undefined) params.append('includeLeft', String(filters.includeLeft));
     if (filters?.search) params.append('search', filters.search);
+    if (filters?.startDate) params.append('startDate', filters.startDate);
+    if (filters?.endDate) params.append('endDate', filters.endDate);
     if (filters?.page) params.append('page', String(filters.page));
     if (filters?.limit) params.append('limit', String(filters.limit));
     const query = params.toString() ? `?${params.toString()}` : '';
@@ -1562,6 +1612,7 @@ export const api = {
     division_id?: string;
     department_id?: string;
     designation_id?: string;
+    employee_group_id?: string;
     search?: string;
   }) => {
     const searchParams = new URLSearchParams();
@@ -1569,6 +1620,7 @@ export const api = {
     if (params?.division_id) searchParams.set('division_id', params.division_id);
     if (params?.department_id) searchParams.set('department_id', params.department_id);
     if (params?.designation_id) searchParams.set('designation_id', params.designation_id);
+    if (params?.employee_group_id) searchParams.set('employee_group_id', params.employee_group_id);
     if (params?.search?.trim()) searchParams.set('search', params.search.trim());
     const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
     return apiRequest<any[]>(`/employee-applications${query}`, { method: 'GET' });

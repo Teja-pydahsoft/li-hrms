@@ -23,6 +23,12 @@ const { resolveQualificationLabels } = require('../services/fieldMappingService'
 const { applicationQueue } = require('../../shared/jobs/queueManager');
 const Settings = require('../../settings/model/Settings');
 const { getNextEmpNo, getNextEmpNos } = require('../../employees/services/empNoService');
+const {
+  isCustomEmployeeGroupingEnabled,
+  stripEmployeeGroupIfDisabled,
+  stripEmployeeGroupWhenDisabled,
+  validateEmployeeGroupIfEnabled,
+} = require('../../shared/utils/customEmployeeGrouping');
 
 /**
  * Internal helper for creating a single application
@@ -30,6 +36,8 @@ const { getNextEmpNo, getNextEmpNos } = require('../../employees/services/empNoS
  */
 const createApplicationInternal = async (rawData, settings, creatorId) => {
   let applicationData = { ...rawData };
+
+  await stripEmployeeGroupIfDisabled(applicationData);
 
   // PARSE JSON fields if they are strings (usually from FormData in single creation)
   const jsonFields = ['dynamicFields', 'qualifications', 'employeeAllowances', 'employeeDeductions', 'department', 'designation'];
@@ -74,6 +82,12 @@ const createApplicationInternal = async (rawData, settings, creatorId) => {
 
   // Transform form data
   const { permanentFields, dynamicFields } = transformFormData(applicationData, settings);
+
+  await stripEmployeeGroupIfDisabled(permanentFields);
+  const groupErr = await validateEmployeeGroupIfEnabled(permanentFields.employee_group_id);
+  if (groupErr) {
+    throw new Error(groupErr.error);
+  }
 
   // Ensure qualifications (if provided) are handled and labels are resolved
   if (applicationData.qualifications) {
@@ -195,6 +209,7 @@ exports.createApplication = async (req, res) => {
       { path: 'division_id', select: 'name' },
       { path: 'department_id', select: 'name code' },
       { path: 'designation_id', select: 'name code' },
+      { path: 'employee_group_id', select: 'name code isActive' },
     ]);
 
     res.status(201).json({
@@ -252,6 +267,7 @@ exports.bulkCreateApplications = async (req, res) => {
 
     const settings = await EmployeeApplicationFormSettings.getActiveSettings();
     const creatorId = req.user._id;
+    const groupingOn = await isCustomEmployeeGroupingEnabled();
 
     // 1. Pre-fetch existing and pending emp_no for duplicate checking
     const empNos = applications.map(app => String(app.emp_no || '').toUpperCase()).filter(Boolean);
@@ -292,6 +308,8 @@ exports.bulkCreateApplications = async (req, res) => {
 
     // 2. Process and Validate in memory
     for (const appData of applications) {
+      stripEmployeeGroupWhenDisabled(appData, groupingOn);
+
       const empNoRaw = String(appData.emp_no || '').trim();
       const empNo = empNoRaw.toUpperCase() === '(AUTO)' ? '' : empNoRaw.toUpperCase();
 
@@ -317,6 +335,12 @@ exports.bulkCreateApplications = async (req, res) => {
 
         // Transformation
         const { permanentFields, dynamicFields } = transformFormData(appData, settings);
+
+        stripEmployeeGroupWhenDisabled(permanentFields, groupingOn);
+        if (groupingOn) {
+          const gErr = await validateEmployeeGroupIfEnabled(permanentFields.employee_group_id);
+          if (gErr) throw new Error(gErr.error);
+        }
 
         // Qualifications
         if (appData.qualifications) {
@@ -395,6 +419,8 @@ exports.updateApplication = async (req, res) => {
     if (!existingApplication) {
       return res.status(404).json({ success: false, message: 'Application not found' });
     }
+
+    await stripEmployeeGroupIfDisabled(applicationData);
 
     // PARSE JSON STRINGIFIED FIELDS
     const jsonFields = ['dynamicFields', 'qualifications', 'employeeAllowances', 'employeeDeductions', 'department', 'designation'];
@@ -478,6 +504,12 @@ exports.updateApplication = async (req, res) => {
     // Transform / Separate Fields
     const { permanentFields, dynamicFields } = transformFormData(applicationData, settings);
 
+    await stripEmployeeGroupIfDisabled(permanentFields);
+    const groupUpdateErr = await validateEmployeeGroupIfEnabled(permanentFields.employee_group_id);
+    if (groupUpdateErr) {
+      return res.status(400).json({ success: false, message: groupUpdateErr.error });
+    }
+
     // Resolve labels for qualifications
     if (applicationData.qualifications) {
       if (settings && Array.isArray(applicationData.qualifications)) {
@@ -529,7 +561,7 @@ exports.updateApplication = async (req, res) => {
  */
 exports.getApplications = async (req, res) => {
   try {
-    const { status, division_id, department_id, designation_id, search } = req.query;
+    const { status, division_id, department_id, designation_id, employee_group_id, search } = req.query;
     const scopeFilter = req.scopeFilter || {};
 
     // Start with scope filter (division mapping / data scope) so workspace users see only their scope
@@ -545,6 +577,9 @@ exports.getApplications = async (req, res) => {
     }
     if (designation_id) {
       filter.designation_id = designation_id;
+    }
+    if (employee_group_id) {
+      filter.employee_group_id = employee_group_id;
     }
     if (search && String(search).trim()) {
       const term = String(search).trim();
@@ -567,6 +602,7 @@ exports.getApplications = async (req, res) => {
       .populate('division_id', 'name')
       .populate('department_id', 'name code')
       .populate('designation_id', 'name code')
+      .populate('employee_group_id', 'name code isActive')
       .sort({ created_at: -1 });
 
     res.status(200).json({
@@ -596,7 +632,8 @@ exports.getApplication = async (req, res) => {
       .populate('rejectedBy', 'name email')
       .populate('division_id', 'name')
       .populate('department_id', 'name code')
-      .populate('designation_id', 'name code');
+      .populate('designation_id', 'name code')
+      .populate('employee_group_id', 'name code isActive');
 
     if (!application) {
       return res.status(404).json({

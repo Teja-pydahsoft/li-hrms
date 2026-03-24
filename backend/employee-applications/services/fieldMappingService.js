@@ -17,6 +17,7 @@ const PERMANENT_FIELDS = [
   'division_id',
   'department_id',
   'designation_id',
+  'employee_group_id',
   'doj',
   'dob',
   'gross_salary',

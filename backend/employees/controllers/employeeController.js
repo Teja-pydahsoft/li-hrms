@@ -34,6 +34,10 @@ const { generatePassword, sendCredentials } = require('../../shared/services/pas
 const s3UploadService = require('../../shared/services/s3UploadService');
 const { getNextEmpNo } = require('../services/empNoService');
 const EmployeeHistory = require('../model/EmployeeHistory');
+const {
+  stripEmployeeGroupIfDisabled,
+  validateEmployeeGroupIfEnabled,
+} = require('../../shared/utils/customEmployeeGrouping');
 
 // ============== Helper Functions ==============
 
@@ -377,7 +381,20 @@ const transformEmployeeForResponse = async (employee, populateUsers = true) => {
  */
 exports.getAllEmployees = async (req, res) => {
   try {
-    const { is_active, division_id, divisionId, department_id, designation_id, includeLeft, page = 1, limit = 50, search } = req.query;
+    const {
+      is_active,
+      division_id,
+      divisionId,
+      department_id,
+      designation_id,
+      employee_group_id,
+      includeLeft,
+      startDate,
+      endDate,
+      page = 1,
+      limit = 50,
+      search,
+    } = req.query;
     const { scopeFilter } = req; // Get scope filter from data scope middleware
     const settings = await getEmployeeSettings();
 
@@ -390,6 +407,7 @@ exports.getAllEmployees = async (req, res) => {
     if (division_id || divisionId) filters.division_id = division_id || divisionId;
     if (department_id) filters.department_id = department_id;
     if (designation_id) filters.designation_id = designation_id;
+    if (employee_group_id) filters.employee_group_id = employee_group_id;
 
     // Search functionality
     if (search) {
@@ -402,8 +420,22 @@ exports.getAllEmployees = async (req, res) => {
       ];
     }
 
-    // By default, show only currently active: no leftDate or leftDate on/after today (resigned but still in notice period)
-    if (includeLeft !== 'true') {
+    // If a date range is provided (e.g. shift roster payroll cycle), include employees
+    // whose employment overlaps that period.
+    if (startDate && endDate) {
+      const rangeStart = new Date(startDate);
+      const rangeEnd = new Date(endDate);
+      if (!Number.isNaN(rangeStart.getTime()) && !Number.isNaN(rangeEnd.getTime())) {
+        rangeStart.setUTCHours(0, 0, 0, 0);
+        rangeEnd.setUTCHours(23, 59, 59, 999);
+        filters.$and = filters.$and || [];
+        // Employee should have joined by range end
+        filters.$and.push({ $or: [{ doj: null }, { doj: { $lte: rangeEnd } }] });
+        // Employee should not have left before range start
+        filters.$and.push({ $or: [{ leftDate: null }, { leftDate: { $gte: rangeStart } }] });
+      }
+    } else if (includeLeft !== 'true') {
+      // By default, show only currently active: no leftDate or leftDate on/after today
       const startOfToday = new Date();
       startOfToday.setUTCHours(0, 0, 0, 0);
       filters.$and = filters.$and || [];
@@ -459,6 +491,7 @@ exports.getAllEmployees = async (req, res) => {
         .populate('division_id', 'name code')
         .populate('department_id', 'name code')
         .populate('designation_id', 'name code')
+        .populate('employee_group_id', 'name code isActive')
         .sort({ employee_name: 1 })
         .skip(skip)
         .limit(parseInt(limit));
@@ -471,6 +504,7 @@ exports.getAllEmployees = async (req, res) => {
           division: transformed.division_id,
           department: transformed.department_id,
           designation: transformed.designation_id,
+          employee_group: transformed.employee_group_id,
           paidLeaves: transformed.paidLeaves !== undefined && transformed.paidLeaves !== null ? Number(transformed.paidLeaves) : 0,
           allottedLeaves: transformed.allottedLeaves !== undefined && transformed.allottedLeaves !== null ? Number(transformed.allottedLeaves) : 0,
           employeeAllowances: transformed.employeeAllowances || [],
@@ -525,7 +559,8 @@ exports.getEmployee = async (req, res) => {
         const mongoEmployee = await Employee.findOne({ emp_no: empNo })
           .populate('division_id', 'name code')
           .populate('department_id', 'name code')
-          .populate('designation_id', 'name code');
+          .populate('designation_id', 'name code')
+          .populate('employee_group_id', 'name code isActive');
 
         if (mongoEmployee) {
           const transformed = await transformEmployeeForResponse(mongoEmployee, true);
@@ -545,7 +580,8 @@ exports.getEmployee = async (req, res) => {
       const mongoEmployee = await Employee.findOne({ emp_no: empNo })
         .populate('division_id', 'name code')
         .populate('department_id', 'name code')
-        .populate('designation_id', 'name code');
+        .populate('designation_id', 'name code')
+        .populate('employee_group_id', 'name code isActive');
 
       if (mongoEmployee) {
         const transformed = await transformEmployeeForResponse(mongoEmployee, true);
@@ -554,6 +590,7 @@ exports.getEmployee = async (req, res) => {
           division: transformed.division_id,
           department: transformed.department_id,
           designation: transformed.designation_id,
+          employee_group: transformed.employee_group_id,
           // Explicitly ensure paidLeaves and allottedLeaves are included
           paidLeaves: transformed.paidLeaves !== undefined && transformed.paidLeaves !== null ? Number(transformed.paidLeaves) : 0,
           allottedLeaves: transformed.allottedLeaves !== undefined && transformed.allottedLeaves !== null ? Number(transformed.allottedLeaves) : 0,
@@ -679,6 +716,15 @@ exports.createEmployee = async (req, res) => {
           console.log(`[createEmployee] Auto-linked designation ${desig.name} to department ${department.name}`);
         }
       }
+    }
+
+    await stripEmployeeGroupIfDisabled(employeeData);
+    const groupErrCreate = await validateEmployeeGroupIfEnabled(employeeData.employee_group_id);
+    if (groupErrCreate) {
+      return res.status(400).json({
+        success: false,
+        message: groupErrCreate.error,
+      });
     }
 
     const results = { mongodb: false, mssql: false };
@@ -842,7 +888,8 @@ exports.createEmployee = async (req, res) => {
     const createdEmployee = await Employee.findOne({ emp_no: String(employeeData.emp_no || '').toUpperCase() })
       .populate('division_id', 'name code')
       .populate('department_id', 'name code')
-      .populate('designation_id', 'name code');
+      .populate('designation_id', 'name code')
+      .populate('employee_group_id', 'name code isActive');
 
     // Send notifications
     const notificationResults = await sendCredentials(
@@ -890,6 +937,15 @@ exports.updateEmployee = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Employee not found',
+      });
+    }
+
+    await stripEmployeeGroupIfDisabled(employeeData);
+    const groupErrUpdate = await validateEmployeeGroupIfEnabled(employeeData.employee_group_id);
+    if (groupErrUpdate) {
+      return res.status(400).json({
+        success: false,
+        message: groupErrUpdate.error,
       });
     }
 
@@ -1212,7 +1268,8 @@ exports.updateEmployee = async (req, res) => {
     const updatedEmployeeDoc = await Employee.findOne({ emp_no: empNo })
       .populate('division_id', 'name code')
       .populate('department_id', 'name code')
-      .populate('designation_id', 'name code');
+      .populate('designation_id', 'name code')
+      .populate('employee_group_id', 'name code isActive');
 
     // Transform employee with user population
     const updatedEmployee = await transformEmployeeForResponse(updatedEmployeeDoc, true);

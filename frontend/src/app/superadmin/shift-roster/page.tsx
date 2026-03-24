@@ -66,6 +66,8 @@ export default function RosterPage() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [selectedDivision, setSelectedDivision] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('');
+  const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [employeeGroups, setEmployeeGroups] = useState<any[]>([]);
   const [selectedShiftForAssign, setSelectedShiftForAssign] = useState<string>('');
   const [roster, setRoster] = useState<RosterState>(new Map());
   /** Keys of modified cells: `${empNo}|${date}` — only these are sent on save to avoid updating whole roster */
@@ -78,6 +80,7 @@ export default function RosterPage() {
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [holidayGroups, setHolidayGroups] = useState<HolidayGroup[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(ROSTER_LIMIT);
   const [totalPages, setTotalPages] = useState(1);
@@ -207,15 +210,17 @@ export default function RosterPage() {
     if (!cycleDates) return;
     setLoading(true);
     try {
-      const [shiftRes, divRes, deptRes, holidayRes] = await Promise.all([
+      const [shiftRes, divRes, deptRes, holidayRes, groupRes] = await Promise.all([
         api.getShifts(),
         api.getDivisions(),
         api.getDepartments(),
-        api.getAllHolidaysAdmin(parseInt(month.split('-')[0]))
+        api.getAllHolidaysAdmin(parseInt(month.split('-')[0])),
+        api.getEmployeeGroups(true),
       ]);
       setShifts(shiftRes.data || []);
       setDivisions(divRes.data || []);
       setDepartments(deptRes.data || []);
+      setEmployeeGroups(groupRes.data || []);
       if (holidayRes && holidayRes.data) {
         if (Array.isArray(holidayRes.data)) setHolidays(holidayRes.data);
         else {
@@ -226,6 +231,12 @@ export default function RosterPage() {
       const empParams: Record<string, unknown> = { page, limit };
       if (selectedDept) empParams.department_id = selectedDept;
       if (selectedDivision) empParams.division_id = selectedDivision;
+      if (selectedGroup) empParams.employee_group_id = selectedGroup;
+      if (searchQuery) empParams.search = searchQuery;
+      if (cycleDates?.startDate && cycleDates?.endDate) {
+        empParams.startDate = cycleDates.startDate;
+        empParams.endDate = cycleDates.endDate;
+      }
       const empRes = await api.getEmployees(empParams) as { data: Employee[]; pagination?: { totalPages: number; total: number } };
       const empList = empRes.data || [];
       setEmployees(empList);
@@ -254,7 +265,7 @@ export default function RosterPage() {
       console.error('Error loading roster data:', err);
       toast.error('Failed to load roster');
     } finally { setLoading(false); }
-  }, [month, selectedDept, selectedDivision, page, limit, cycleDates]);
+  }, [month, selectedDept, selectedDivision, selectedGroup, searchQuery, page, limit, cycleDates]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -440,7 +451,13 @@ export default function RosterPage() {
       const divisionName = selectedDivision ? (divisions.find(d => d._id === selectedDivision)?.name || 'Division') : 'All';
       const deptName = selectedDept ? (departments.find(d => d._id === selectedDept)?.name || 'Dept') : 'All';
       const [allEmpsRes, allRosterRes, xlsxMod] = await Promise.all([
-        api.getEmployees({ limit: 10000, department_id: selectedDept || undefined, division_id: selectedDivision || undefined }),
+        api.getEmployees({
+          limit: 10000,
+          department_id: selectedDept || undefined,
+          division_id: selectedDivision || undefined,
+          employee_group_id: selectedGroup || undefined,
+          search: searchQuery || undefined,
+        }),
         api.getRoster(month, { departmentId: selectedDept || undefined, divisionId: selectedDivision || undefined }),
         import('xlsx'),
       ]);
@@ -480,6 +497,11 @@ export default function RosterPage() {
     return employees.filter(emp => (emp.employee_name || '').toLowerCase().includes(term) || (emp.emp_no || '').toLowerCase().includes(term));
   }, [employees, debouncedSearch]);
 
+  const handleSearchSubmit = useCallback(() => {
+    setSearchQuery(searchTerm.trim());
+    setPage(1);
+  }, [searchTerm]);
+
   const handleAutoFillNextCycle = useCallback(async () => {
     const [y, m] = month.split('-').map(Number);
     const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
@@ -505,7 +527,7 @@ export default function RosterPage() {
     } finally {
       setAutoFillLoading(false);
     }
-  }, [month, selectedDept, selectedDivision]);
+  }, [month, selectedDept, selectedDivision, selectedGroup, searchQuery]);
 
   return (
     <div className="relative min-h-screen">
@@ -533,19 +555,26 @@ export default function RosterPage() {
           </div>
         </div>
 
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:px-6 py-2 bg-white/40 dark:bg-slate-950/20 border-b border-slate-200/40 dark:border-slate-800/40">
+        <div className="flex flex-col gap-3 sm:px-6 py-3 bg-white/40 dark:bg-slate-950/20 border-b border-slate-200/40 dark:border-slate-800/40">
           <RosterFilters
             selectedDivision={selectedDivision} setSelectedDivision={setSelectedDivision} divisions={divisions}
             selectedDept={selectedDept} setSelectedDept={setSelectedDept} departments={departments}
+            selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} groups={employeeGroups}
             month={month} setMonth={setMonth} setPage={setPage}
             cycleDates={cycleDates}
           />
-          <SearchSection onSearchChange={setSearchTerm} />
-          <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={handleAutoFillNextCycle} disabled={autoFillLoading} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-600 border border-amber-700 text-white text-[10px] font-black uppercase tracking-widest hover:bg-amber-700 transition-all shadow-md disabled:opacity-50" title="Fill next pay cycle from previous (by weekday); holidays respected"><Copy size={14} />{autoFillLoading ? 'Filling...' : 'Auto-fill next cycle'}</button>
-            <button onClick={handleExportExcel} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-green-600 border border-green-700 text-white text-[10px] font-black uppercase tracking-widest hover:bg-green-700 transition-all shadow-md"><Download size={14} />Export</button>
-            <button onClick={() => setShowWeekOff(true)} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-[10px] font-black uppercase tracking-widest transition-all shadow-md dark:bg-slate-800/80"><Settings2 size={14} />Assign Offs</button>
-            <button onClick={saveRoster} disabled={saving} className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white text-[11px] font-black uppercase tracking-widest shadow-lg shadow-blue-500/20 disabled:opacity-50 transition-all"><Save size={16} />{saving ? `...${savingProgress}%` : 'Save Roster'}</button>
+
+          <div className="w-full flex flex-col lg:flex-row lg:items-center gap-2.5">
+            <div className="w-full lg:max-w-sm">
+              <SearchSection value={searchTerm} onSearchChange={setSearchTerm} onSearchSubmit={handleSearchSubmit} />
+            </div>
+
+            <div className="w-full lg:w-auto grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button onClick={handleAutoFillNextCycle} disabled={autoFillLoading} className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-amber-600 border border-amber-700 text-white text-[10px] font-black uppercase tracking-wider hover:bg-amber-700 transition-all shadow-md disabled:opacity-50" title="Fill next pay cycle from previous (by weekday); holidays respected"><Copy size={13} />{autoFillLoading ? 'Filling...' : 'Auto-fill'}</button>
+              <button onClick={handleExportExcel} className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-green-600 border border-green-700 text-white text-[10px] font-black uppercase tracking-wider hover:bg-green-700 transition-all shadow-md"><Download size={13} />Export</button>
+              <button onClick={() => setShowWeekOff(true)} className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-[10px] font-black uppercase tracking-wider transition-all shadow-md dark:bg-slate-800/80"><Settings2 size={13} />Assign Offs</button>
+              <button onClick={saveRoster} disabled={saving} className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white text-[10px] font-black uppercase tracking-wider shadow-lg shadow-blue-500/20 disabled:opacity-50 transition-all"><Save size={14} />{saving ? `...${savingProgress}%` : 'Save'}</button>
+            </div>
           </div>
         </div>
 

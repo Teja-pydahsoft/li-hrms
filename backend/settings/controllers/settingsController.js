@@ -42,6 +42,7 @@ exports.getSetting = async (req, res) => {
         'enable_absent_deduction': false,
         'lop_days_per_absent': 1,
         'allow_employee_bulk_process': false,
+        'custom_employee_grouping_enabled': false,
         'payroll_cycle_start_day': '1',
         'payroll_cycle_end_day': '31',
         'qualification_statuses': ['Partial', 'Not Certified', 'Certified'],
@@ -50,12 +51,16 @@ exports.getSetting = async (req, res) => {
       };
 
       if (defaults[req.params.key] !== undefined) {
+        const defaultCategory =
+          ['allow_employee_bulk_process', 'custom_employee_grouping_enabled'].includes(req.params.key)
+            ? 'employee'
+            : 'payroll';
         return res.status(200).json({
           success: true,
           data: {
             key: req.params.key,
             value: defaults[req.params.key],
-            category: 'payroll',
+            category: defaultCategory,
             isDefault: true
           }
         });
@@ -161,7 +166,7 @@ exports.upsertSetting = async (req, res) => {
           category ||
           (['include_missing_employee_components', 'enable_absent_deduction', 'lop_days_per_absent'].includes(key)
             ? 'payroll'
-            : ['allow_employee_bulk_process'].includes(key)
+            : ['allow_employee_bulk_process', 'custom_employee_grouping_enabled'].includes(key)
               ? 'employee'
               : 'general'),
       },

@@ -51,6 +51,16 @@ const createDivisionFilter = (divIds) => {
     };
 };
 
+const createEmployeeGroupFilter = (groupIds) => {
+    if (!groupIds || groupIds.length === 0) return { _id: null };
+    return {
+        $or: [
+            { employee_group_id: { $in: groupIds } },
+            { employee_group: { $in: groupIds } }
+        ]
+    };
+};
+
 /**
  * Build scope filter for MongoDB queries
  * @param {Object} user - User object from req.user
@@ -130,6 +140,15 @@ function buildScopeFilter(user) {
                 if (orConditions.length > 0) {
                     administrativeFilter = orConditions.length === 1 ? orConditions[0] : { $or: orConditions };
                 }
+            }
+            break;
+        case 'group':
+        case 'groups':
+            if (user.groupMapping && Array.isArray(user.groupMapping) && user.groupMapping.length > 0) {
+                const groupIds = user.groupMapping
+                    .map((g) => (typeof g === 'string' ? g : g?._id))
+                    .filter(Boolean);
+                administrativeFilter = createEmployeeGroupFilter(groupIds);
             }
             break;
 

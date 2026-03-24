@@ -20,9 +20,11 @@ export default function EmployeeUpdateModal({ onClose, onSuccess }: EmployeeUpda
     const [formSettings, setFormSettings] = useState<any>(null);
     const [selectedFields, setSelectedFields] = useState<string[]>([]);
     const [loadingSettings, setLoadingSettings] = useState(true);
+    const [customEmployeeGroupingEnabled, setCustomEmployeeGroupingEnabled] = useState(false);
 
     useEffect(() => {
         loadFormSettings();
+        loadGroupingSetting();
     }, []);
 
     const loadFormSettings = async () => {
@@ -36,6 +38,15 @@ export default function EmployeeUpdateModal({ onClose, onSuccess }: EmployeeUpda
             setError('Failed to load field options');
         } finally {
             setLoadingSettings(false);
+        }
+    };
+
+    const loadGroupingSetting = async () => {
+        try {
+            const res = await api.getSetting('custom_employee_grouping_enabled');
+            setCustomEmployeeGroupingEnabled(!!(res?.success && res?.data?.value));
+        } catch {
+            setCustomEmployeeGroupingEnabled(false);
         }
     };
 
@@ -186,6 +197,26 @@ export default function EmployeeUpdateModal({ onClose, onSuccess }: EmployeeUpda
                                             </div>
                                         )
                                     ))}
+                                    {customEmployeeGroupingEnabled && (
+                                        <div className="space-y-2">
+                                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400">System</h4>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    onClick={() => toggleField('employee_group_id')}
+                                                    className={`flex items-center gap-3 rounded-xl border p-3 text-left transition-all ${selectedFields.includes('employee_group_id')
+                                                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30'
+                                                        : 'border-slate-200 hover:border-indigo-300 dark:border-slate-700 dark:hover:border-indigo-500/50'
+                                                        }`}
+                                                >
+                                                    <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-all ${selectedFields.includes('employee_group_id') ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300 dark:border-slate-600'
+                                                        }`}>
+                                                        {selectedFields.includes('employee_group_id') && <Check className="h-3 w-3" />}
+                                                    </div>
+                                                    <span className="text-xs font-semibold">Employee Group</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

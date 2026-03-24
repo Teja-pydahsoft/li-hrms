@@ -38,7 +38,8 @@ import {
   ChevronRight,
   LogOut,
   Menu,
-  X
+  X,
+  Layers
 } from 'lucide-react';
 
 // Icon Components - Helper type not needed with Lucide, but keeping structure similar
@@ -69,6 +70,7 @@ const navItems: NavItem[] = [
   { href: '/superadmin/shifts', label: 'Shifts', icon: Watch, category: 'Time & Attendance', moduleCode: 'SHIFTS' },
   { href: '/superadmin/divisions', label: 'Divisions', icon: Building2, category: 'Organization', moduleCode: 'DIVISIONS' },
   { href: '/superadmin/departments', label: 'Departments', icon: Building, category: 'Organization', moduleCode: 'DEPARTMENTS' },
+  { href: '/superadmin/employee-groups', label: 'Employee groups', icon: Layers, category: 'Organization', moduleCode: 'EMPLOYEE_GROUPS' },
   { href: '/superadmin/settings/departmental', label: 'Departmental Settings', icon: Settings2, category: 'Organization', moduleCode: 'DEPARTMENTAL_SETTINGS' },
   { href: '/superadmin/users', label: 'Users', icon: UserCog, category: 'Administration', moduleCode: 'USERS' },
   { href: '/superadmin/live-attendance', label: 'Live Attendance', icon: Clock, category: 'Administration', moduleCode: 'LIVE_ATTENDANCE' },

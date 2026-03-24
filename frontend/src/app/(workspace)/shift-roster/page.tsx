@@ -61,6 +61,10 @@ function RosterPage() {
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [selectedDivision, setSelectedDivision] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('');
+  const [employeeGroups, setEmployeeGroups] = useState<DepartmentOption[]>([]);
+  const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedShiftForAssign, setSelectedShiftForAssign] = useState<string>('');
   const [roster, setRoster] = useState<RosterState>(new Map());
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
@@ -151,8 +155,14 @@ function RosterPage() {
       const filters: any = { page, limit };
       if (selectedDept) filters.department_id = selectedDept;
       if (selectedDivision) filters.division_id = selectedDivision;
+      if (selectedGroup) filters.employee_group_id = selectedGroup;
+      if (searchQuery) filters.search = searchQuery;
+      if (cycleDates?.startDate && cycleDates?.endDate) {
+        filters.startDate = cycleDates.startDate;
+        filters.endDate = cycleDates.endDate;
+      }
 
-      const [shiftRes, empRes, rosterRes, divRes, deptRes] = await Promise.all([
+      const [shiftRes, empRes, rosterRes, divRes, deptRes, groupRes] = await Promise.all([
         api.getShifts().catch((err) => {
           console.error('Failed to load shifts:', err);
           return { data: [] };
@@ -177,7 +187,11 @@ function RosterPage() {
         api.getDepartments().catch((err) => {
           console.error('Failed to load departments:', err);
           return { data: [] };
-        })
+        }),
+        api.getEmployeeGroups(true).catch((err) => {
+          console.error('Failed to load employee groups:', err);
+          return { data: [] };
+        }),
       ]);
 
       // Ensure arrays
@@ -202,6 +216,8 @@ function RosterPage() {
         );
       }
       setDepartments(deptList.map((d: any) => ({ _id: d._id, name: d.name })));
+      const groupList = Array.isArray(groupRes?.data) ? groupRes.data : [];
+      setEmployeeGroups(groupList.map((g: any) => ({ _id: g._id, name: g.name })));
 
       const map: RosterState = new Map();
       const rosterData = rosterRes?.data as { entries?: { employeeNumber: string; date: string; shiftId?: string; status?: string }[]; strict?: boolean } | null;
@@ -237,10 +253,10 @@ function RosterPage() {
     }
   };
 
-  useEffect(() => { setPage(1); }, [month, selectedDept, selectedDivision]);
+  useEffect(() => { setPage(1); }, [month, selectedDept, selectedDivision, selectedGroup, searchQuery]);
   useEffect(() => {
     loadData();
-  }, [month, selectedDept, selectedDivision, cycleDates, page, limit]);
+  }, [month, selectedDept, selectedDivision, selectedGroup, searchQuery, cycleDates, page, limit]);
 
   const updateCell = (empNo: string, date: string, value: RosterCell) => {
     setRoster((prev) => {
@@ -484,6 +500,11 @@ function RosterPage() {
 
   const isInitialLoad = loading && employees.length === 0;
 
+  const handleSearch = () => {
+    setSearchQuery(searchTerm.trim());
+    setPage(1);
+  };
+
   if (isInitialLoad) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
@@ -525,6 +546,30 @@ function RosterPage() {
 
         <div className="flex flex-nowrap items-center gap-10 px-3 py-1.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-all hover:shadow-md overflow-x-auto scrollbar-hide">
           <div className="flex items-center gap-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">Search:</label>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSearch();
+                }
+              }}
+              placeholder="Name / Emp No"
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-800 dark:bg-slate-950 dark:text-white min-w-[140px] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
+            />
+            <button
+              type="button"
+              onClick={handleSearch}
+              className="px-2.5 py-1 rounded-lg bg-blue-600 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-blue-700 transition-all shadow-sm"
+            >
+              Search
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">Division:</label>
             <select
               value={selectedDivision}
@@ -554,6 +599,22 @@ function RosterPage() {
               {departments.map((d) => (
                 <option key={d._id} value={d._id}>
                   {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">Group:</label>
+            <select
+              value={selectedGroup}
+              onChange={(e) => setSelectedGroup(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-800 dark:bg-slate-950 dark:text-white min-w-[110px] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
+            >
+              <option value="">All groups</option>
+              {employeeGroups.map((g) => (
+                <option key={g._id} value={g._id}>
+                  {g.name}
                 </option>
               ))}
             </select>

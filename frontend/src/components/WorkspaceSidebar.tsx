@@ -22,7 +22,7 @@ import {
     ChevronLeft,
     ChevronRight,
     Menu,
-    TentTree,
+    Layers,
     Briefcase,
     Gift,
     Clock,
@@ -56,6 +56,7 @@ const moduleIcons: Record<string, any> = {
     SHIFT_ROSTER: CalendarDays,
     DEPARTMENT: Building2,
     DEPARTMENTS: Building2,
+    EMPLOYEE_GROUPS: Layers,
     ATTENDANCE: Fingerprint,
     PROFILE: UserCircle,
     SETTINGS: Settings,
@@ -215,7 +216,8 @@ export default function WorkspaceSidebar() {
                                             const isActive = pathname === module.href ||
                                                 (module.code === 'LEAVE_OD' && (pathname === '/leaves' || pathname === '/od')) ||
                                                 (module.code === 'CCL' && pathname === '/ccl') ||
-                                                (module.code === 'RESIGNATION' && pathname === '/resignations');
+                                                (module.code === 'RESIGNATION' && pathname === '/resignations') ||
+                                                (module.code === 'EMPLOYEE_GROUPS' && pathname === '/employee-groups');
 
                                             const Icon = moduleIcons[module.code] || LayoutDashboard;
 

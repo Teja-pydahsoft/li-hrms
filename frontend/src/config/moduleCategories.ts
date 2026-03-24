@@ -39,6 +39,7 @@ export const MODULE_CATEGORIES = [
         icon: '🏢',
         modules: [
             { code: 'DEPARTMENTS', label: 'Departments', href: '/departments' },
+            { code: 'EMPLOYEE_GROUPS', label: 'Employee groups', href: '/employee-groups' },
             { code: 'DEPARTMENTAL_SETTINGS', label: 'Departmental Settings', href: '/departmental-settings' }
         ]
     },
@@ -85,10 +86,23 @@ export function isModuleEnabled(moduleCode: string, featureControl: string[] | n
     if (!featureControl || featureControl.length === 0) return true; // If no feature control or empty, allow all
 
     // Check for exact match OR :read OR :write OR :verify permissions
-    return featureControl.includes(moduleCode) ||
+    const direct =
+        featureControl.includes(moduleCode) ||
         featureControl.includes(`${moduleCode}:read`) ||
         featureControl.includes(`${moduleCode}:write`) ||
         featureControl.includes(`${moduleCode}:verify`);
+    if (direct) return true;
+
+    // Employee groups: treat as part of org setup if departments access exists (backward compatible)
+    if (moduleCode === 'EMPLOYEE_GROUPS') {
+        return (
+            featureControl.includes('DEPARTMENTS') ||
+            featureControl.includes('DEPARTMENTS:read') ||
+            featureControl.includes('DEPARTMENTS:write')
+        );
+    }
+
+    return false;
 }
 
 // Helper to check if a category has any enabled modules

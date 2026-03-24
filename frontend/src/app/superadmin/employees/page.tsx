@@ -113,6 +113,7 @@ const initialFormState: Partial<Employee> = {
   division_id: '',
   department_id: '',
   designation_id: '',
+  employee_group_id: '',
   doj: '',
   dob: '',
   gross_salary: undefined,
@@ -349,6 +350,8 @@ export default function EmployeesPage() {
   const [applicationSearchTerm, setApplicationSearchTerm] = useState('');
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [allowEmployeeBulkProcess, setAllowEmployeeBulkProcess] = useState(false);
+  const [customEmployeeGroupingEnabled, setCustomEmployeeGroupingEnabled] = useState(false);
+  const [employeeGroups, setEmployeeGroups] = useState<{ _id: string; name: string; isActive?: boolean }[]>([]);
   const [autoGenerateEmployeeNumber, setAutoGenerateEmployeeNumber] = useState(false);
   /** Toggle in bulk preview: when true, ignore emp numbers from file (auto-generate). Defaults from settings when dialog opens. */
   const [bulkPreviewAutoGenerateEmpNo, setBulkPreviewAutoGenerateEmpNo] = useState(false);
@@ -385,6 +388,7 @@ export default function EmployeesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState('');
   const [selectedDesignationFilter, setSelectedDesignationFilter] = useState('');
+  const [selectedEmployeeGroupFilter, setSelectedEmployeeGroupFilter] = useState('');
   const [employeeFilters, setEmployeeFilters] = useState<Record<string, string>>({});
 
   const [applicationPage, setApplicationPage] = useState(1);
@@ -839,7 +843,7 @@ export default function EmployeesPage() {
     if (activeTab === 'applications') {
       loadApplications();
     }
-  }, [activeTab, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter]);
+  }, [activeTab, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, selectedEmployeeGroupFilter]);
 
   useEffect(() => {
     if (showLeftDateModal && selectedEmployeeForLeftDate) {
@@ -863,6 +867,35 @@ export default function EmployeesPage() {
       .then((res) => { if (res?.success && res?.data != null) setAllowEmployeeBulkProcess(!!res.data.value); })
       .catch(() => setAllowEmployeeBulkProcess(false));
   }, []);
+
+  const loadEmployeeGroupingConfig = async () => {
+    try {
+      const res = await api.getSetting('custom_employee_grouping_enabled');
+      const on = !!(res?.success && res?.data != null && res.data.value);
+      setCustomEmployeeGroupingEnabled(on);
+      if (!on) {
+        setEmployeeGroups([]);
+        return;
+      }
+      const gRes = await api.getEmployeeGroups(true);
+      if (gRes.success && Array.isArray(gRes.data)) setEmployeeGroups(gRes.data);
+      else setEmployeeGroups([]);
+    } catch {
+      setCustomEmployeeGroupingEnabled(false);
+      setEmployeeGroups([]);
+    }
+  };
+
+  useEffect(() => {
+    loadEmployeeGroupingConfig();
+  }, []);
+
+  // Re-check latest setting when dialogs open (setting can be changed from settings page).
+  useEffect(() => {
+    if (showApplicationDialog || showDialog || showBulkUpload || showEmployeeUpdateModal) {
+      loadEmployeeGroupingConfig();
+    }
+  }, [showApplicationDialog, showDialog, showBulkUpload, showEmployeeUpdateModal]);
 
   const loadDivisions = async () => {
     try {
@@ -971,7 +1004,7 @@ export default function EmployeesPage() {
     }
   };
 
-  const generateDynamicTemplate = (settings: any) => {
+  const generateDynamicTemplate = (settings: any, opts?: { includeEmployeeGroup?: boolean }) => {
     if (!settings || !settings.groups) return;
 
     const headers: string[] = [];
@@ -1004,6 +1037,12 @@ export default function EmployeesPage() {
     headers.push('designation_name');
     sample['designation_name'] = 'Software Developer';
     columns.push({ key: 'designation_name', label: 'Designation' });
+
+    if (opts?.includeEmployeeGroup) {
+      headers.push('group_name');
+      sample['group_name'] = 'Example Group';
+      columns.push({ key: 'group_name', label: 'Employee group' });
+    }
 
     // Add fields from settings
     settings.groups.forEach((group: any) => {
@@ -1066,6 +1105,12 @@ export default function EmployeesPage() {
       columns: columns.map(c => ({ ...c, width: c.width || '150px' }))
     });
   };
+
+  useEffect(() => {
+    if (formSettings) {
+      generateDynamicTemplate(formSettings, { includeEmployeeGroup: customEmployeeGroupingEnabled });
+    }
+  }, [formSettings, customEmployeeGroupingEnabled]);
 
   const toggleSelectApplication = (id: string) => {
     setSelectedApplicationIds(prev =>
@@ -1279,6 +1324,7 @@ export default function EmployeesPage() {
         division_id: selectedDivisionFilter,
         department_id: selectedDepartmentFilter,
         designation_id: selectedDesignationFilter,
+        employee_group_id: selectedEmployeeGroupFilter || undefined,
         page: pageNum,
         limit: itemsPerPage,
       });
@@ -1418,7 +1464,7 @@ export default function EmployeesPage() {
     if (activeTab !== 'requests') {
       loadUpdateRequests();
     }
-  }, [searchQuery, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, includeLeftEmployees, itemsPerPage]);
+  }, [searchQuery, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, selectedEmployeeGroupFilter, includeLeftEmployees, itemsPerPage]);
 
   useEffect(() => {
     if (activeTab === 'requests') {
@@ -1434,6 +1480,7 @@ export default function EmployeesPage() {
         ...(selectedDivisionFilter ? { division_id: selectedDivisionFilter } : {}),
         ...(selectedDepartmentFilter ? { department_id: selectedDepartmentFilter } : {}),
         ...(selectedDesignationFilter ? { designation_id: selectedDesignationFilter } : {}),
+        ...(selectedEmployeeGroupFilter ? { employee_group_id: selectedEmployeeGroupFilter } : {}),
         ...(search ? { search } : {}),
       });
       if (response.success) {
@@ -1443,7 +1490,8 @@ export default function EmployeesPage() {
           // Ensure department is always an object with name if available in department_id
           department: app.department || (typeof app.department_id === 'object' ? app.department_id : undefined),
           // Ensure designation is also normalized if needed (though likely not populated in same way, but good practice)
-          designation: app.designation || (typeof app.designation_id === 'object' ? app.designation_id : undefined)
+          designation: app.designation || (typeof app.designation_id === 'object' ? app.designation_id : undefined),
+          employee_group: app.employee_group || (typeof app.employee_group_id === 'object' ? app.employee_group_id : undefined),
         }));
         setApplications(apps);
         setSelectedApplicationIds([]); // Reset selection on reload
@@ -2574,6 +2622,7 @@ export default function EmployeesPage() {
                       setSelectedDivisionFilter(e.target.value);
                       setSelectedDepartmentFilter(''); // Reset dept on div change
                       setSelectedDesignationFilter(''); // Reset desig on div change
+                      setSelectedEmployeeGroupFilter('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
@@ -2591,6 +2640,7 @@ export default function EmployeesPage() {
                     onChange={(e) => {
                       setSelectedDepartmentFilter(e.target.value);
                       setSelectedDesignationFilter(''); // Reset desig on dept change
+                      setSelectedEmployeeGroupFilter('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
@@ -2614,6 +2664,20 @@ export default function EmployeesPage() {
                     ))}
                   </select>
                 </div>
+                {customEmployeeGroupingEnabled && (
+                  <div className="min-w-[150px]">
+                    <select
+                      value={selectedEmployeeGroupFilter}
+                      onChange={(e) => setSelectedEmployeeGroupFilter(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      <option value="">All Groups</option>
+                      {employeeGroups.filter((g) => g.isActive !== false).map((g) => (
+                        <option key={g._id} value={g._id}>{g.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* Include Left Toggle */}
                 <label className="flex items-center gap-2 cursor-pointer ml-2">
@@ -2649,6 +2713,7 @@ export default function EmployeesPage() {
                       setSelectedDivisionFilter(e.target.value);
                       setSelectedDepartmentFilter('');
                       setSelectedDesignationFilter('');
+                      setSelectedEmployeeGroupFilter('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
@@ -2664,6 +2729,7 @@ export default function EmployeesPage() {
                     onChange={(e) => {
                       setSelectedDepartmentFilter(e.target.value);
                       setSelectedDesignationFilter('');
+                      setSelectedEmployeeGroupFilter('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
@@ -2685,6 +2751,20 @@ export default function EmployeesPage() {
                     ))}
                   </select>
                 </div>
+                {customEmployeeGroupingEnabled && (
+                  <div className="min-w-[140px]">
+                    <select
+                      value={selectedEmployeeGroupFilter}
+                      onChange={(e) => setSelectedEmployeeGroupFilter(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      <option value="">All Groups</option>
+                      {employeeGroups.filter((g) => g.isActive !== false).map((g) => (
+                        <option key={g._id} value={g._id}>{g.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2894,6 +2974,7 @@ export default function EmployeesPage() {
                     setSelectedDivisionFilter('');
                     setSelectedDepartmentFilter('');
                     setSelectedDesignationFilter('');
+                    setSelectedEmployeeGroupFilter('');
                     setApplicationFilters({});
                     loadApplications();
                   }}
@@ -3731,9 +3812,31 @@ export default function EmployeesPage() {
                     onChange={setApplicationFormData}
                     departments={departments}
                     divisions={divisions}
+                    employeeGroups={employeeGroups}
                     designations={filteredApplicationDesignations as any}
-                    excludeFields={applicationFormAutoGenerateEmpNo ? ['emp_no'] : []}
+                    excludeFields={[
+                      ...(applicationFormAutoGenerateEmpNo ? ['emp_no'] : []),
+                      ...(customEmployeeGroupingEnabled ? ['employee_group_id'] : []),
+                    ]}
                   />
+
+                  {customEmployeeGroupingEnabled && (
+                    <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                      <label className="mb-2 block text-sm font-semibold text-slate-900 dark:text-slate-100">Employee group</label>
+                      <select
+                        value={typeof (applicationFormData as any).employee_group_id === 'object'
+                          ? (applicationFormData as any).employee_group_id?._id || ''
+                          : (applicationFormData as any).employee_group_id || ''}
+                        onChange={(e) => setApplicationFormData((prev: any) => ({ ...prev, employee_group_id: e.target.value || '' }))}
+                        className="w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                      >
+                        <option value="">None</option>
+                        {employeeGroups.filter((g) => g.isActive !== false).map((g) => (
+                          <option key={g._id} value={g._id}>{g.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Leave Settings (Optional) */}
                   <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-900/60">
@@ -3958,6 +4061,62 @@ export default function EmployeesPage() {
                     </div>
                   </div>
 
+                  {/* Deduction Preferences */}
+                  <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Deduction Preferences</h3>
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Statutory</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyPF', label: 'PF' },
+                            { id: 'applyESI', label: 'ESI' },
+                            { id: 'applyProfessionTax', label: 'Profession Tax' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((formData as any)[pref.id] ?? true);
+                                  setFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((formData as any)[pref.id] ?? true) ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((formData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h4 className="mb-3 text-xs font-bold uppercase tracking-tight text-slate-400 dark:text-slate-500">Attendance Deduction</h4>
+                        <div className="space-y-3">
+                          {[
+                            { id: 'applyAttendanceDeduction', label: 'Apply attendance deduction' },
+                            { id: 'deductLateIn', label: 'Late-ins' },
+                            { id: 'deductEarlyOut', label: 'Early-outs' },
+                            { id: 'deductPermission', label: 'Permission' },
+                            { id: 'deductAbsent', label: 'Absents (extra LOP)' }
+                          ].map((pref) => (
+                            <label key={pref.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{pref.label}</span>
+                              <div
+                                onClick={() => {
+                                  const newVal = !((formData as any)[pref.id] ?? true);
+                                  setFormData(prev => ({ ...prev, [pref.id]: newVal }));
+                                }}
+                                className={`relative h-6 w-11 cursor-pointer rounded-full transition-colors duration-200 ease-in-out ${((formData as any)[pref.id] ?? true) ? 'bg-amber-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out mt-1 ml-1 ${((formData as any)[pref.id] ?? true) ? 'translate-x-5' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Actions */}
                   <div className="flex gap-3 pt-2">
                     <button
@@ -4042,6 +4201,14 @@ export default function EmployeesPage() {
                           {(selectedApplication.designation_id as any)?.name || selectedApplication.designation?.name || '-'}
                         </p>
                       </div>
+                      {customEmployeeGroupingEnabled && (
+                        <div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Group</p>
+                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                            {(selectedApplication as any).employee_group?.name || (selectedApplication as any).employee_group_id?.name || '-'}
+                          </p>
+                        </div>
+                      )}
                       <div>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Created By</p>
                         <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{selectedApplication.createdBy?.name || '-'}</p>
@@ -4621,6 +4788,7 @@ export default function EmployeesPage() {
                     }}
                     errors={{}}
                     divisions={divisions}
+                    employeeGroups={employeeGroups}
                     departments={departments}
                     designations={designations as any}
                     onSettingsLoaded={setFormSettings}
@@ -4938,6 +5106,13 @@ export default function EmployeesPage() {
                     options: designations.map(d => ({ value: d.name, label: d.name }))
                   };
                 }
+                if (col.key === 'group_name') {
+                  return {
+                    ...col,
+                    type: 'select',
+                    options: employeeGroups.filter((g) => g.isActive !== false).map((g) => ({ value: g.name, label: g.name })),
+                  };
+                }
                 if (col.key === 'gender') {
                   return { ...col, type: 'select', options: [{ value: 'Male', label: 'Male' }, { value: 'Female', label: 'Female' }, { value: 'Other', label: 'Other' }] };
                 }
@@ -4961,7 +5136,11 @@ export default function EmployeesPage() {
               })}
               validateRow={(row, index, allData) => {
                 const mappedUsers = employees.map(e => ({ _id: e._id, name: e.employee_name }));
-                const result = validateEmployeeRow(row, divisions, departments, designations as any, mappedUsers, { autoGenerateEmpNo: bulkPreviewAutoGenerateEmpNo });
+                const result = validateEmployeeRow(row, divisions, departments, designations as any, mappedUsers, {
+                  autoGenerateEmpNo: bulkPreviewAutoGenerateEmpNo,
+                  customEmployeeGroupingEnabled,
+                  employeeGroups: employeeGroups.filter((g) => g.isActive !== false),
+                });
                 const errors = [...result.errors];
                 const fieldErrors = { ...result.fieldErrors };
 
@@ -4994,7 +5173,7 @@ export default function EmployeesPage() {
 
                       // Only validate fields that are NOT already handled by validateEmployeeRow
                       // validateEmployeeRow handles: emp_no, employee_name, division_name, department_name, designation_name, gender, dob, doj, marital_status, blood_group
-                      const handledFields = ['emp_no', 'employee_name', 'division_name', 'department_name', 'designation_name', 'division_id', 'department_id', 'designation_id', 'gender', 'dob', 'doj', 'marital_status', 'blood_group'];
+                      const handledFields = ['emp_no', 'employee_name', 'division_name', 'department_name', 'designation_name', 'group_name', 'division_id', 'department_id', 'designation_id', 'employee_group_id', 'gender', 'dob', 'doj', 'marital_status', 'blood_group'];
 
                       if (!handledFields.includes(field.id) && field.isRequired) {
                         if (value === undefined || value === null || value === '') {
@@ -5033,14 +5212,25 @@ export default function EmployeesPage() {
                       d.name?.toLowerCase().trim() === desigInput ||
                       (d.code && String(d.code).toLowerCase().trim() === desigInput)
                     )?._id;
+                    const groupNameInput = String(row.group_name || '').trim();
+                    const groupIdSubmit =
+                      customEmployeeGroupingEnabled && groupNameInput
+                        ? employeeGroups.find(
+                          (g) =>
+                            g.isActive !== false &&
+                            g.name.toLowerCase().trim() === groupNameInput.toLowerCase()
+                        )?._id
+                        : undefined;
 
                     const employeeData: any = {
                       ...row,
                       division_id: divId || undefined,
                       department_id: deptId || undefined,
                       designation_id: desigId || undefined,
+                      employee_group_id: groupIdSubmit || undefined,
                       proposedSalary: row.proposedSalary || row.gross_salary || 0
                     };
+                    delete employeeData.group_name;
                     // Never send the display placeholder "(Auto)" as emp_no. Send empty so backend assigns.
                     const empNoRaw = String(employeeData.emp_no || '').trim();
                     if (empNoRaw.toUpperCase() === '(AUTO)' || bulkPreviewAutoGenerateEmpNo) {
@@ -5048,7 +5238,7 @@ export default function EmployeesPage() {
                     }
 
                     // Handle dynamic fields based on form settings
-                    const coreFields = ['emp_no', 'employee_name', 'proposedSalary', 'gross_salary', 'second_salary', 'division_id', 'department_id', 'designation_id', 'division_name', 'department_name', 'designation_name', 'doj', 'dob', 'gender', 'marital_status', 'blood_group', 'qualifications', 'experience', 'address', 'location', 'aadhar_number', 'phone_number', 'alt_phone_number', 'email', 'pf_number', 'esi_number', 'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'];
+                    const coreFields = ['emp_no', 'employee_name', 'proposedSalary', 'gross_salary', 'second_salary', 'division_id', 'department_id', 'designation_id', 'employee_group_id', 'division_name', 'department_name', 'designation_name', 'group_name', 'doj', 'dob', 'gender', 'marital_status', 'blood_group', 'qualifications', 'experience', 'address', 'location', 'aadhar_number', 'phone_number', 'alt_phone_number', 'email', 'pf_number', 'esi_number', 'bank_account_no', 'bank_name', 'bank_place', 'ifsc_code', 'salary_mode'];
 
                     if (formSettings?.groups) {
                       const dynamicFields: any = {};
@@ -5296,6 +5486,14 @@ export default function EmployeesPage() {
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Designation</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.designation?.name || '-'}</p>
                           </div>
+                          {customEmployeeGroupingEnabled && (
+                            <div>
+                              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Group</label>
+                              <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                                {(viewingEmployee as any).employee_group?.name || ((viewingEmployee as any).employee_group_id as any)?.name || '-'}
+                              </p>
+                            </div>
+                          )}
                           <div>
                             <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Date of Joining</label>
                             <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{viewingEmployee.doj ? new Date(viewingEmployee.doj).toLocaleDateString() : '-'}</p>

@@ -36,6 +36,11 @@ const employeeSchema = new mongoose.Schema(
       ref: 'Designation',
       default: null,
     },
+    employee_group_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmployeeGroup',
+      default: null,
+    },
     doj: {
       type: Date,
       default: null,
@@ -332,6 +337,7 @@ employeeSchema.index({ leftDate: 1 });
 employeeSchema.index({ phone_number: 1 });
 employeeSchema.index({ email: 1 });
 employeeSchema.index({ division_id: 1 });
+employeeSchema.index({ employee_group_id: 1 });
 
 // Virtual for department population
 employeeSchema.virtual('department', {
@@ -355,6 +361,13 @@ employeeSchema.virtual('division', {
 employeeSchema.virtual('designation', {
   ref: 'Designation',
   localField: 'designation_id',
+  foreignField: '_id',
+  justOne: true,
+});
+
+employeeSchema.virtual('employee_group', {
+  ref: 'EmployeeGroup',
+  localField: 'employee_group_id',
   foreignField: '_id',
   justOne: true,
 });
