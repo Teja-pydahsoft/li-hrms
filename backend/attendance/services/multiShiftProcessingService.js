@@ -427,7 +427,7 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                                 let segStatus = 'PRESENT';
                                 let segPayable = basePayablePerShift(split.assignedShift);
                                 const statusRatio = expectedH > 0 ? effectiveWorking / expectedH : 1;
-                                if (statusRatio >= 0.75) {
+                                if (statusRatio >= 0.9) {
                                     segStatus = 'PRESENT';
                                     segPayable = basePayablePerShift(split.assignedShift);
                                 } else if (statusRatio >= 0.40) {
@@ -500,7 +500,7 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                                     
                                     // Re-check status with OD
                                     const er = pSplitShift.expectedHours > 0 ? pSplitShift.workingHours / pSplitShift.expectedHours : 1;
-                                    if (er >= 0.75) {
+                                    if (er >= 0.9) {
                                         pSplitShift.status = 'PRESENT';
                                         pSplitShift.payableShift = pSplitShift.basePayable;
                                     } else if (er >= 0.40) {
@@ -706,8 +706,8 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
                     pShift.extraHours = Math.round((pShift.workingHours - refDuration) * 100) / 100;
                 }
 
-                // Thresholds: > 75% = PRESENT, 40%-75% = HALF_DAY, < 40% = ABSENT
-                if (statusDuration >= (expectedDuration * 0.75)) {
+                // Thresholds: >= 90% = PRESENT, 40%-90% = HALF_DAY, < 40% = ABSENT
+                if (statusDuration >= (expectedDuration * 0.9)) {
                     pShift.status = 'PRESENT';
                     pShift.payableShift = basePayable;
                 } else if (statusDuration >= (expectedDuration * 0.40)) {

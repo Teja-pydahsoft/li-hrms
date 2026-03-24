@@ -468,7 +468,7 @@ attendanceDailySchema.pre('save', async function () {
         const statusDuration = (Number(shift.punchHours) || 0) + addedOdHours;
         const basePayable = shift.basePayable || 1;
         // When hour-based OD contributes hours and total (punch + OD) satisfies shift duration: mark PRESENT, full payable, early-out already waived above
-        if (statusDuration >= expectedHours * 0.75) {
+        if (statusDuration >= expectedHours * 0.9) {
           shift.status = 'PRESENT';
           shift.payableShift = basePayable;
         } else if (statusDuration >= expectedHours * 0.4) {

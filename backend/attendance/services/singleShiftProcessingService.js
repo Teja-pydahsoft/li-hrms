@@ -11,14 +11,13 @@
  *    - First IN and last OUT on the date (or next-day OUT for overnight) form the pair.
  *
  * 2. STRICT IN/OUT DISABLED (shift-aware)
- *    - Respect roster first: use PreScheduledShift for this date so the correct shift (A-S/B-S/C-S) is used.
- *    - All punches are considered (including type null / thumb-only).
- *    - Logs come in real time: people punch at shift start and when completing their shift.
- *    - We correlate punches to roster shift start (IN) and shift end (OUT).
- *    - IN only if punch is within shift start ± 3 hours; OUT only if within shift end ± 3 hours.
- *    - Next-day OUT is accepted if and only if it is at shift end ± 3 hours (grace).
- *    - First punch in [00:00, previous overnight shift end + 1hr] on today is reserved as that
- *      overnight's OUT (when previous day roster was overnight) and not used as today's IN.
+ *    - Pre-scheduled roster wins when present; otherwise use organizational shift pool from getShiftsForEmployee.
+ *    - Multiple pool shifts: pick the shift that best matches punch times (then same ±3h windows).
+ *    - All punches are considered (including type null / thumb-only); log IN/OUT type is not used for pairing.
+ *    - IN/OUT from proximity to shift start / shift end (± 3 hours).
+ *    - Overnight: next-calendar-day punches only within shift end ± 3h enter the pool; OUT fallback can use later punches in that window.
+ *    - First punch on today in [00:00, previous overnight shift end + 1hr] is reserved as prior day's OUT when applicable.
+ *    - If no shift can be resolved from roster or pool, fall back to type-agnostic first/last punch on the date (and next day if needed).
  */
 
 const AttendanceDaily = require('../model/AttendanceDaily');
@@ -73,22 +72,36 @@ function getOverlapMinutes(startA, endA, startB, endB) {
 }
 
 /**
- * When strict IN/OUT is disabled: use assigned shift timings to decide which punch is IN and which is OUT.
- * All punches (including type null / thumb-only) are considered. Each punch is classified by proximity to
- * shift start (IN) or shift end (OUT). Overnight: shift end is next day, so next-day punch at shift end = OUT.
- *
- * Rule: First punch on today's date in the window [00:00, previous overnight shift end + 1 hour] is the
- * OUT of that overnight — do not use it as today's IN. So we only accept today's IN after shift end + 1 hour.
- * (Real-time logs: OUT comes at shift end; next shift IN comes at least after that.)
+ * Reserve first punch on `date` that belongs to previous calendar day's overnight shift end window.
  */
-async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processingMode) {
-  if (!allPunches || allPunches.length === 0) return null;
-  // Respect roster first: when roster exists, use only that shift for this date.
-  const shiftOptions = { rosterStrictWhenPresent: true };
-  const { shifts } = await getShiftsForEmployee(employeeNumber, date, shiftOptions);
-  if (!shifts || shifts.length === 0) return null;
+function computeReservedOvernightOutPunch(date, allPunches, prevShifts) {
+  if (!prevShifts || prevShifts.length === 0 || !allPunches?.length) return null;
+  const punchesOnDateOnly = allPunches
+    .filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === date)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (punchesOnDateOnly.length === 0) return null;
+  for (const s of prevShifts) {
+    const pe = (s.endTime || '').split(':').map(Number);
+    const pendMins = (pe[0] || 0) * 60 + (pe[1] || 0);
+    const ps = (s.startTime || '').split(':').map(Number);
+    const pstartMins = (ps[0] || 0) * 60 + (ps[1] || 0);
+    const prevIsOvernight = pendMins <= pstartMins || (pstartMins >= 20 * 60 && pendMins < 12 * 60);
+    if (!prevIsOvernight) continue;
+    const windowEndMins = pendMins + 60;
+    const windowEndHour = Math.floor(windowEndMins / 60) % 24;
+    const windowEndMin = windowEndMins % 60;
+    const windowEndTimeStr = `${String(windowEndHour).padStart(2, '0')}:${String(windowEndMin).padStart(2, '0')}`;
+    const windowEndToday = createISTDate(date, windowEndTimeStr);
+    const firstInWindow = punchesOnDateOnly.find(p => new Date(p.timestamp) <= windowEndToday);
+    if (firstInWindow) return firstInWindow;
+  }
+  return null;
+}
 
-  const shift = shifts[0];
+/**
+ * Build IN/OUT pair for one shift (roster or pool). Uses punch times vs shift boundaries, not log type.
+ */
+function buildShiftAwarePairForShiftDef(date, allPunches, shift, reservedOvernightOutPunch) {
   const startTime = shift.startTime;
   const endTime = shift.endTime;
   if (!startTime || !endTime) return null;
@@ -117,33 +130,6 @@ async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processi
   });
   if (punchesInWindow.length === 0) return null;
 
-  // Previous day's overnight OUT lands on today in [00:00, endTime+1hr]. Reserve that first punch so we don't use it as today's IN.
-  const prevDate = (() => { const d = new Date(date + 'T12:00:00+05:30'); d.setDate(d.getDate() - 1); return extractISTComponents(d).dateStr; })();
-  const { shifts: prevShifts } = await getShiftsForEmployee(employeeNumber, prevDate, shiftOptions);
-  let reservedOvernightOutPunch = null;
-  if (prevShifts && prevShifts.length > 0) {
-    for (const s of prevShifts) {
-      const pe = (s.endTime || '').split(':').map(Number);
-      const pendMins = (pe[0] || 0) * 60 + (pe[1] || 0);
-      const ps = (s.startTime || '').split(':').map(Number);
-      const pstartMins = (ps[0] || 0) * 60 + (ps[1] || 0);
-      const prevIsOvernight = pendMins <= pstartMins || (pstartMins >= 20 * 60 && pendMins < 12 * 60);
-      if (!prevIsOvernight) continue;
-      const windowEndMins = pendMins + 60;
-      const windowEndHour = Math.floor(windowEndMins / 60) % 24;
-      const windowEndMin = windowEndMins % 60;
-      const windowEndTimeStr = `${String(windowEndHour).padStart(2, '0')}:${String(windowEndMin).padStart(2, '0')}`;
-      const windowEndToday = createISTDate(date, windowEndTimeStr);
-      const punchesOnDateOnly = punchesInWindow.filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === date);
-      punchesOnDateOnly.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-      const firstInWindow = punchesOnDateOnly.find(p => new Date(p.timestamp) <= windowEndToday);
-      if (firstInWindow) {
-        reservedOvernightOutPunch = firstInWindow;
-        break;
-      }
-    }
-  }
-
   const SHIFT_WINDOW_GRACE_HOURS = 3;
   const windowGraceMs = SHIFT_WINDOW_GRACE_HOURS * 60 * 60 * 1000;
   const inCandidates = [];
@@ -169,28 +155,182 @@ async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processi
     }
   }
 
-  // If no candidates found, return null
-  if (inCandidates.length === 0 && outCandidates.length === 0) return null;
-
   inCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   outCandidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-  // If we have both, ensure out is after in
   let inPunch = inCandidates.length ? inCandidates[0] : null;
   let outPunch = outCandidates.length ? outCandidates[outCandidates.length - 1] : null;
 
   if (inPunch && outPunch && new Date(outPunch.timestamp) <= new Date(inPunch.timestamp)) {
-    // Conflict: if both present but out <= in, pick the better match or keep only one
     const inDist = Math.abs(new Date(inPunch.timestamp) - shiftStartDate);
     const outDist = Math.abs(new Date(outPunch.timestamp) - shiftEndDate);
     if (inDist <= outDist) outPunch = null;
     else inPunch = null;
   }
 
+  let fallbackInUsed = false;
+  let fallbackOutUsed = false;
+
+  if (!inPunch) {
+    const onDate = punchesInWindow
+      .filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === date && !isReserved(p))
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    if (onDate.length > 0) {
+      inPunch = onDate[0];
+      fallbackInUsed = true;
+    }
+  }
+
+  if (inPunch && !outPunch) {
+    const inMs = new Date(inPunch.timestamp).getTime();
+    const MIN_OUT_GAP_MS = 30 * 60 * 1000;
+    const laterPunches = punchesInWindow
+      .filter(p => !isReserved(p) && new Date(p.timestamp).getTime() > (inMs + MIN_OUT_GAP_MS))
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    if (laterPunches.length > 0) {
+      outPunch = laterPunches[laterPunches.length - 1];
+      fallbackOutUsed = true;
+    }
+  }
+
+  if (!inPunch && !outPunch) return null;
+
   const firstInTime = inPunch ? new Date(inPunch.timestamp) : null;
   const lastOutTime = outPunch ? new Date(outPunch.timestamp) : null;
+  let distScore = Number.MAX_SAFE_INTEGER;
+  if (inPunch && outPunch) {
+    distScore = Math.abs(new Date(inPunch.timestamp) - shiftStartDate)
+      + Math.abs(new Date(outPunch.timestamp) - shiftEndDate);
+  } else if (inPunch) {
+    distScore = Math.abs(new Date(inPunch.timestamp) - shiftStartDate) + 1e12;
+  } else if (outPunch) {
+    distScore = Math.abs(new Date(outPunch.timestamp) - shiftEndDate) + 1e12;
+  }
 
-  return { inPunch, outPunch, firstInTime, lastOutTime };
+  return {
+    inPunch,
+    outPunch,
+    firstInTime,
+    lastOutTime,
+    fallbackInUsed,
+    fallbackOutUsed,
+    distScore,
+    hasFullPair: !!(inPunch && outPunch),
+    sourcePriority: shift.sourcePriority ?? 99,
+  };
+}
+
+function pickBestShiftAwarePair(candidates) {
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    if (a.hasFullPair !== b.hasFullPair) return a.hasFullPair ? -1 : 1;
+    if (a.sourcePriority !== b.sourcePriority) return a.sourcePriority - b.sourcePriority;
+    return a.distScore - b.distScore;
+  });
+  const best = candidates[0];
+  return {
+    inPunch: best.inPunch,
+    outPunch: best.outPunch,
+    firstInTime: best.firstInTime,
+    lastOutTime: best.lastOutTime,
+    fallbackInUsed: best.fallbackInUsed,
+    fallbackOutUsed: best.fallbackOutUsed,
+  };
+}
+
+/**
+ * No shift from roster/pool: first/last punch on date (and next day if needed). No log type.
+ */
+function getTypeAgnosticPoolFallbackPair(date, allPunches) {
+  const MIN_GAP_MS = 30 * 60 * 1000;
+  const nextDay = nextDateStr(date);
+  const onDate = allPunches
+    .filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === date)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (onDate.length === 0) return null;
+  const first = onDate[0];
+  const lastSameDay = onDate[onDate.length - 1];
+  if (onDate.length >= 2 && new Date(lastSameDay.timestamp).getTime() > new Date(first.timestamp).getTime() + MIN_GAP_MS) {
+    return {
+      inPunch: first,
+      outPunch: lastSameDay,
+      firstInTime: new Date(first.timestamp),
+      lastOutTime: new Date(lastSameDay.timestamp),
+      fallbackInUsed: true,
+      fallbackOutUsed: true,
+    };
+  }
+  const inMs = new Date(first.timestamp).getTime();
+  const onNext = allPunches
+    .filter(p => extractISTComponents(new Date(p.timestamp)).dateStr === nextDay)
+    .filter(p => new Date(p.timestamp).getTime() > inMs + MIN_GAP_MS)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (onNext.length > 0) {
+    const outPunch = onNext[onNext.length - 1];
+    return {
+      inPunch: first,
+      outPunch,
+      firstInTime: new Date(first.timestamp),
+      lastOutTime: new Date(outPunch.timestamp),
+      fallbackInUsed: true,
+      fallbackOutUsed: true,
+    };
+  }
+  if (onDate.length >= 2) {
+    return {
+      inPunch: first,
+      outPunch: lastSameDay,
+      firstInTime: new Date(first.timestamp),
+      lastOutTime: new Date(lastSameDay.timestamp),
+      fallbackInUsed: true,
+      fallbackOutUsed: true,
+    };
+  }
+  return {
+    inPunch: first,
+    outPunch: null,
+    firstInTime: new Date(first.timestamp),
+    lastOutTime: null,
+    fallbackInUsed: true,
+    fallbackOutUsed: false,
+  };
+}
+
+function toShiftAwarePairResult(obj) {
+  if (!obj) return null;
+  return {
+    inPunch: obj.inPunch,
+    outPunch: obj.outPunch,
+    firstInTime: obj.firstInTime,
+    lastOutTime: obj.lastOutTime,
+    fallbackInUsed: obj.fallbackInUsed,
+    fallbackOutUsed: obj.fallbackOutUsed,
+  };
+}
+
+async function getShiftAwareInOutPair(employeeNumber, date, allPunches, processingMode) {
+  if (!allPunches || allPunches.length === 0) return null;
+  const shiftOptions = { rosterStrictWhenPresent: true };
+  const { shifts, source } = await getShiftsForEmployee(employeeNumber, date, shiftOptions);
+
+  const prevDate = (() => { const d = new Date(date + 'T12:00:00+05:30'); d.setDate(d.getDate() - 1); return extractISTComponents(d).dateStr; })();
+  const { shifts: prevShifts } = await getShiftsForEmployee(employeeNumber, prevDate, shiftOptions);
+  const reservedOvernightOutPunch = computeReservedOvernightOutPunch(date, allPunches, prevShifts);
+
+  if (!shifts || shifts.length === 0) {
+    return getTypeAgnosticPoolFallbackPair(date, allPunches);
+  }
+
+  if (source === 'pre_scheduled' || shifts.length === 1) {
+    const single = buildShiftAwarePairForShiftDef(date, allPunches, shifts[0], reservedOvernightOutPunch);
+    return toShiftAwarePairResult(single) || getTypeAgnosticPoolFallbackPair(date, allPunches);
+  }
+
+  const built = shifts
+    .map(s => buildShiftAwarePairForShiftDef(date, allPunches, s, reservedOvernightOutPunch))
+    .filter(Boolean);
+  const best = pickBestShiftAwarePair(built);
+  return best || getTypeAgnosticPoolFallbackPair(date, allPunches);
 }
 
 /**
@@ -222,6 +362,13 @@ function getEffectiveWorkingDuration(firstInTime, lastOutTime, shiftStartTime, s
  * @returns {Promise<Object>} { success, dailyRecord, ... }
  */
 async function processSingleShiftAttendance(employeeNumber, date, rawLogs, generalConfig, processingMode = {}) {
+    const appendPairingNote = (base, msg) => {
+      if (!msg) return base || null;
+      if (!base) return msg;
+      if (String(base).includes(msg)) return base;
+      return `${base} | ${msg}`;
+    };
+
   try {
     const validLogs = (rawLogs || []).filter(l => l && l.timestamp);
     const sortedLogs = validLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -262,50 +409,67 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
         lastOutTime = pair.lastOutTime;
         inPunchRecord = pair.inPunch;
         outPunchRecord = pair.outPunch;
+        const fallbackMsgs = [];
+        if (pair.fallbackInUsed) fallbackMsgs.push('SingleShift pairing fallback used for IN');
+        if (pair.fallbackOutUsed) fallbackMsgs.push('SingleShift pairing fallback used for OUT');
+        if (fallbackMsgs.length > 0) {
+          const existing = await AttendanceDaily.findOne({ employeeNumber, date }).select('notes').lean();
+          const msg = fallbackMsgs.join(' & ');
+          const merged = appendPairingNote(existing?.notes || null, msg);
+          await AttendanceDaily.findOneAndUpdate(
+            { employeeNumber, date },
+            { $set: { notes: merged } },
+            { upsert: true, new: false }
+          );
+        }
       }
     }
 
-    // Fallback (strict ON or no shift-aware pair): typed IN/OUT only — first IN, last OUT; overnight next-day OUT.
-    // MODIFIED: Only fallback for MISSING components, don't wipe what shift-aware already found.
-    const typedIns = targetDatePunches.filter(isIN);
-    const typedOuts = targetDatePunches.filter(isOUT);
+    // Strict ON only: supplement missing IN/OUT from log operation type (first IN, last OUT on date;
+    // overnight next-day OUT typed as OUT). When strict is OFF, pairing is time+roster only —
+    // never override or fill from punch type, which devices often mislabel.
+    if (strict) {
+      const typedIns = targetDatePunches.filter(isIN);
+      const typedOuts = targetDatePunches.filter(isOUT);
 
-    if (!firstInTime && typedIns.length) {
-      firstInTime = new Date(typedIns[0].timestamp);
-      inPunchRecord = typedIns[0];
-    }
-    if (!lastOutTime && typedOuts.length) {
-      lastOutTime = new Date(typedOuts[typedOuts.length - 1].timestamp);
-      outPunchRecord = typedOuts[typedOuts.length - 1];
-    }
+      if (!firstInTime && typedIns.length) {
+        firstInTime = new Date(typedIns[0].timestamp);
+        inPunchRecord = typedIns[0];
+      }
+      if (!lastOutTime && typedOuts.length) {
+        lastOutTime = new Date(typedOuts[typedOuts.length - 1].timestamp);
+        outPunchRecord = typedOuts[typedOuts.length - 1];
+      }
 
-    // Overnight typed OUT fallback (if still no OUT)
-    if (firstInTime && !lastOutTime) {
-      const nextDay = nextDateStr(date);
-      const nextDayPunches = allPunches.filter(p => {
-        const { dateStr } = extractISTComponents(new Date(p.timestamp));
-        return dateStr === nextDay;
-      });
-      const nextDayOuts = nextDayPunches.filter(isOUT);
-      if (nextDayOuts.length) {
-        const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
-        if (nextDayFirstOut > firstInTime) {
-          const rosterFirst = { rosterStrictWhenPresent: true };
-          const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
-          let withinGrace = true;
-          if (shifts && shifts.length > 0 && shifts[0].endTime) {
-            const endMins = timeToMinutes(shifts[0].endTime);
-            const startMins = timeToMinutes(shifts[0].startTime || '00:00');
-            const isOvernight = endMins <= startMins || (startMins >= 20 * 60 && endMins < 12 * 60);
-            if (isOvernight) {
-              const shiftEndOnNext = createISTDate(nextDay, shifts[0].endTime);
-              const graceMs = 3 * 60 * 60 * 1000;
-              withinGrace = Math.abs(nextDayFirstOut.getTime() - shiftEndOnNext.getTime()) <= graceMs;
+      // Next-calendar-day typed OUT — only for overnight shifts (shift end is on next day).
+      // Day shifts must OUT on same date; otherwise we incorrectly paired "tomorrow morning" OUT.
+      if (firstInTime && !lastOutTime) {
+        const rosterFirst = { rosterStrictWhenPresent: true };
+        const { shifts } = await getShiftsForEmployee(employeeNumber, date, rosterFirst);
+        if (shifts?.length > 0 && shifts[0].startTime && shifts[0].endTime) {
+          const endMins = timeToMinutes(shifts[0].endTime);
+          const startMins = timeToMinutes(shifts[0].startTime);
+          const isOvernight = endMins <= startMins || (startMins >= 20 * 60 && endMins < 12 * 60);
+          if (isOvernight) {
+            const nextDay = nextDateStr(date);
+            const nextDayPunches = allPunches.filter(p => {
+              const { dateStr } = extractISTComponents(new Date(p.timestamp));
+              return dateStr === nextDay;
+            });
+            const nextDayOuts = nextDayPunches.filter(isOUT);
+            if (nextDayOuts.length) {
+              const nextDayFirstOut = new Date(nextDayOuts[0].timestamp);
+              if (nextDayFirstOut > firstInTime) {
+                const shiftEndOnNext = createISTDate(nextDay, shifts[0].endTime);
+                const graceMs = 3 * 60 * 60 * 1000;
+                const withinGrace =
+                  Math.abs(nextDayFirstOut.getTime() - shiftEndOnNext.getTime()) <= graceMs;
+                if (withinGrace) {
+                  lastOutTime = nextDayFirstOut;
+                  outPunchRecord = nextDayOuts[0];
+                }
+              }
             }
-          }
-          if (withinGrace) {
-            lastOutTime = nextDayFirstOut;
-            outPunchRecord = nextDayOuts[0];
           }
         }
       }
@@ -313,7 +477,11 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
 
     // Only IN, no OUT yet → PARTIAL
     if (firstInTime && !lastOutTime) {
-      const inPunch = inPunchRecord || targetDatePunches.filter(isIN)[0];
+      const inMs = firstInTime.getTime();
+      const inPunch =
+        inPunchRecord
+        || allPunches.find(p => new Date(p.timestamp).getTime() === inMs)
+        || (strict ? targetDatePunches.filter(isIN)[0] : null);
       if (!inPunch) {
         const updateData = buildEmptyUpdate(employeeNumber, date);
         const dailyRecord = await upsertDaily(employeeNumber, date, updateData);
@@ -433,7 +601,7 @@ async function processSingleShiftAttendance(employeeNumber, date, rawLogs, gener
       pShift.basePayable = basePayable;
       const statusDuration = punchHours + (pShift.odHours || 0); // Use punch + OD gap-fill for status
 
-      if (statusDuration >= expectedHours * 0.75) {
+      if (statusDuration >= expectedHours * 0.9) {
         pShift.status = 'PRESENT';
         pShift.payableShift = basePayable;
       } else if (statusDuration >= expectedHours * 0.40) {
