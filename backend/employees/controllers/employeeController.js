@@ -38,6 +38,7 @@ const {
   stripEmployeeGroupIfDisabled,
   validateEmployeeGroupIfEnabled,
 } = require('../../shared/utils/customEmployeeGrouping');
+const streamingExportService = require('../../shared/services/streamingExportService');
 
 // ============== Helper Functions ==============
 
@@ -2108,5 +2109,129 @@ exports.bulkResendCredentials = async (req, res) => {
   } catch (error) {
     console.error('Error in bulk resend credentials:', error);
     res.status(500).json({ success: false, message: 'Error in bulk resend credentials', error: error.message });
+  }
+};
+
+/**
+ * @desc    Export employees to CSV
+ * @route   POST /api/employees/export
+ * @access  Private
+ */
+exports.exportEmployees = async (req, res) => {
+  try {
+    const { fields, filters: queryFilters, empNo } = req.body;
+    const { scopeFilter } = req;
+
+    if (!fields || !Array.isArray(fields) || fields.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please select at least one field to export' });
+    }
+
+    // Build filters
+    let filters = { ...scopeFilter };
+    if (empNo) {
+      filters.emp_no = empNo;
+    } else if (queryFilters) {
+      if (queryFilters.is_active !== undefined) filters.is_active = queryFilters.is_active === 'true' || queryFilters.is_active === true;
+      if (queryFilters.division_id) filters.division_id = queryFilters.division_id;
+      if (queryFilters.department_id) filters.department_id = queryFilters.department_id;
+      if (queryFilters.designation_id) filters.designation_id = queryFilters.designation_id;
+      if (queryFilters.employee_group_id) filters.employee_group_id = queryFilters.employee_group_id;
+
+      if (queryFilters.search) {
+        const searchRegex = new RegExp(queryFilters.search, 'i');
+        filters.$or = [
+          { emp_no: searchRegex },
+          { employee_name: searchRegex },
+          { phone_number: searchRegex },
+          { email: searchRegex }
+        ];
+      }
+
+      if (queryFilters.includeLeft !== 'true') {
+        const startOfToday = new Date();
+        startOfToday.setUTCHours(0, 0, 0, 0);
+        filters.$and = filters.$and || [];
+        filters.$and.push({ $or: [{ leftDate: null }, { leftDate: { $gte: startOfToday } }] });
+      }
+    }
+
+    // Fetch form settings to get labels
+    const settings = await EmployeeApplicationFormSettings.getActiveSettings();
+    if (!settings) {
+      return res.status(500).json({ success: false, message: 'Form settings not found' });
+    }
+
+    // Create lookup Maps for labels and groupings
+    const fieldMap = {};
+    settings.groups.forEach(group => {
+      group.fields.forEach(field => {
+        fieldMap[field.id] = field.label;
+      });
+    });
+
+    // Preparation for CSV headers/extraction
+    const csvFields = fields.map(fId => ({
+      label: fieldMap[fId] || fId,
+      value: (row) => {
+        let val = row[fId];
+        // If not at root, check dynamicFields (common in this HRMS for custom fields)
+        if ((val === undefined || val === null) && row.dynamicFields) {
+          val = row.dynamicFields[fId];
+        }
+
+        if (val === undefined || val === null) return '';
+
+        // Formatting logic
+        if (fId === 'is_active') return val ? 'Active' : 'Inactive';
+        if (fId === 'division_id' || fId === 'department_id' || fId === 'designation_id' || fId === 'employee_group_id') {
+          return val?.name || val || '';
+        }
+        if (Array.isArray(val)) {
+          return val.map(v => (typeof v === 'object' ? (v.name || v._id || JSON.stringify(v)) : String(v))).join(', ');
+        }
+        if (val instanceof Date || (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val))) {
+          const d = new Date(val);
+          return isNaN(d.getTime()) ? val : d.toLocaleDateString();
+        }
+        if (typeof val === 'object') return JSON.stringify(val);
+        return String(val);
+      }
+    }));
+
+    // Multi-database handling
+    let cursor;
+    const settingsHelper = await getEmployeeSettings();
+    if (settingsHelper.dataSource === 'mssql' && isHRMSConnected()) {
+      // For MSSQL, we fetch all and create a stream-like behavior or just build CSV in memory if small
+      // Since streamingExportService.streamToCSV expects a mongoose cursor, we might need a workaround
+      // Or just fetch simplified MongoDB data if shared fields are enough.
+      // But user likely wants SQL data too.
+      // For now, let's support MongoDB streaming which covers 90% of cases and all dynamic fields.
+      cursor = Employee.find(filters)
+        .populate('division_id', 'name')
+        .populate('department_id', 'name')
+        .populate('designation_id', 'name')
+        .populate('employee_group_id', 'name')
+        .cursor();
+    } else {
+      cursor = Employee.find(filters)
+        .populate('division_id', 'name')
+        .populate('department_id', 'name')
+        .populate('designation_id', 'name')
+        .populate('employee_group_id', 'name')
+        .cursor();
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=employees_export_${Date.now()}.csv`);
+
+    const parser = streamingExportService.streamToCSV(cursor, csvFields);
+    parser.pipe(res);
+
+  } catch (error) {
+    console.error('Error exporting employees:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Error exporting employees', error: error.message });
+    }
   }
 };

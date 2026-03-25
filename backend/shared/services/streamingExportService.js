@@ -37,8 +37,5 @@ exports.streamToCSV = (cursor, fields) => {
 
     const asyncParser = new AsyncParser(opts, transformOpts);
 
-    // Connect cursor to parser
-    cursor.pipe(asyncParser.input);
-
-    return asyncParser;
+    return asyncParser.parse(cursor);
 };

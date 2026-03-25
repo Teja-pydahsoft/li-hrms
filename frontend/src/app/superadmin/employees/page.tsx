@@ -16,6 +16,8 @@ import BulkAllowancesDeductionsModal from '@/components/employee/BulkAllowancesD
 import UpdateRequestReviewModal from '@/components/employee/UpdateRequestReviewModal';
 import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
 import Spinner from '@/components/Spinner';
+import EmployeeExportDialog from '@/components/employee/EmployeeExportDialog';
+
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
   EMPLOYEE_TEMPLATE_SAMPLE,
@@ -46,7 +48,8 @@ import {
   LayoutGrid,
   ArrowRight,
   XCircle,
-  AlertTriangle
+  AlertTriangle,
+  Download
 } from 'lucide-react';
 
 
@@ -372,6 +375,8 @@ export default function EmployeesPage() {
   const [showBulkAllowancesDeductions, setShowBulkAllowancesDeductions] = useState(false);
   const [showBankUpdateDialog, setShowBankUpdateDialog] = useState(false);
   const [submittingBankUpdate, setSubmittingBankUpdate] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [selectedEmployeeForExport, setSelectedEmployeeForExport] = useState<{ empNo?: string; name?: string } | null>(null);
 
   const [dynamicTemplate, setDynamicTemplate] = useState<{ headers: string[]; sample: any[]; columns: TemplateColumn[] }>({
     headers: EMPLOYEE_TEMPLATE_HEADERS,
@@ -2817,6 +2822,19 @@ export default function EmployeesPage() {
                 </button>
               )}
 
+              {activeTab === 'employees' && (
+                <button
+                  onClick={() => {
+                    setSelectedEmployeeForExport(null);
+                    setShowExportDialog(true);
+                  }}
+                  className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-medium text-indigo-700 transition-all hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Bulk Export</span>
+                </button>
+              )}
+
               {(activeTab === 'employees' || activeTab === 'applications') && (
                 <button
                   onClick={handleBulkResendCredentials}
@@ -3559,6 +3577,17 @@ export default function EmployeesPage() {
                                 </div>
                               </td>
                               <td className="whitespace-nowrap px-6 py-4 text-right">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedEmployeeForExport({ empNo: employee.emp_no, name: employee.employee_name });
+                                    setShowExportDialog(true);
+                                  }}
+                                  className="mr-2 rounded-lg p-2 text-slate-400 transition-all hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+                                  title="Download Data"
+                                >
+                                  <Download className="h-4 w-4" />
+                                </button>
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -6514,6 +6543,20 @@ export default function EmployeesPage() {
             }
           }}
           submitting={submittingBankUpdate}
+        />
+
+        <EmployeeExportDialog
+          isOpen={showExportDialog}
+          onClose={() => setShowExportDialog(false)}
+          empNo={selectedEmployeeForExport?.empNo}
+          employeeName={selectedEmployeeForExport?.name}
+          filters={{
+            division_id: selectedDivisionFilter,
+            department_id: selectedDepartmentFilter,
+            designation_id: selectedDesignationFilter,
+            employee_group_id: selectedEmployeeGroupFilter,
+            includeLeft: includeLeftEmployees,
+          }}
         />
       </div>
     </div>

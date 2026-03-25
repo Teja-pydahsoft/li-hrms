@@ -27,6 +27,9 @@ router.get('/count', applyScopeFilter, employeeController.getEmployeeCount);
 // Get all employees (with data scope filtering)
 router.get('/', applyScopeFilter, employeeController.getAllEmployees);
 
+// Export employees
+router.post('/export', applyScopeFilter, employeeController.exportEmployees);
+
 // Get single employee
 router.get('/:empNo', employeeController.getEmployee);
 

@@ -35,12 +35,14 @@ import {
   UserX,
   Clock as LucideClock,
   ShieldCheck,
-  CheckCircle
+  CheckCircle,
+  Download
 } from 'lucide-react';
 import BulkUpload from '@/components/BulkUpload';
 import DynamicEmployeeForm from '@/components/DynamicEmployeeForm';
 import Spinner from '@/components/Spinner';
 import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
+import EmployeeExportDialog from '@/components/employee/EmployeeExportDialog';
 import Swal from 'sweetalert2';
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
@@ -209,6 +211,8 @@ export default function EmployeesPage() {
   const [editingApplicationID, setEditingApplicationID] = useState<string | null>(null); // Track ID of application being edited
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showBankUpdateDialog, setShowBankUpdateDialog] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [selectedEmployeeForExport, setSelectedEmployeeForExport] = useState<Employee | null>(null);
   const [submittingBankUpdate, setSubmittingBankUpdate] = useState(false);
   const [formData, setFormData] = useState<Partial<Employee>>(initialFormState);
   const [formSettings, setFormSettings] = useState<any>(null); // To store dynamic settings for mapping
@@ -2697,6 +2701,22 @@ export default function EmployeesPage() {
               </button>
             )}
 
+            {/* Export Button */}
+            {hasViewPermission && (
+              <button
+                onClick={() => {
+                  setSelectedEmployeeForExport(null);
+                  setShowExportDialog(true);
+                }}
+                className="flex items-center gap-2 rounded-xl md:rounded-2xl border border-border-base bg-bg-surface/50 px-2 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold text-text-secondary transition-all hover:bg-bg-surface hover:text-indigo-500 backdrop-blur-md shadow-sm"
+              >
+                <div className="w-4 h-4 md:w-5 md:h-5 flex items-center justify-center rounded-lg bg-green-500/10 text-green-500">
+                  <Download className="h-3 w-3 md:h-3.5 md:w-3.5" />
+                </div>
+                <span className="hidden sm:inline uppercase tracking-widest text-[10px]">Export</span>
+              </button>
+            )}
+
             {/* New Application Button - Responsive */}
             {hasManagePermission && (
               <>
@@ -3101,6 +3121,17 @@ export default function EmployeesPage() {
                             >
                               <Eye className="h-3.5 w-3.5" />
                             </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedEmployeeForExport(employee);
+                                setShowExportDialog(true);
+                              }}
+                              className="w-8 h-8 flex items-center justify-center rounded-lg text-text-secondary hover:bg-green-500/10 hover:text-green-500 transition-all font-bold"
+                              title="Download"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </button>
                             {hasManagePermission && (
                               <>
                                 {employee.leftDate ? (
@@ -3454,8 +3485,7 @@ export default function EmployeesPage() {
               </div>
             </div>
           </>
-        )
-      ) : (
+        )) : (
         /* Applications Tab */
         <>
           {/* Applications Bulk Actions */}
@@ -3724,7 +3754,6 @@ export default function EmployeesPage() {
       )}
 
 
-
       {/* Application Creation Dialog */}
       {
         showApplicationDialog && (
@@ -3816,6 +3845,7 @@ export default function EmployeesPage() {
                   divisions={scopedDivisions}
                   employeeGroups={employeeGroups}
                   designations={filteredApplicationDesignations as any}
+                  isEditingExistingEmployee={false}
                   excludeFields={[
                     ...(userRole === 'hod' ? SENSITIVE_FIELDS : []),
                     ...(applicationFormAutoGenerateEmpNo ? ['emp_no'] : []),
@@ -4704,6 +4734,7 @@ export default function EmployeesPage() {
                   employeeGroups={employeeGroups}
                   designations={filteredDesignations as any}
                   onSettingsLoaded={setFormSettings}
+                  isEditingExistingEmployee={!!editingEmployee}
                   excludeFields={[
                     ...(userRole === 'hod' ? SENSITIVE_FIELDS : []),
                     ...(!editingEmployee && addFormAutoGenerateEmpNo ? ['emp_no'] : []),
@@ -6200,6 +6231,20 @@ export default function EmployeesPage() {
         employee={viewingEmployee}
         onSubmit={handleSubmitBankUpdate}
         submitting={submittingBankUpdate}
+      />
+      <EmployeeExportDialog
+        isOpen={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        empNo={selectedEmployeeForExport?.emp_no}
+        employeeName={selectedEmployeeForExport?.employee_name}
+        filters={{
+          searchTerm,
+          includeLeft: includeLeftEmployees,
+          division_id: selectedDivision || (employeeFilters['division.name'] ? divisions.find((d) => d.name === employeeFilters['division.name'])?._id : undefined),
+          department_id: employeeFilters['department.name'] ? departments.find((d) => d.name === employeeFilters['department.name'])?._id : undefined,
+          designation_id: employeeFilters['designation.name'] ? designations.find((d) => d.name === employeeFilters['designation.name'])?._id : undefined,
+          employee_group_id: employeeFilters['employee_group.name'] ? employeeGroups.find((g) => g.name === employeeFilters['employee_group.name'])?._id : undefined,
+        }}
       />
     </div>
   );
