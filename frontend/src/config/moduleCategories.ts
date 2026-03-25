@@ -1,9 +1,9 @@
 // Module Categories Configuration
 export const MODULE_CATEGORIES = [
     {
-        code: 'DASHBOARD',
-        name: 'Dashboard',
-        icon: '📊',
+        code: 'MAIN',
+        name: 'Main',
+        icon: '🏠',
         modules: [
             { code: 'DASHBOARD', label: 'Dashboard', href: '/dashboard' }
         ]
@@ -23,14 +23,15 @@ export const MODULE_CATEGORIES = [
         name: 'Time & Attendance',
         icon: '⏰',
         modules: [
-            { code: 'LEAVE_OD', label: 'Leave & OD', href: '/leaves' },
-            { code: 'CCL', label: 'CCL (Compensatory)', href: '/ccl' },
+            { code: 'ATTENDANCE', label: 'Attendance', href: '/attendance' },
             { code: 'OT_PERMISSIONS', label: 'OT & Permissions', href: '/ot-permissions' },
-            { code: 'SHIFT_ROSTER', label: 'Shift Roster', href: '/shift-roster' },
             { code: 'CONFUSED_SHIFTS', label: 'Confused Shifts', href: '/confused-shifts' },
-            { code: 'SHIFTS', label: 'Shifts', href: '/shifts' },
+            { code: 'SHIFT_ROSTER', label: 'Shift Roster', href: '/shift-roster' },
             { code: 'HOLIDAY_CALENDAR', label: 'Holiday Calendar', href: '/holidays' },
-            { code: 'ATTENDANCE', label: 'Attendance', href: '/attendance' }
+            { code: 'LEAVE_OD', label: 'Leave & OD', href: '/leaves' },
+            { code: 'LEAVE_REGISTER', label: 'Leave Register', href: '/leave-register' },
+            { code: 'CCL', label: 'CCL (Compensatory)', href: '/ccl' },
+            { code: 'SHIFTS', label: 'Shifts', href: '/shifts' }
         ]
     },
     {
@@ -38,9 +39,20 @@ export const MODULE_CATEGORIES = [
         name: 'Organization',
         icon: '🏢',
         modules: [
+            { code: 'DIVISIONS', label: 'Divisions', href: '/divisions' },
             { code: 'DEPARTMENTS', label: 'Departments', href: '/departments' },
             { code: 'EMPLOYEE_GROUPS', label: 'Employee groups', href: '/employee-groups' },
             { code: 'DEPARTMENTAL_SETTINGS', label: 'Departmental Settings', href: '/departmental-settings' }
+        ]
+    },
+    {
+        code: 'ADMINISTRATION',
+        name: 'Administration',
+        icon: '🛡️',
+        modules: [
+            { code: 'USERS', label: 'Users', href: '/users' },
+            { code: 'LIVE_ATTENDANCE', label: 'Live Attendance', href: '/live-attendance' },
+            { code: 'REPORTS', label: 'Reports', href: '/reports' }
         ]
     },
     {
@@ -50,18 +62,13 @@ export const MODULE_CATEGORIES = [
         modules: [
             { code: 'PAYMENTS', label: 'Payments', href: '/payments' },
             { code: 'PAY_REGISTER', label: 'Pay Register', href: '/pay-register' },
+            { code: 'PAYROLL_CONFIG', label: 'Payroll Configuration', href: '/payroll-config' },
+            { code: 'STATUTORY_DEDUCTIONS', label: 'Statutory Deductions', href: '/statutory-deductions' },
             { code: 'PAYSLIPS', label: 'Payslips', href: '/payslips' },
+            { code: 'ARREARS', label: 'Arrears', href: '/arrears' },
+            { code: 'MANUAL_DEDUCTIONS', label: 'Manual Deductions', href: '/manual-deductions' },
             { code: 'ALLOWANCES_DEDUCTIONS', label: 'Allowances & Deductions', href: '/allowances-deductions' },
-            { code: 'LOANS', label: 'Loans & Salary Advance', href: '/loans' },
-            { code: 'MANUAL_DEDUCTIONS', label: 'Manual Deductions', href: '/manual-deductions' }
-        ]
-    },
-    {
-        code: 'ARREARS',
-        name: 'Arrears',
-        icon: '📈',
-        modules: [
-            { code: 'ARREARS', label: 'Arrears', href: '/arrears' }
+            { code: 'LOANS_SALARY_ADVANCE', label: 'Loans & Salary Advance', href: '/loans' }
         ]
     },
     {
@@ -69,8 +76,7 @@ export const MODULE_CATEGORIES = [
         name: 'Settings',
         icon: '⚙️',
         modules: [
-            { code: 'GENERAL_SETTINGS', label: 'General Settings', href: '/settings' },
-            { code: 'USERS', label: 'Users', href: '/users' }
+            { code: 'GENERAL_SETTINGS', label: 'General Settings', href: '/settings' }
         ]
     }
 ];

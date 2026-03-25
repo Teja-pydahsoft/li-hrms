@@ -35,7 +35,7 @@ function formatTime(d) {
  */
 exports.getAttendanceReport = async (req, res) => {
     try {
-        let { startDate, endDate, departmentId, divisionId, employeeId, groupBy, month, year } = req.query;
+        let { startDate, endDate, departmentId, divisionId, employeeId, designationId, groupBy, month, year } = req.query;
 
         // --- NEW: Payroll Month Logic ---
         if (month && year) {
@@ -52,40 +52,62 @@ exports.getAttendanceReport = async (req, res) => {
         }
 
         if (employeeId && employeeId !== 'all') {
-            const employee = await Employee.findById(employeeId).select('emp_no');
-            if (employee) {
-                query.employeeNumber = employee.emp_no;
+            const empIds = String(employeeId).split(',').filter(id => id && id !== 'all');
+            if (empIds.length > 0) {
+                const employees = await Employee.find({ _id: { $in: empIds } }).select('emp_no');
+                if (employees.length > 0) {
+                    query.employeeNumber = { $in: employees.map(e => e.emp_no) };
+                }
             }
         }
 
-        // Apply filters by fetching relevant employee IDs first if department/division is set
-        if ((departmentId && departmentId !== 'all') || (divisionId && divisionId !== 'all')) {
+        // Apply filters by fetching relevant employee IDs first if department/division/designation is set
+        if ((departmentId && departmentId !== 'all') || (divisionId && divisionId !== 'all') || (designationId && designationId !== 'all')) {
             const empFilter = { is_active: { $ne: false } };
             
+            if (designationId && designationId !== 'all') {
+                const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                empFilter.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
+            }
+
             if (departmentId && departmentId !== 'all') {
-                empFilter.department_id = departmentId;
+                const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+                empFilter.department_id = deptIds.length > 1 ? { $in: deptIds } : deptIds[0];
             } else if (divisionId && divisionId !== 'all') {
-                // If only division is set, find all departments linked to this division
-                const division = await Division.findById(divisionId).select('departments').lean();
-                const divisionLinkedDeptIds = (division && division.departments) ? division.departments : [];
+                const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+                const divIdsCount = divIds.length;
+                
+                // If only division is set, find all departments linked to these divisions
+                const divisions = await Division.find({ _id: { $in: divIds } }).select('departments').lean();
+                let divisionLinkedDeptIds = [];
+                divisions.forEach(div => {
+                    if (div.departments) divisionLinkedDeptIds = [...divisionLinkedDeptIds, ...div.departments];
+                });
                 
                 const depts = await Department.find({
                     $or: [
-                        { divisions: divisionId },
+                        { divisions: { $in: divIds } },
                         { _id: { $in: divisionLinkedDeptIds } }
                     ]
                 }).select('_id');
                 const deptIds = depts.map(d => d._id);
                 
                 empFilter.$or = [
-                    { division_id: divisionId },
+                    { division_id: { $in: divIds } },
                     { department_id: { $in: deptIds } }
                 ];
             }
 
             const employees = await Employee.find(empFilter).select('emp_no');
             const empNos = employees.map(e => e.emp_no);
-            query.employeeNumber = { $in: empNos };
+            
+            if (query.employeeNumber) {
+                // If specific employees were already selected, intersect them
+                const existingEmpNos = query.employeeNumber.$in || [query.employeeNumber];
+                query.employeeNumber = { $in: empNos.filter(eno => existingEmpNos.includes(eno)) };
+            } else {
+                query.employeeNumber = { $in: empNos };
+            }
         }
 
         const limit = parseInt(req.query.limit) || 50;
@@ -141,14 +163,28 @@ exports.getAttendanceReport = async (req, res) => {
         
         // Calculate total employees for overall stats
         let overallEmpFilter = { is_active: { $ne: false } };
-        if (departmentId && departmentId !== 'all') overallEmpFilter.department_id = departmentId;
-        else if (divisionId && divisionId !== 'all') {
-            const division = await Division.findById(divisionId).select('departments').lean();
-            const divisionLinkedDeptIds = (division && division.departments) ? division.departments : [];
+        if (designationId && designationId !== 'all') {
+            const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+            overallEmpFilter.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
+        }
+        if (departmentId && departmentId !== 'all') {
+            const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+            overallEmpFilter.department_id = deptIds.length > 1 ? { $in: deptIds } : deptIds[0];
+        } else if (divisionId && divisionId !== 'all') {
+            const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+            const divisions = await Division.find({ _id: { $in: divIds } }).select('departments').lean();
+            let divisionLinkedDeptIds = [];
+            divisions.forEach(div => {
+                if (div.departments) divisionLinkedDeptIds = [...divisionLinkedDeptIds, ...div.departments];
+            });
             const depts = await Department.find({
-                $or: [{ divisions: divisionId }, { _id: { $in: divisionLinkedDeptIds } }]
+                $or: [{ divisions: { $in: divIds } }, { _id: { $in: divisionLinkedDeptIds } }]
             }).select('_id');
-            overallEmpFilter.$or = [{ division_id: divisionId }, { department_id: { $in: depts.map(d => d._id) } }];
+            const deptIds = depts.map(d => d._id);
+            overallEmpFilter.$or = [
+                { division_id: { $in: divIds } },
+                { department_id: { $in: deptIds } }
+            ];
         }
         const totalEmployeesCard = await Employee.countDocuments(overallEmpFilter);
         const allRelevantEmps = await Employee.find(overallEmpFilter).select('emp_no');
@@ -184,24 +220,41 @@ exports.getAttendanceReport = async (req, res) => {
             if (groupBy === 'division') {
                 children = await Division.find({ isActive: { $ne: false } }).select('name').lean();
             } else if (groupBy === 'department') {
-                if (!divisionId) return res.status(400).json({ success: false, message: 'Division ID is required for department grouping' });
+                // Normalize divisionId to a single ID for child filtering
+                const activeDivId = Array.isArray(divisionId) ? divisionId[0] : (String(divisionId).split(',').filter(id => id && id !== 'all')[0]);
+                if (!activeDivId) return res.status(400).json({ success: false, message: 'Division ID is required for department grouping' });
                 
                 // Get departments linked in both directions (Department.divisions AND Division.departments)
-                const division = await Division.findById(divisionId).select('departments').lean();
+                const division = await Division.findById(activeDivId).select('departments').lean();
                 const divisionLinkedDeptIds = (division && division.departments) ? division.departments : [];
 
                 children = await Department.find({ 
                     isActive: { $ne: false },
                     $or: [
-                        { divisions: divisionId },
+                        { divisions: activeDivId },
                         { _id: { $in: divisionLinkedDeptIds } }
                     ]
                 }).select('_id name').lean();
             } else if (groupBy === 'employee') {
-                if (!divisionId || !departmentId) {
-                    return res.status(400).json({ success: false, message: 'Division and Department IDs are required for employee grouping' });
+                const activeDivId = Array.isArray(divisionId) ? divisionId[0] : (String(divisionId).split(',').filter(id => id && id !== 'all')[0]);
+                const activeDeptId = Array.isArray(departmentId) ? departmentId[0] : (String(departmentId).split(',').filter(id => id && id !== 'all')[0]);
+                
+                if (!activeDeptId) {
+                    return res.status(400).json({ success: false, message: 'Department ID is required for employee grouping' });
                 }
-                const empFilter = { is_active: { $ne: false }, division_id: divisionId, department_id: departmentId };
+                
+                // Prioritize department_id for employee grouping
+                const empFilter = { is_active: { $ne: false }, department_id: activeDeptId };
+                
+                if (designationId && designationId !== 'all') {
+                    const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                    empFilter.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
+                }
+
+                if (activeDivId) {
+                    // Division is already implicitly handled by depts, but we can add it for strictness if needed
+                }
+                
                 const emps = await Employee.find(empFilter).select('employee_name emp_no').lean();
                 children = emps.map(e => ({ 
                     _id: e._id, 
@@ -438,7 +491,7 @@ exports.getThumbReports = async (req, res) => {
  */
 exports.exportAttendanceReport = async (req, res) => {
     try {
-        let { startDate, endDate, departmentId, divisionId, employeeId, search, strict, groupBy, month, year } = req.query;
+        let { startDate, endDate, departmentId, divisionId, employeeId, designationId, search, strict, groupBy, month, year } = req.query;
 
         // --- NEW: Payroll Month Logic ---
         if (month && year) {
@@ -465,9 +518,22 @@ exports.exportAttendanceReport = async (req, res) => {
 
         // ── 1. Fetch employee map ────────────────────────────────────────────────
         const empQuery = { is_active: { $ne: false } };
-        if (departmentId && departmentId !== 'all') empQuery.department_id = departmentId;
-        if (divisionId && divisionId !== 'all') empQuery.division_id = divisionId;
-        if (employeeId && employeeId !== 'all') empQuery._id = employeeId;
+        if (designationId && designationId !== 'all') {
+            const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+            empQuery.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
+        }
+        if (departmentId && departmentId !== 'all') {
+            const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+            empQuery.department_id = deptIds.length > 1 ? { $in: deptIds } : deptIds[0];
+        }
+        if (divisionId && divisionId !== 'all') {
+            const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+            empQuery.division_id = divIds.length > 1 ? { $in: divIds } : divIds[0];
+        }
+        if (employeeId && employeeId !== 'all') {
+            const empIds = String(employeeId).split(',').filter(id => id && id !== 'all');
+            empQuery._id = empIds.length > 1 ? { $in: empIds } : empIds[0];
+        }
         if (search) {
             empQuery.$or = [
                 { employee_name: { $regex: search, $options: 'i' } },
@@ -731,13 +797,29 @@ exports.exportAttendanceReport = async (req, res) => {
             // Fetch similar summaries as in getAttendanceReport
             let children = [];
             if (groupBy === 'division') {
-                children = await Division.find({ is_active: { $ne: false } }).select('name').lean();
+                const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+                const divQuery = { is_active: { $ne: false } };
+                if (divIds.length > 0) divQuery._id = { $in: divIds };
+                children = await Division.find(divQuery).select('name').lean();
             } else if (groupBy === 'department') {
-                children = await Department.find({ is_active: { $ne: false }, ...(divisionId && divisionId !== 'all' ? { divisions: divisionId } : {}) }).select('name').lean();
+                const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+                const deptQuery = { is_active: { $ne: false } };
+                if (divIds.length > 0) deptQuery.divisions = { $in: divIds };
+                children = await Department.find(deptQuery).select('name').lean();
             } else if (groupBy === 'employee') {
                 const empQuery = { is_active: { $ne: false } };
-                if (departmentId && departmentId !== 'all') empQuery.department_id = departmentId;
-                if (divisionId && divisionId !== 'all') empQuery.division_id = divisionId;
+                if (designationId && designationId !== 'all') {
+                    const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                    empQuery.designation_id = { $in: desigIds };
+                }
+                if (departmentId && departmentId !== 'all') {
+                    const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+                    empQuery.department_id = { $in: deptIds };
+                }
+                if (divisionId && divisionId !== 'all') {
+                    const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+                    empQuery.division_id = { $in: divIds };
+                }
                 const emps = await Employee.find(empQuery).select('emp_no employee_name').lean();
                 children = emps.map(e => ({ _id: e._id, name: e.employee_name, emp_no: e.emp_no }));
             }
@@ -839,7 +921,7 @@ exports.exportAttendanceReport = async (req, res) => {
                     childLeaveCount,
                     Number(avgWO.toFixed(1)),
                     Number(avgHOL.toFixed(1)),
-                    expectedWorkingDays > 0 ? (((cStats.present || 0) + (cStats.od || 0)) / expectedWorkingDays * 100).toFixed(1) + '%' : '0.0%'
+                    expectedWorkingDays > 0 ? Math.min(100, (((cStats.present || 0) + (cStats.od || 0)) / (expectedWorkingDays * total) * 100)).toFixed(1) + '%' : '0.0%'
                 ]);
             }
 
@@ -864,8 +946,23 @@ exports.exportAttendanceReport = async (req, res) => {
             ]);
 
             const statsRaw = statsData[0] || { present: 0, absent: 0, late: 0, od: 0 };
-            const totalEmployees = await Employee.countDocuments({ is_active: { $ne: false }, ...(divisionId && divisionId !== 'all' ? { division_id: divisionId } : {}), ...(departmentId && departmentId !== 'all' ? { department_id: departmentId } : {}) });
-            const allSelectedEmps = await Employee.find({ is_active: { $ne: false }, ...(divisionId && divisionId !== 'all' ? { division_id: divisionId } : {}), ...(departmentId && departmentId !== 'all' ? { department_id: departmentId } : {}) }).select('emp_no');
+            
+            const totalEmpQuery = { is_active: { $ne: false } };
+            if (designationId && designationId !== 'all') {
+                const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                totalEmpQuery.designation_id = { $in: desigIds };
+            }
+            if (divisionId && divisionId !== 'all') {
+                const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+                totalEmpQuery.division_id = { $in: divIds };
+            }
+            if (departmentId && departmentId !== 'all') {
+                const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+                totalEmpQuery.department_id = { $in: deptIds };
+            }
+
+            const totalEmployees = await Employee.countDocuments(totalEmpQuery);
+            const allSelectedEmps = await Employee.find(totalEmpQuery).select('emp_no');
             const allEmpNos_sel = allSelectedEmps.map(e => e.emp_no);
 
             let totalWO_sel = 0, totalHOL_sel = 0;
@@ -917,13 +1014,87 @@ exports.exportAttendanceReport = async (req, res) => {
 };
 
 /**
+ * Helper to draw summary boxes
+ */
+const drawSummaryBox = (doc, label, value, x, y, width, height, color) => {
+    doc.fillColor('#f8f9fa').rect(x, y, width, height).fill();
+    doc.fillColor(color).rect(x, y, 4, height).fill(); // Color strip
+    doc.fillColor('#64748b').fontSize(8).font('Helvetica-Bold').text(label.toUpperCase(), x + 10, y + 8);
+    doc.fillColor('#1e293b').fontSize(14).font('Helvetica-Bold').text(value, x + 10, y + 20);
+};
+
+/**
+ * Helper to draw a modern table in PDFKit
+ */
+const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, options = {}) => {
+    const { headerFill = '#4f46e5', rowFill = '#f8fafc', fontSize = 8 } = options;
+    let y = startY;
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    // Draw Header
+    doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
+    doc.fillColor('#FFFFFF').fontSize(fontSize).font('Helvetica-Bold');
+    
+    let x = startX;
+    headers.forEach((h, i) => {
+        doc.text(h, x + 5, y + 8, { width: colWidths[i] - 10, align: 'left' });
+        x += colWidths[i];
+    });
+    
+    y += 24;
+    doc.font('Helvetica').fontSize(fontSize).fillColor('#334155');
+
+    // Draw Rows
+    data.forEach((row, rowIndex) => {
+        // Check for page break (landscape A4 height is ~595)
+        if (y > 520) {
+            doc.addPage({ layout: 'landscape', margin: 30 });
+            y = 50;
+            
+            // Re-draw header
+            doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
+            doc.fillColor('#FFFFFF').fontSize(fontSize).font('Helvetica-Bold');
+            let xH = startX;
+            headers.forEach((h, i) => {
+                doc.text(h, xH + 5, y + 8, { width: colWidths[i] - 10, align: 'left' });
+                xH += colWidths[i];
+            });
+            y += 24;
+            doc.font('Helvetica').fontSize(fontSize).fillColor('#334155');
+        }
+
+        if (rowIndex % 2 === 0) {
+            doc.fillColor(rowFill).rect(startX, y, tableWidth, 20).fill();
+        }
+
+        doc.fillColor('#334155');
+        let xRow = startX;
+        row.forEach((cell, i) => {
+            doc.text(String(cell || ''), xRow + 5, y + 6, { 
+                width: colWidths[i] - 10, 
+                align: 'left', 
+                lineBreak: false,
+                ellipsis: true
+            });
+            xRow += colWidths[i];
+        });
+        y += 20;
+
+        // Subtle row line
+        doc.strokeColor('#e2e8f0').lineWidth(0.5).moveTo(startX, y).lineTo(startX + tableWidth, y).stroke();
+    });
+
+    return y;
+};
+
+/**
  * @desc    Export attendance summary report as PDF
  * @route   GET /api/attendance/reports/export-pdf
  * @access  Private
  */
 exports.exportAttendanceReportPDF = async (req, res) => {
     try {
-        let { startDate, endDate, departmentId, divisionId, employeeId, groupBy, month, year } = req.query;
+        let { startDate, endDate, departmentId, divisionId, employeeId, designationId, groupBy, month, year } = req.query;
 
         // Sync dates for payroll months
         if (month && year) {
@@ -939,13 +1110,29 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         // --- Fetch Summary Data (Reusing the Abstract Logic) ---
         let children = [];
         if (groupBy === 'division') {
-            children = await Division.find({ is_active: { $ne: false } }).select('name').lean();
+            const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+            const divQuery = { is_active: { $ne: false } };
+            if (divIds.length > 0) divQuery._id = { $in: divIds };
+            children = await Division.find(divQuery).select('name').lean();
         } else if (groupBy === 'department') {
-            children = await Department.find({ is_active: { $ne: false }, ...(divisionId && divisionId !== 'all' ? { divisions: divisionId } : {}) }).select('name').lean();
+            const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+            const deptQuery = { is_active: { $ne: false } };
+            if (divIds.length > 0) deptQuery.divisions = { $in: divIds };
+            children = await Department.find(deptQuery).select('name').lean();
         } else if (groupBy === 'employee') {
             const empQuery = { is_active: { $ne: false } };
-            if (departmentId && departmentId !== 'all') empQuery.department_id = departmentId;
-            if (divisionId && divisionId !== 'all') empQuery.division_id = divisionId;
+            if (designationId && designationId !== 'all') {
+                const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                empQuery.designation_id = { $in: desigIds };
+            }
+            if (departmentId && departmentId !== 'all') {
+                const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+                empQuery.department_id = { $in: deptIds };
+            }
+            if (divisionId && divisionId !== 'all') {
+                const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+                empQuery.division_id = { $in: divIds };
+            }
             children = await Employee.find(empQuery).select('emp_no employee_name').lean();
         }
 
@@ -966,34 +1153,50 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         const daysInRange = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
 
         // --- Generate PDF Document ---
-        const doc = new PDFDocument({ margin: 30, size: 'A4', layout: 'landscape' });
+        const doc = new PDFDocument({ margin: 30, size: 'A4', layout: 'landscape', bufferPages: true });
         const fname = `attendance_report_${startDate}_${endDate}.pdf`;
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
         doc.pipe(res);
 
-        // Header
-        doc.fontSize(16).text('ATTENDANCE SUMMARY REPORT', { align: 'center' });
-        doc.fontSize(10).text(`Period: ${startDate} to ${endDate}`, { align: 'center' });
-        doc.moveDown();
+        // Header Section
+        doc.fillColor('#4f46e5').rect(0, 0, 842, 60).fill(); // Indigo top bar
+        doc.fillColor('#ffffff').fontSize(20).font('Helvetica-Bold').text('HRMS ATTENDANCE REPORT', 30, 20);
+        doc.fontSize(10).font('Helvetica').text(`Generated on ${dayjs().format('DD MMM YYYY, hh:mm A')}`, 30, 42);
+        
+        doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text(`PERIOD: ${dayjs(startDate).format('DD MMM YYYY')} TO ${dayjs(endDate).format('DD MMM YYYY')}`, 30, 80, { align: 'right' });
 
-        // Table Header
-        const headers = ['Name', 'E.NO', 'Days', 'P', 'A', 'Late', 'OD', 'LVE', 'WO', 'HOL', '%'];
-        const colWidths = [180, 60, 40, 40, 40, 40, 40, 40, 40, 40, 60];
-        let startY = doc.y;
-        let startX = 30;
+        // Calculate Overall Stats for Summary Boxes
+        const statsQuery = { date: { $gte: startDate, $lte: endDate } };
+        if (divisionId && divisionId !== 'all') {
+            const dIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+            const depts = await Department.find({ divisions: { $in: dIds } }).select('_id');
+            statsQuery.employeeNumber = { $in: (await Employee.find({ $or: [{ division_id: { $in: dIds } }, { department_id: { $in: depts.map(d => d._id) } }] }).select('emp_no')).map(e => e.emp_no) };
+        } else if (departmentId && departmentId !== 'all') {
+            const dIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+            statsQuery.employeeNumber = { $in: (await Employee.find({ department_id: { $in: dIds } }).select('emp_no')).map(e => e.emp_no) };
+        }
 
-        doc.fillColor('#eeeeee').rect(startX, startY, 780, 20).fill();
-        doc.fillColor('#000000').fontSize(9);
+        const overallStats = await AttendanceDaily.aggregate([
+            { $match: statsQuery },
+            { $group: { _id: null, present: { $sum: "$payableShifts" }, late: { $sum: { $cond: [{ $gt: ["$totalLateInMinutes", 0] }, 1, 0] } }, od: { $sum: { $cond: [{ $gt: ["$odHours", 0] }, 1, 0] } } } }
+        ]);
+        const oStats = overallStats[0] || { present: 0, late: 0, od: 0 };
 
-        headers.forEach((h, i) => {
-            doc.text(h, startX + colWidths.slice(0, i).reduce((a, b) => a + b, 0), startY + 5);
-        });
+        // Draw Summary Boxes
+        let boxY = 110;
+        drawSummaryBox(doc, 'Total Days', String(daysInRange), 30, boxY, 120, 45, '#4f46e5');
+        drawSummaryBox(doc, 'Present Days', oStats.present.toFixed(1), 160, boxY, 120, 45, '#10b981');
+        drawSummaryBox(doc, 'Late Ins', String(oStats.late), 290, boxY, 120, 45, '#f59e0b');
+        drawSummaryBox(doc, 'On Duty', String(oStats.od), 420, boxY, 120, 45, '#3b82f6');
 
-        doc.moveDown(0.5);
-        doc.moveTo(startX, doc.y).lineTo(startX + 780, doc.y).stroke();
+        doc.moveDown(4);
 
-        // Table Rows
+        // Table Header & Rows
+        const headers = ['NAME / ENTITY', 'E.NO', 'HEADS', 'PRES', 'ABS', 'LATE', 'OD', 'LVE', 'WO', 'HOL', '%'];
+        const colWidths = [190, 60, 50, 50, 50, 50, 50, 50, 50, 50, 80];
+        
+        const tableData = [];
         for (const child of children) {
             const childEmpFilter = { is_active: { $ne: false } };
             if (groupBy === 'division') {
@@ -1018,14 +1221,33 @@ exports.exportAttendanceReportPDF = async (req, res) => {
             const avgHOL = childEmployees.length > 0 ? tHOL / childEmployees.length : 0;
             const expWorking = Math.max(0, daysInRange - avgWO - avgHOL);
             const trueAbsent = Math.max(0, expWorking - (cStats.present || 0) - (cStats.od || 0) - (childLeaveCount || 0));
-            const pPercent = expWorking > 0 ? (((cStats.present || 0) + (cStats.od || 0)) / expWorking * 100).toFixed(1) + '%' : '0.0%';
+            const pPercent = expWorking > 0 ? Math.min(100, (((cStats.present || 0) + (cStats.od || 0)) / (expWorking * childEmployees.length) * 100)).toFixed(1) + '%' : '0.0%';
 
-            if (doc.y > 550) { doc.addPage({ layout: 'landscape', margin: 30 }); startY = doc.y; }
+            tableData.push([
+                child.employee_name || child.name,
+                child.emp_no || '-',
+                childEmployees.length,
+                cStats.present.toFixed(1),
+                trueAbsent.toFixed(1),
+                cStats.late,
+                cStats.od,
+                childLeaveCount,
+                avgWO.toFixed(1),
+                avgHOL.toFixed(1),
+                pPercent
+            ]);
+        }
 
-            const row = [ child.employee_name || child.name, child.emp_no || '-', childEmployees.length, cStats.present.toFixed(1), trueAbsent.toFixed(1), cStats.late, cStats.od, childLeaveCount, avgWO.toFixed(1), avgHOL.toFixed(1), pPercent ];
-            startY = doc.y;
-            row.forEach((v, i) => { doc.text(String(v), startX + colWidths.slice(0, i).reduce((a, b) => a + b, 0), startY); });
-            doc.moveDown(0.5);
+        drawPDFTableModern(doc, headers, tableData, 30, doc.y + 20, colWidths);
+
+        // Footer & Page Numbers
+        const pages = doc.bufferedPageRange();
+        for (let i = 0; i < pages.count; i++) {
+            doc.switchToPage(i);
+            doc.fontSize(8).fillColor('#94a3b8').text(
+                `Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`,
+                30, doc.page.height - 30, { align: 'center' }
+            );
         }
 
         doc.end();

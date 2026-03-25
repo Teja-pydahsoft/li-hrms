@@ -246,10 +246,22 @@ exports.getODs = async (req, res) => {
     };
 
     if (status) filter.status = status;
-    if (employeeId) filter.employeeId = employeeId;
-    if (department) filter.department = department;
-    if (division) filter.division_id = division;
-    if (designation) filter.designation = designation;
+    if (employeeId && employeeId !== 'all') {
+      const ids = String(employeeId).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.employeeId = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.department = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.division_id = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.designation = ids.length > 1 ? { $in: ids } : ids[0];
+    }
     if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
 
@@ -277,7 +289,14 @@ exports.getODs = async (req, res) => {
 
     const [ods, total] = await Promise.all([
       OD.find(filter)
-        .populate('employeeId', 'employee_name emp_no')
+        .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
         .populate('department', 'name')
         .populate('designation', 'name')
         .populate('appliedBy', 'name email')
@@ -337,7 +356,14 @@ exports.getMyODs = async (req, res) => {
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
 
     const ods = await OD.find(filter)
-      .populate('employeeId', 'employee_name emp_no')
+      .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
       .populate('department', 'name')
       .populate('designation', 'name')
       .populate('appliedBy', 'name email')
@@ -364,7 +390,14 @@ exports.getMyODs = async (req, res) => {
 exports.getOD = async (req, res) => {
   try {
     const od = await OD.findById(req.params.id)
-      .populate('employeeId', 'employee_name emp_no email phone_number')
+      .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no email phone_number department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
       .populate('department', 'name code')
       .populate('designation', 'name')
       .populate('appliedBy', 'name email')
@@ -1335,9 +1368,18 @@ exports.getPendingApprovals = async (req, res) => {
       filter.toDate = filter.toDate || {};
       filter.toDate.$lte = new Date(toDate);
     }
-    if (department) filter.department = department;
-    if (division) filter.division_id = division;
-    if (designation) filter.designation = designation;
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.department = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.division_id = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.designation = ids.length > 1 ? { $in: ids } : ids[0];
+    }
 
     if (search && String(search).trim()) {
       const searchStr = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1363,7 +1405,14 @@ exports.getPendingApprovals = async (req, res) => {
 
     const [ods, total] = await Promise.all([
       OD.find(filter)
-        .populate('employeeId', 'employee_name emp_no first_name last_name')
+        .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no first_name last_name department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
         .populate('department', 'name')
         .populate('designation', 'name')
         .populate('assignedBy', 'name email')

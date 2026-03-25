@@ -5,6 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import dynamic from 'next/dynamic';
 import { api } from '@/lib/api';
+import { MultiSelect } from '@/components/MultiSelect';
 import { auth } from '@/lib/auth';
 import {
   canViewLeaves,
@@ -529,6 +530,9 @@ export default function LeavesPage() {
 
   // Employees for "Apply For" selection
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [designations, setDesignations] = useState<any[]>([]);
   const [defaultEmployees, setDefaultEmployees] = useState<Employee[]>([]); // Store initial loaded employees
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -580,8 +584,9 @@ export default function LeavesPage() {
     leaveType: '',
     startDate: '',
     endDate: '',
-    division: '',
-    department: ''
+    division: [] as string[],
+    department: [] as string[],
+    designation: [] as string[],
   });
 
   // Evidence State
@@ -1849,16 +1854,28 @@ export default function LeavesPage() {
 
 
   // Helper: get department name from item (top-level or nested on employeeId)
-  const getItemDepartmentName = (item: any) =>
-    item?.department?.name || (item?.employeeId as any)?.department?.name || (item?.department_name) || '';
+  const getItemDepartmentName = (item: any) => {
+    const populated = item?.department?.name || (item?.employeeId as any)?.department?.name;
+    const fallback = item?.department_name;
+    const val = populated || fallback || '';
+    return val === 'N/A' || val === 'undefined' ? '' : val;
+  };
 
   // Helper: get division name from item (top-level or nested)
-  const getItemDivisionName = (item: any) =>
-    item?.division_name || (item?.employeeId as any)?.department?.division?.name || (item?.division_id as any)?.name || '';
+  const getItemDivisionName = (item: any) => {
+    const populated = (item?.employeeId as any)?.division?.name || (item?.employeeId as any)?.department?.division?.name || (item?.division_id as any)?.name;
+    const fallback = item?.division_name;
+    const val = populated || fallback || '';
+    return val === 'N/A' || val === 'undefined' ? '' : val;
+  };
 
   // Helper: get designation name from item (top-level or nested on employeeId)
-  const getItemDesignationName = (item: any) =>
-    item?.designation?.name || (item?.employeeId as any)?.designation?.name || item?.designation_name || '';
+  const getItemDesignationName = (item: any) => {
+    const populated = item?.designation?.name || (item?.employeeId as any)?.designation?.name;
+    const fallback = item?.designation_name;
+    const val = populated || fallback || '';
+    return val === 'N/A' || val === 'undefined' ? '' : val;
+  };
 
   // Filter logic
   const filterData = (data: any[]) => {
@@ -1887,10 +1904,15 @@ export default function LeavesPage() {
       const matchesType = !leaveFilters.leaveType || (type && type === leaveFilters.leaveType);
 
       // 4. Division Filter
-      const matchesDivision = !leaveFilters.division || (getItemDivisionName(item) === leaveFilters.division);
+      const itemDivId = item.employeeId?.division?._id || item.employeeId?.division || item.division_id;
+      const matchesDivision = leaveFilters.division.length === 0 || (itemDivId && leaveFilters.division.includes(typeof itemDivId === 'object' ? itemDivId.toString() : itemDivId));
 
       // 5. Department Filter
-      const matchesDepartment = !leaveFilters.department || (getItemDepartmentName(item) === leaveFilters.department);
+      const itemDepId = item.employeeId?.department?._id || item.employeeId?.department || item.department_id;
+      const matchesDepartment = leaveFilters.department.length === 0 || (itemDepId && leaveFilters.department.includes(typeof itemDepId === 'object' ? itemDepId.toString() : itemDepId));
+      
+      const itemDesId = item.employeeId?.designation?._id || item.employeeId?.designation || item.designation_id;
+      const matchesDesignation = leaveFilters.designation.length === 0 || (itemDesId && leaveFilters.designation.includes(typeof itemDesId === 'object' ? itemDesId.toString() : itemDesId));
 
       // 6. Date Range Filter
       let matchesDate = true;
@@ -1901,7 +1923,7 @@ export default function LeavesPage() {
         matchesDate = itemDate >= start && itemDate <= end;
       }
 
-      return matchesSearch && matchesStatus && matchesType && matchesDivision && matchesDepartment && matchesDate;
+      return matchesSearch && matchesStatus && matchesType && matchesDivision && matchesDepartment && matchesDesignation && matchesDate;
     });
   };
 
@@ -2105,32 +2127,9 @@ export default function LeavesPage() {
     };
   }, [leaves, ods, activeTab, currentUser]);
 
-  // Unique division and department names for filter dropdowns (from all lists)
-  const filterDivisionOptions = useMemo(() => {
-    const collected = new Set<string>();
-    const addFrom = (list: any[]) => list.forEach(item => {
-      const n = item?.division_name || (item?.employeeId as any)?.department?.division?.name || (item?.division_id as any)?.name;
-      if (n) collected.add(n);
-    });
-    addFrom(leaves);
-    addFrom(ods);
-    addFrom(pendingLeaves);
-    addFrom(pendingODs);
-    return Array.from(collected).sort();
-  }, [leaves, ods, pendingLeaves, pendingODs]);
+  
 
-  const filterDepartmentOptions = useMemo(() => {
-    const collected = new Set<string>();
-    const addFrom = (list: any[]) => list.forEach(item => {
-      const n = item?.department?.name || (item?.employeeId as any)?.department?.name || item?.department_name;
-      if (n) collected.add(n);
-    });
-    addFrom(leaves);
-    addFrom(ods);
-    addFrom(pendingLeaves);
-    addFrom(pendingODs);
-    return Array.from(collected).sort();
-  }, [leaves, ods, pendingLeaves, pendingODs]);
+  
 
 
 
@@ -2378,40 +2377,41 @@ export default function LeavesPage() {
                   </select>
                 </div>
 
-                {/* Division Filter - when we have divisions and user is not HOD */}
-                {currentUser?.role !== 'hod' && filterDivisionOptions.length > 0 && (
-                  <div className="relative">
-                    <Filter className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                    <select
-                      value={leaveFilters.division}
-                      onChange={(e) => setLeaveFilters(prev => ({ ...prev, division: e.target.value }))}
-                      className="h-10 pl-9 pr-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all appearance-none cursor-pointer w-full"
-                    >
-                      <option value="">All Divisions</option>
-                      {filterDivisionOptions.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))}
-                    </select>
-                  </div>
+                {/* Division Filter */}
+                {currentUser?.role !== 'hod' && (
+                <MultiSelect
+                    label="Division"
+                    options={divisions.map((d: any) => ({ id: d._id, name: d.name }))}
+                    selectedIds={leaveFilters.division}
+                    onChange={(vals) => setLeaveFilters(prev => ({ ...prev, division: vals }))}
+                    placeholder="All Divisions"
+                    className="w-full md:w-32 xl:w-40"
+                  />
                 )}
 
                 {/* Department Filter */}
-                {currentUser?.role !== 'hod' && filterDepartmentOptions.length > 0 && (
-                  <div className="relative">
-                    <Filter className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                    <select
-                      value={leaveFilters.department}
-                      onChange={(e) => setLeaveFilters(prev => ({ ...prev, department: e.target.value }))}
-                      className="h-10 pl-9 pr-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all appearance-none cursor-pointer w-full"
-                    >
-                      <option value="">All Departments</option>
-                      {filterDepartmentOptions.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))}
-                    </select>
-                  </div>
+                {currentUser?.role !== 'hod' && (
+                  <MultiSelect
+                    label="Department"
+                    options={departments.map((d: any) => ({ id: d._id, name: d.name }))}
+                    selectedIds={leaveFilters.department}
+                    onChange={(vals) => setLeaveFilters(prev => ({ ...prev, department: vals }))}
+                    placeholder="All Departments"
+                    className="w-full md:w-32 xl:w-40"
+                  />
                 )}
-
+                
+                {/* Designation Filter */}
+                {currentUser?.role !== 'hod' && (
+                  <MultiSelect
+                    label="Designation"
+                    options={designations.map((d: any) => ({ id: d._id, name: d.name }))}
+                    selectedIds={leaveFilters.designation}
+                    onChange={(vals) => setLeaveFilters(prev => ({ ...prev, designation: vals }))}
+                    placeholder="All Designations"
+                    className="w-full md:w-32 xl:w-40"
+                  />
+                )}
                 {/* Pay Period / Date Range — drives backend fetch */}
                 <div className="col-span-2 flex flex-col sm:flex-row items-start sm:items-center gap-2">
                   {/* Quick Presets */}

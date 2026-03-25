@@ -12,6 +12,7 @@ import EmployeeSelect from '@/components/EmployeeSelect';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Loader2, Calendar, Briefcase, X, Clock as Clock3, Star, FileText, CheckCircle2 } from 'lucide-react';
+import { MultiSelect } from '@/components/MultiSelect';
 
 const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
@@ -557,10 +558,12 @@ export default function LeavesPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
 
-  const [selectedDivisionFilter, setSelectedDivisionFilter] = useState('');
-  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState('');
-  const [selectedDesignationFilter, setSelectedDesignationFilter] = useState('');
-  const [selectedStatusFilter, setSelectedStatusFilter] = useState('');
+  const [leaveFilters, setLeaveFilters] = useState({
+    division: [] as string[],
+    department: [] as string[],
+    designation: [] as string[],
+    status: ''
+  });
 
   // Form validation for Apply button
   const isFormValid = () => {
@@ -596,8 +599,8 @@ export default function LeavesPage() {
   const loadFilterData = async () => {
     try {
       const [divRes, deptRes, desigRes] = await Promise.all([
-        api.getDivisions(),
-        api.getDepartments(),
+        api.getDivisions(true),
+        api.getDepartments(true),
         api.getAllDesignations()
       ]);
 
@@ -609,20 +612,29 @@ export default function LeavesPage() {
     }
   };
 
-  // Filtered departments based on selected division
+  // Filtered departments based on selected divisions
   const filteredDepartments = useMemo(() => {
-    if (!selectedDivisionFilter) return departments;
-    const div = divisions.find(d => String(d._id) === selectedDivisionFilter);
-    if (!div || !div.departments) return departments;
-    return departments.filter(dept =>
-      (div.departments || []).some(d =>
-        (typeof d === 'string' ? d : String((d as any)._id)) === String(dept._id)
-      )
-    );
-  }, [selectedDivisionFilter, divisions, departments]);
+    if (leaveFilters.division.length === 0) return departments;
+    
+    // Get all divisions that are currently selected
+    const selectedDivs = divisions.filter(d => leaveFilters.division.includes(String(d._id)));
+    
+    // Extract all department IDs from these divisions
+    const allowedDeptIds = new Set<string>();
+    selectedDivs.forEach(div => {
+      (div.departments || []).forEach(d => {
+        allowedDeptIds.add(typeof d === 'string' ? d : String((d as any)._id));
+      });
+    });
+
+    return departments.filter(dept => dept?._id && allowedDeptIds.has(String(dept._id)));
+  }, [leaveFilters.division, divisions, departments]);
 
   useEffect(() => {
     loadDashboardStats();
+    loadFilterData();
+    loadTypes();
+    loadEmployees();
   }, []);
 
   // Fetch pay cycle start day setting on mount
@@ -648,33 +660,38 @@ export default function LeavesPage() {
   // Re-fetch when date range changes
   useEffect(() => {
     loadData();
-  }, [dateRange.from, dateRange.to]);
+  }, [dateRange.from, dateRange.to, leaveFilters]);
 
   useEffect(() => {
     loadLeavesData(1);
     loadODsData(1);
     loadDashboardStats();
-  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, selectedStatusFilter, dateRange.from, dateRange.to]);
+  }, [searchTerm, leaveFilters, dateRange.from, dateRange.to]);
 
   useEffect(() => {
     if (activeTab !== 'pending') return;
     setPendingLeavesPage(1);
     setPendingODsPage(1);
     loadPendingData(1, 1);
-  }, [activeTab, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter, searchTerm]);
+  }, [activeTab, leaveFilters, searchTerm]);
 
   // Shared filters for Leaves and OD tabs (used for API calls) — includes backend date range
   const getLeavesODFilters = () => ({
     search: searchTerm?.trim() || undefined,
-    status: selectedStatusFilter || undefined,
-    department: selectedDepartmentFilter || undefined,
-    division: selectedDivisionFilter || undefined,
-    designation: selectedDesignationFilter || undefined,
+    status: leaveFilters.status || undefined,
+    department: leaveFilters.department.length > 0 ? leaveFilters.department : undefined,
+    division: leaveFilters.division.length > 0 ? leaveFilters.division : undefined,
+    designation: leaveFilters.designation.length > 0 ? leaveFilters.designation : undefined,
     fromDate: dateRange.from || undefined,
     toDate: dateRange.to || undefined,
   });
 
-  const hasActiveFilter = !!(searchTerm?.trim() || selectedDivisionFilter || selectedDepartmentFilter || selectedDesignationFilter);
+  const hasActiveFilter = !!(
+    searchTerm?.trim() || 
+    leaveFilters.division.length > 0 || 
+    leaveFilters.department.length > 0 || 
+    leaveFilters.designation.length > 0
+  );
 
   const loadDashboardStats = async () => {
     setLoadingStats(true);
@@ -765,13 +782,13 @@ export default function LeavesPage() {
       return;
     }
     loadData();
-  }, [searchTerm, selectedDivisionFilter, selectedDepartmentFilter, selectedDesignationFilter]);
+  }, [searchTerm, leaveFilters]);
 
   const getPendingFilters = () => ({
     search: searchTerm?.trim() || undefined,
-    department: selectedDepartmentFilter || undefined,
-    division: selectedDivisionFilter || undefined,
-    designation: selectedDesignationFilter || undefined,
+    department: leaveFilters.department.length > 0 ? leaveFilters.department : undefined,
+    division: leaveFilters.division.length > 0 ? leaveFilters.division : undefined,
+    designation: leaveFilters.designation.length > 0 ? leaveFilters.designation : undefined,
   });
 
   const loadPendingData = async (leavePage = pendingLeavesPage, odPage = pendingODsPage, limitOverride?: number) => {
@@ -1653,17 +1670,17 @@ export default function LeavesPage() {
     }
 
     const emp = item.employeeId as any;
-    if (selectedDivisionFilter) {
-      const divId = typeof emp?.division === 'object' ? emp?.division?._id : (emp?.division_id || emp?.division);
-      if (String(divId) !== String(selectedDivisionFilter)) return false;
+    if (leaveFilters.division.length > 0) {
+      const divId = typeof emp?.division === 'object' ? String(emp?.division?._id) : String(emp?.division_id || emp?.division);
+      if (!leaveFilters.division.includes(divId)) return false;
     }
-    if (selectedDepartmentFilter) {
-      const deptId = typeof emp?.department === 'object' ? emp?.department?._id : (emp?.department_id || emp?.department);
-      if (String(deptId) !== String(selectedDepartmentFilter)) return false;
+    if (leaveFilters.department.length > 0) {
+      const deptId = typeof emp?.department === 'object' ? String(emp?.department?._id) : String(emp?.department_id || emp?.department);
+      if (!leaveFilters.department.includes(deptId)) return false;
     }
-    if (selectedDesignationFilter) {
-      const desigId = typeof emp?.designation === 'object' ? emp?.designation?._id : (emp?.designation_id || emp?.designation);
-      if (String(desigId) !== String(selectedDesignationFilter)) return false;
+    if (leaveFilters.designation.length > 0) {
+      const desigId = typeof emp?.designation === 'object' ? String(emp?.designation?._id) : String(emp?.designation_id || emp?.designation);
+      if (!leaveFilters.designation.includes(desigId)) return false;
     }
 
     return true;
@@ -1789,12 +1806,12 @@ export default function LeavesPage() {
         />
       </div>
 
-      {/* Tabs */}
-      <div className="mb-6">
-        <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700">
+      {/* Tabs and Filters Unified Header */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-700 pb-1 relative z-40">
+        <div className="flex gap-2 -mb-px">
           <button
             onClick={() => setActiveTab('leaves')}
-            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 -mb-px ${activeTab === 'leaves'
+            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 ${activeTab === 'leaves'
               ? 'border-blue-500 text-blue-600'
               : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
@@ -1806,7 +1823,7 @@ export default function LeavesPage() {
           </button>
           <button
             onClick={() => setActiveTab('od')}
-            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 -mb-px ${activeTab === 'od'
+            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 ${activeTab === 'od'
               ? 'border-purple-500 text-purple-600'
               : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
@@ -1818,7 +1835,7 @@ export default function LeavesPage() {
           </button>
           <button
             onClick={() => setActiveTab('pending')}
-            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 -mb-px ${activeTab === 'pending'
+            className={`px-4 py-2.5 font-medium text-sm transition-all border-b-2 ${activeTab === 'pending'
               ? 'border-yellow-500 text-yellow-600'
               : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
@@ -1829,119 +1846,97 @@ export default function LeavesPage() {
             </span>
           </button>
         </div>
-      </div>
 
-      {/* Filters Bar — Consolidated single line like Attendance Page */}
-      <div className="mb-6 flex flex-nowrap items-center gap-2 overflow-x-auto pb-2 scrollbar-hide bg-slate-100/50 dark:bg-slate-800/40 p-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 backdrop-blur-sm">
-        <select
-          value={selectedDivisionFilter}
-          onChange={(e) => {
-            setSelectedDivisionFilter(e.target.value);
-            setSelectedDepartmentFilter('');
-          }}
-          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
-        >
-          <option value="">All Divisions</option>
-          {divisions.map((div) => (
-            <option key={div._id} value={div._id}>{div.name}</option>
-          ))}
-        </select>
+        {/* Global Filters Aligned Right */}
+        <div className="flex flex-nowrap items-center gap-2 pb-1.5">
+          <MultiSelect
+            options={divisions.map(d => ({ name: d?.name || 'Unknown', id: String(d?._id || '') }))}
+            selectedIds={leaveFilters.division}
+            onChange={(vals) => setLeaveFilters(prev => ({ ...prev, division: vals, department: [] }))}
+            placeholder="Divisions"
+            className="min-w-[130px]"
+          />
 
-        <select
-          value={selectedDepartmentFilter}
-          onChange={(e) => setSelectedDepartmentFilter(e.target.value)}
-          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
-        >
-          <option value="">All Departments</option>
-          {filteredDepartments.map((dept) => (
-            <option key={dept._id} value={dept._id}>{dept.name}</option>
-          ))}
-        </select>
+          <MultiSelect
+            options={filteredDepartments.map(d => ({ name: d?.name || 'Unknown', id: String(d?._id || '') }))}
+            selectedIds={leaveFilters.department}
+            onChange={(vals) => setLeaveFilters(prev => ({ ...prev, department: vals }))}
+            placeholder="Departments"
+            className="min-w-[130px]"
+          />
 
-        <select
-          value={selectedDesignationFilter}
-          onChange={(e) => setSelectedDesignationFilter(e.target.value)}
-          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
-        >
-          <option value="">All Designations</option>
-          {designations.map((desig) => (
-            <option key={desig._id} value={desig._id}>{desig.name}</option>
-          ))}
-        </select>
+          <MultiSelect
+            options={designations.map(d => ({ name: d?.name || 'Unknown', id: String(d?._id || '') }))}
+            selectedIds={leaveFilters.designation}
+            onChange={(vals) => setLeaveFilters(prev => ({ ...prev, designation: vals }))}
+            placeholder="Designations"
+            className="min-w-[130px]"
+          />
 
-        <select
-          value={selectedStatusFilter}
-          onChange={(e) => setSelectedStatusFilter(e.target.value)}
-          className="h-9 pl-2 pr-8 text-[11px] font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[120px]"
-        >
-          <option value="">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
+          <select
+            value={leaveFilters.status}
+            onChange={(e) => setLeaveFilters(prev => ({ ...prev, status: e.target.value }))}
+            className="h-9 pl-3 pr-8 text-[11px] font-bold uppercase tracking-wider bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shadow-sm"
+          >
+            <option value="">Status</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
 
-        <div className="relative min-w-[200px] flex-grow max-w-xs">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-            <SearchIcon />
+          <div className="relative min-w-[150px]">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+              <SearchIcon />
+            </div>
+            <input
+              type="text"
+              placeholder="Search..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full h-9 rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-1 text-[11px] font-bold shadow-sm focus:border-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
           </div>
-          <input
-            type="text"
-            placeholder="Search employees..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="block w-full h-9 rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-1 text-[11px] font-semibold shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-          />
-        </div>
 
-        <div className="h-6 w-px bg-slate-300 dark:bg-slate-700 mx-1 shrink-0" />
+          <div className="h-6 w-px bg-slate-300 dark:bg-slate-700 mx-1 shrink-0" />
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          {[
-            {
-              label: 'This Month',
-              get: () => getDefaultDateRange(payCycleStartDay)
-            },
-            {
-              label: 'Last Month',
-              get: () => getPreviousPayCycle(payCycleStartDay)
-            },
-            {
-              label: 'Last 3M',
-              get: () => getLast3MonthsPayCycle(payCycleStartDay)
-            }
-          ].map(preset => {
-            const r = preset.get();
-            const isActive = dateRange.from === r.from && dateRange.to === r.to;
-            return (
-              <button
-                key={preset.label}
-                onClick={() => setDateRange(r)}
-                className={`h-8 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${isActive
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20'
-                  : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/10'}`}
-              >
-                {preset.label}
-              </button>
-            );
-          })}
-        </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {[
+              { label: 'Month', get: () => getDefaultDateRange(payCycleStartDay) },
+              { label: 'Last', get: () => getPreviousPayCycle(payCycleStartDay) }
+            ].map(preset => {
+              const r = preset.get();
+              const isActive = dateRange.from === r.from && dateRange.to === r.to;
+              return (
+                <button
+                  key={preset.label}
+                  onClick={() => setDateRange(r)}
+                  className={`h-8 px-2 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all border ${isActive
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-slate-800 text-slate-500 border-slate-200 hover:border-blue-400'}`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
 
-        <div className="flex items-center gap-1.5 px-3 h-9 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm shrink-0">
-          <CalendarIcon />
-          <input
-            type="date"
-            value={dateRange.from}
-            onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
-            className="bg-transparent border-0 text-[11px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer"
-          />
-          <span className="text-slate-400 text-xs font-bold px-1">→</span>
-          <input
-            type="date"
-            value={dateRange.to}
-            onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
-            className="bg-transparent border-0 text-[11px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer"
-          />
+          <div className="flex items-center gap-1.5 px-2 h-9 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm shrink-0">
+            <CalendarIcon />
+            <input
+              type="date"
+              value={dateRange.from}
+              onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
+              className="bg-transparent border-0 text-[10px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer w-24"
+            />
+            <span className="text-slate-400 text-[10px] px-0.5">→</span>
+            <input
+              type="date"
+              value={dateRange.to}
+              onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
+              className="bg-transparent border-0 text-[10px] font-bold text-slate-900 dark:text-white focus:ring-0 p-0 cursor-pointer w-24"
+            />
+          </div>
         </div>
       </div>
 
@@ -2459,23 +2454,21 @@ export default function LeavesPage() {
                     <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">(Only type available)</span>
                   </div>
                 ) : (
-                  <select
-                    value={applyType === 'leave' ? formData.leaveType : formData.odType}
-                    onChange={(e) => {
-                      if (applyType === 'leave') {
-                        setFormData({ ...formData, leaveType: e.target.value });
-                      } else {
-                        setFormData({ ...formData, odType: e.target.value });
-                      }
-                    }}
-                    required
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="">Select {applyType === 'leave' ? 'leave' : 'OD'} type</option>
-                    {(applyType === 'leave' ? leaveTypes : odTypes).map((type) => (
-                      <option key={type.code} value={type.code}>{type.name}</option>
-                    ))}
-                  </select>
+                <MultiSelect
+                  options={(applyType === 'leave' ? leaveTypes : odTypes).map(t => ({ id: t.code, name: t.name }))}
+                  selectedIds={applyType === 'leave' ? (formData.leaveType ? [formData.leaveType] : []) : (formData.odType ? [formData.odType] : [])}
+                  onChange={(ids) => {
+                    const val = ids[0] || '';
+                    if (applyType === 'leave') {
+                      setFormData({ ...formData, leaveType: val });
+                    } else {
+                      setFormData({ ...formData, odType: val });
+                    }
+                  }}
+                  placeholder={`Select ${applyType === 'leave' ? 'leave' : 'OD'} type`}
+                  className="w-full"
+                  single={true}
+                />
                 )}
               </div>
 
@@ -2567,8 +2560,8 @@ export default function LeavesPage() {
                   {formData.odStartTime && formData.odEndTime && (
                     <div className="p-3 rounded-lg bg-white dark:bg-slate-800 border border-fuchsia-200 dark:border-fuchsia-700">
                       {(() => {
-                        const [startH, startM] = formData.odStartTime.split(':').map(Number);
-                        const [endH, endM] = formData.odEndTime.split(':').map(Number);
+                        const [startH, startM] = (formData.odStartTime || '00:00').split(':').map(Number);
+                        const [endH, endM] = (formData.odEndTime || '00:00').split(':').map(Number);
                         const startMin = startH * 60 + startM;
                         const endMin = endH * 60 + endM;
 
@@ -2668,22 +2661,22 @@ export default function LeavesPage() {
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-2">
                     ⚠️ Approved Record Found on This Date:
                   </p>
-                  {approvedRecordsInfo.hasLeave && approvedRecordsInfo.leaveInfo && (
+                  {approvedRecordsInfo?.hasLeave && approvedRecordsInfo?.leaveInfo && (
                     <div className="text-xs text-amber-700 dark:text-amber-400 mb-1">
-                      <strong>Leave:</strong> {approvedRecordsInfo.leaveInfo.isHalfDay
-                        ? `${approvedRecordsInfo.leaveInfo.halfDayType === 'first_half' ? 'First Half' : 'Second Half'} Leave`
+                      <strong>Leave:</strong> {approvedRecordsInfo?.leaveInfo?.isHalfDay
+                        ? `${approvedRecordsInfo?.leaveInfo?.halfDayType === 'first_half' ? 'First Half' : 'Second Half'} Leave`
                         : 'Full Day Leave'}
                     </div>
                   )}
-                  {approvedRecordsInfo.hasOD && approvedRecordsInfo.odInfo && (
+                  {approvedRecordsInfo?.hasOD && approvedRecordsInfo?.odInfo && (
                     <div className="text-xs text-amber-700 dark:text-amber-400">
-                      <strong>OD:</strong> {approvedRecordsInfo.odInfo.isHalfDay
-                        ? `${approvedRecordsInfo.odInfo.halfDayType === 'first_half' ? 'First Half' : 'Second Half'} OD`
+                      <strong>OD:</strong> {approvedRecordsInfo?.odInfo?.isHalfDay
+                        ? `${approvedRecordsInfo?.odInfo?.halfDayType === 'first_half' ? 'First Half' : 'Second Half'} OD`
                         : 'Full Day OD'}
                     </div>
                   )}
-                  {(approvedRecordsInfo.hasLeave && approvedRecordsInfo.leaveInfo?.isHalfDay) ||
-                    (approvedRecordsInfo.hasOD && approvedRecordsInfo.odInfo?.isHalfDay) ? (
+                  {(approvedRecordsInfo?.hasLeave && approvedRecordsInfo?.leaveInfo?.isHalfDay) ||
+                    (approvedRecordsInfo?.hasOD && approvedRecordsInfo?.odInfo?.isHalfDay) ? (
                     <p className="text-xs text-amber-600 dark:text-amber-500 mt-2">
                       ✓ Opposite half has been auto-selected for you
                     </p>
@@ -2705,7 +2698,7 @@ export default function LeavesPage() {
                     <div>
                       <p className="text-sm font-black text-indigo-900 dark:text-indigo-100 uppercase tracking-tight">Premium Reward</p>
                       <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 leading-relaxed font-medium mt-1">
-                        {holidayInfo.message}. Selected day is holiday so this OD contributes to your compensatory off not on the working day.
+                        {holidayInfo?.message}. Selected day is holiday so this OD contributes to your compensatory off not on the working day.
                       </p>
                     </div>
                   </div>

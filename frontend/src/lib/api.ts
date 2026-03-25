@@ -2038,13 +2038,13 @@ export const api = {
   },
 
   // Get all leaves (admin) - supports pagination, search, division, designation
-  getLeaves: async (filters?: { status?: string; employeeId?: string; department?: string; division?: string; designation?: string; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
+  getLeaves: async (filters?: { status?: string; employeeId?: string | string[]; department?: string | string[]; division?: string | string[]; designation?: string | string[]; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.status) params.append('status', filters.status);
-    if (filters?.employeeId) params.append('employeeId', filters.employeeId);
-    if (filters?.department) params.append('department', filters.department);
-    if (filters?.division) params.append('division', filters.division);
-    if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.employeeId) params.append('employeeId', Array.isArray(filters.employeeId) ? filters.employeeId.join(',') : filters.employeeId);
+    if (filters?.department) params.append('department', Array.isArray(filters.department) ? filters.department.join(',') : filters.department);
+    if (filters?.division) params.append('division', Array.isArray(filters.division) ? filters.division.join(',') : filters.division);
+    if (filters?.designation) params.append('designation', Array.isArray(filters.designation) ? filters.designation.join(',') : filters.designation);
     if (filters?.search) params.append('search', filters.search);
     if (filters?.fromDate) params.append('fromDate', filters.fromDate);
     if (filters?.toDate) params.append('toDate', filters.toDate);
@@ -2059,10 +2059,10 @@ export const api = {
     fromDate?: string; 
     toDate?: string; 
     leaveType?: string; 
-    department?: string; 
-    division?: string;
-    designation?: string;
-    employeeId?: string;
+    department?: string | string[]; 
+    division?: string | string[];
+    designation?: string | string[];
+    employeeId?: string | string[];
     search?: string;
     includeLeaves?: boolean;
     includeODs?: boolean;
@@ -2073,10 +2073,10 @@ export const api = {
     if (filters.fromDate) params.append('fromDate', filters.fromDate);
     if (filters.toDate) params.append('toDate', filters.toDate);
     if (filters.leaveType) params.append('leaveType', filters.leaveType);
-    if (filters.department) params.append('department', filters.department);
-    if (filters.division) params.append('division', filters.division);
-    if (filters.designation) params.append('designation', filters.designation);
-    if (filters.employeeId) params.append('employeeId', filters.employeeId);
+    if (filters.department) params.append('department', Array.isArray(filters.department) ? filters.department.join(',') : filters.department);
+    if (filters.division) params.append('division', Array.isArray(filters.division) ? filters.division.join(',') : filters.division);
+    if (filters.designation) params.append('designation', Array.isArray(filters.designation) ? filters.designation.join(',') : filters.designation);
+    if (filters.employeeId) params.append('employeeId', Array.isArray(filters.employeeId) ? filters.employeeId.join(',') : filters.employeeId);
     if (filters.search) params.append('search', filters.search);
     if (filters.includeLeaves !== undefined) params.append('includeLeaves', String(filters.includeLeaves));
     if (filters.includeODs !== undefined) params.append('includeODs', String(filters.includeODs));
@@ -2092,21 +2092,60 @@ export const api = {
       }
     });
 
+    return response.blob();
+  },
+
+  downloadLeaveODReportXLSX: async (filters: { 
+    status?: string; 
+    fromDate?: string; 
+    toDate?: string; 
+    leaveType?: string; 
+    department?: string | string[]; 
+    division?: string | string[];
+    designation?: string | string[];
+    employeeId?: string | string[];
+    search?: string;
+    includeLeaves?: boolean;
+    includeODs?: boolean;
+  }) => {
+    const params = new URLSearchParams();
+    if (filters.status) params.append('status', filters.status);
+    if (filters.fromDate) params.append('fromDate', filters.fromDate);
+    if (filters.toDate) params.append('toDate', filters.toDate);
+    if (filters.leaveType) params.append('leaveType', filters.leaveType);
+    if (filters.department) params.append('department', Array.isArray(filters.department) ? filters.department.join(',') : filters.department);
+    if (filters.division) params.append('division', Array.isArray(filters.division) ? filters.division.join(',') : filters.division);
+    if (filters.designation) params.append('designation', Array.isArray(filters.designation) ? filters.designation.join(',') : filters.designation);
+    if (filters.employeeId) params.append('employeeId', Array.isArray(filters.employeeId) ? filters.employeeId.join(',') : filters.employeeId);
+    if (filters.search) params.append('search', filters.search);
+    if (filters.includeLeaves !== undefined) params.append('includeLeaves', String(filters.includeLeaves));
+    if (filters.includeODs !== undefined) params.append('includeODs', String(filters.includeODs));
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const url = `${API_BASE_URL}/leaves/export/xlsx?${params.toString()}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to download PDF');
+      throw new Error(errorData.error || 'Failed to download Excel report');
     }
 
     return response.blob();
   },
 
   // Dashboard stats (global or filtered) for superadmin cards
-  getLeaveDashboardStats: async (filters?: { search?: string; division?: string; department?: string; designation?: string; fromDate?: string; toDate?: string }) => {
+  getLeaveDashboardStats: async (filters?: { search?: string; division?: string | string[]; department?: string | string[]; designation?: string | string[]; fromDate?: string; toDate?: string }) => {
     const params = new URLSearchParams();
     if (filters?.search) params.append('search', filters.search);
-    if (filters?.division) params.append('division', filters.division);
-    if (filters?.department) params.append('department', filters.department);
-    if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.division) params.append('division', Array.isArray(filters.division) ? filters.division.join(',') : filters.division);
+    if (filters?.department) params.append('department', Array.isArray(filters.department) ? filters.department.join(',') : filters.department);
+    if (filters?.designation) params.append('designation', Array.isArray(filters.designation) ? filters.designation.join(',') : filters.designation);
     if (filters?.fromDate) params.append('fromDate', filters.fromDate);
     if (filters?.toDate) params.append('toDate', filters.toDate);
     const query = params.toString() ? `?${params.toString()}` : '';
@@ -2143,7 +2182,7 @@ export const api = {
   },
 
   // Get pending leave approvals (supports pagination and filters)
-  getPendingLeaveApprovals: async (params?: { page?: number; limit?: number; search?: string; leaveType?: string; fromDate?: string; toDate?: string; department?: string; division?: string; designation?: string }) => {
+  getPendingLeaveApprovals: async (params?: { page?: number; limit?: number; search?: string; leaveType?: string; fromDate?: string; toDate?: string; department?: string | string[]; division?: string | string[]; designation?: string | string[] }) => {
     const q = new URLSearchParams();
     if (params?.page != null) q.append('page', String(params.page));
     if (params?.limit != null) q.append('limit', String(params.limit));
@@ -2151,9 +2190,9 @@ export const api = {
     if (params?.leaveType) q.append('leaveType', params.leaveType);
     if (params?.fromDate) q.append('fromDate', params.fromDate);
     if (params?.toDate) q.append('toDate', params.toDate);
-    if (params?.department) q.append('department', params.department);
-    if (params?.division) q.append('division', params.division);
-    if (params?.designation) q.append('designation', params.designation);
+    if (params?.department) q.append('department', Array.isArray(params.department) ? params.department.join(',') : params.department);
+    if (params?.division) q.append('division', Array.isArray(params.division) ? params.division.join(',') : params.division);
+    if (params?.designation) q.append('designation', Array.isArray(params.designation) ? params.designation.join(',') : params.designation);
     const query = q.toString();
     return apiRequest<any>(`/leaves/pending-approvals${query ? `?${query}` : ''}`, { method: 'GET' });
   },
@@ -2364,13 +2403,13 @@ export const api = {
   },
 
   // Get all ODs (admin) - supports pagination, search, division, designation
-  getODs: async (filters?: { status?: string; employeeId?: string; department?: string; division?: string; designation?: string; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
+  getODs: async (filters?: { status?: string; employeeId?: string | string[]; department?: string | string[]; division?: string | string[]; designation?: string | string[]; search?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.status) params.append('status', filters.status);
-    if (filters?.employeeId) params.append('employeeId', filters.employeeId);
-    if (filters?.department) params.append('department', filters.department);
-    if (filters?.division) params.append('division', filters.division);
-    if (filters?.designation) params.append('designation', filters.designation);
+    if (filters?.employeeId) params.append('employeeId', Array.isArray(filters.employeeId) ? filters.employeeId.join(',') : filters.employeeId);
+    if (filters?.department) params.append('department', Array.isArray(filters.department) ? filters.department.join(',') : filters.department);
+    if (filters?.division) params.append('division', Array.isArray(filters.division) ? filters.division.join(',') : filters.division);
+    if (filters?.designation) params.append('designation', Array.isArray(filters.designation) ? filters.designation.join(',') : filters.designation);
     if (filters?.search) params.append('search', filters.search);
     if (filters?.fromDate) params.append('fromDate', filters.fromDate);
     if (filters?.toDate) params.append('toDate', filters.toDate);
@@ -2419,7 +2458,7 @@ export const api = {
   },
 
   // Get pending OD approvals (supports pagination and filters)
-  getPendingODApprovals: async (params?: { page?: number; limit?: number; search?: string; odType?: string; fromDate?: string; toDate?: string; department?: string; division?: string; designation?: string }) => {
+  getPendingODApprovals: async (params?: { page?: number; limit?: number; search?: string; odType?: string; fromDate?: string; toDate?: string; department?: string | string[]; division?: string | string[]; designation?: string | string[] }) => {
     const q = new URLSearchParams();
     if (params?.page != null) q.append('page', String(params.page));
     if (params?.limit != null) q.append('limit', String(params.limit));
@@ -2427,9 +2466,9 @@ export const api = {
     if (params?.odType) q.append('odType', params.odType);
     if (params?.fromDate) q.append('fromDate', params.fromDate);
     if (params?.toDate) q.append('toDate', params.toDate);
-    if (params?.department) q.append('department', params.department);
-    if (params?.division) q.append('division', params.division);
-    if (params?.designation) q.append('designation', params.designation);
+    if (params?.department) q.append('department', Array.isArray(params.department) ? params.department.join(',') : params.department);
+    if (params?.division) q.append('division', Array.isArray(params.division) ? params.division.join(',') : params.division);
+    if (params?.designation) q.append('designation', Array.isArray(params.designation) ? params.designation.join(',') : params.designation);
     const query = q.toString();
     return apiRequest<any>(`/leaves/od/pending-approvals${query ? `?${query}` : ''}`, { method: 'GET' });
   },
@@ -4119,9 +4158,10 @@ export const api = {
   getAttendanceReportSummary: async (params: {
     startDate?: string;
     endDate?: string;
-    employeeId?: string;
-    departmentId?: string;
-    divisionId?: string;
+    employeeId?: string | string[];
+    departmentId?: string | string[];
+    divisionId?: string | string[];
+    designationId?: string | string[];
     page?: number;
     limit?: number;
     search?: string;
@@ -4132,9 +4172,10 @@ export const api = {
     const query = new URLSearchParams();
     if (params.startDate) query.append('startDate', params.startDate);
     if (params.endDate) query.append('endDate', params.endDate);
-    if (params.employeeId) query.append('employeeId', params.employeeId);
-    if (params.departmentId) query.append('departmentId', params.departmentId);
-    if (params.divisionId) query.append('divisionId', params.divisionId);
+    if (params.employeeId) query.append('employeeId', Array.isArray(params.employeeId) ? params.employeeId.join(',') : params.employeeId);
+    if (params.departmentId) query.append('departmentId', Array.isArray(params.departmentId) ? params.departmentId.join(',') : params.departmentId);
+    if (params.divisionId) query.append('divisionId', Array.isArray(params.divisionId) ? params.divisionId.join(',') : params.divisionId);
+    if (params.designationId) query.append('designationId', Array.isArray(params.designationId) ? params.designationId.join(',') : params.designationId);
     if (params.page) query.append('page', params.page.toString());
     if (params.limit) query.append('limit', params.limit.toString());
     if (params.search) query.append('search', params.search);
@@ -4148,7 +4189,7 @@ export const api = {
   getThumbReports: async (params: {
     startDate?: string;
     endDate?: string;
-    employeeId?: string;
+    employeeId?: string | string[];
     search?: string;
     page?: number;
     limit?: number;
@@ -4156,7 +4197,7 @@ export const api = {
     const query = new URLSearchParams();
     if (params.startDate) query.append('startDate', params.startDate);
     if (params.endDate) query.append('endDate', params.endDate);
-    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.employeeId) query.append('employeeId', Array.isArray(params.employeeId) ? params.employeeId.join(',') : params.employeeId);
     if (params.search) query.append('search', params.search);
     if (params.page) query.append('page', params.page.toString());
     if (params.limit) query.append('limit', params.limit.toString());
@@ -4167,10 +4208,11 @@ export const api = {
   exportAttendanceReport: async (params: {
     startDate?: string;
     endDate?: string;
-    employeeId?: string;
+    employeeId?: string | string[];
     search?: string;
-    departmentId?: string;
-    divisionId?: string;
+    departmentId?: string | string[];
+    divisionId?: string | string[];
+    designationId?: string | string[];
     strict?: boolean;
     groupBy?: string;
     month?: string;
@@ -4181,10 +4223,11 @@ export const api = {
     if (params.endDate) query.append('endDate', params.endDate);
     if (params.month) query.append('month', params.month);
     if (params.year) query.append('year', params.year);
-    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.employeeId) query.append('employeeId', Array.isArray(params.employeeId) ? params.employeeId.join(',') : params.employeeId);
     if (params.search) query.append('search', params.search);
-    if (params.departmentId) query.append('departmentId', params.departmentId);
-    if (params.divisionId) query.append('divisionId', params.divisionId);
+    if (params.departmentId) query.append('departmentId', Array.isArray(params.departmentId) ? params.departmentId.join(',') : params.departmentId);
+    if (params.divisionId) query.append('divisionId', Array.isArray(params.divisionId) ? params.divisionId.join(',') : params.divisionId);
+    if (params.designationId) query.append('designationId', Array.isArray(params.designationId) ? params.designationId.join(',') : params.designationId);
     if (params.strict) query.append('strict', 'true');
     if (params.groupBy) query.append('groupBy', params.groupBy);
 
@@ -4213,10 +4256,11 @@ export const api = {
   exportAttendanceReportPDF: async (params: {
     startDate?: string;
     endDate?: string;
-    employeeId?: string;
+    employeeId?: string | string[];
     search?: string;
-    departmentId?: string;
-    divisionId?: string;
+    departmentId?: string | string[];
+    divisionId?: string | string[];
+    designationId?: string | string[];
     strict?: boolean;
     groupBy?: string;
     month?: string;
@@ -4227,10 +4271,11 @@ export const api = {
     if (params.endDate) query.append('endDate', params.endDate);
     if (params.month) query.append('month', params.month);
     if (params.year) query.append('year', params.year);
-    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.employeeId) query.append('employeeId', Array.isArray(params.employeeId) ? params.employeeId.join(',') : params.employeeId);
     if (params.search) query.append('search', params.search);
-    if (params.departmentId) query.append('departmentId', params.departmentId);
-    if (params.divisionId) query.append('divisionId', params.divisionId);
+    if (params.departmentId) query.append('departmentId', Array.isArray(params.departmentId) ? params.departmentId.join(',') : params.departmentId);
+    if (params.divisionId) query.append('divisionId', Array.isArray(params.divisionId) ? params.divisionId.join(',') : params.divisionId);
+    if (params.designationId) query.append('designationId', Array.isArray(params.designationId) ? params.designationId.join(',') : params.designationId);
     if (params.strict) query.append('strict', 'true');
     if (params.groupBy) query.append('groupBy', params.groupBy);
 

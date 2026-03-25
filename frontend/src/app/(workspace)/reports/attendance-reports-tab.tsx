@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { api, Department, Division, Employee } from '@/lib/api';
+import { api, Department, Division, Employee, Designation } from '@/lib/api';
+import { MultiSelect } from '@/components/MultiSelect';
 import {
     Search,
     Download,
@@ -14,7 +15,8 @@ import {
     LayoutGrid,
     List,
     ChevronRight,
-    Filter
+    Filter,
+    X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
@@ -72,7 +74,7 @@ export default function AttendanceReportsTab() {
 
     // View & Tab states
     const [viewMode, setViewMode] = useState<'detailed' | 'abstract'>('abstract');
-    const [activeTab, setActiveTab] = useState<'today' | 'monthly' | 'range'>('monthly');
+    const [dateMode, setDateMode] = useState<'pay_cycle' | 'monthly' | 'range'>('pay_cycle');
 
     // Pagination states
     const [page, setPage] = useState(1);
@@ -94,10 +96,15 @@ export default function AttendanceReportsTab() {
     // Filter states
     const [startDate, setStartDate] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
     const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
-    const [divisionId, setDivisionId] = useState<string>('all');
-    const [departmentId, setDepartmentId] = useState<string>('all');
-    const [employeeId, setEmployeeId] = useState<string>('all');
+    const [divisionIds, setDivisionIds] = useState<string[]>([]);
+    const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+    const [designationIds, setDesignationIds] = useState<string[]>([]);
+    const [employeeIds, setEmployeeIds] = useState<string[]>([]);
+    const [allDesignations, setAllDesignations] = useState<Designation[]>([]);
+    const [designations, setDesignations] = useState<Designation[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [payrollStartDay, setPayrollStartDay] = useState<number>(1);
+    const [fetchingSettings, setFetchingSettings] = useState(false);
     
     // Drill-down states
     const [drilldownLevel, setDrilldownLevel] = useState<'all' | 'division' | 'department' | 'employee'>('all');
@@ -132,20 +139,35 @@ export default function AttendanceReportsTab() {
                 groupBy
             };
 
-            if (activeTab === 'monthly') {
+            if (dateMode === 'monthly') {
                 params.month = selectedMonth;
                 params.year = selectedYear;
-            } else if (activeTab === 'today') {
-                params.startDate = dayjs().format('YYYY-MM-DD');
-                params.endDate = dayjs().format('YYYY-MM-DD');
+            } else if (dateMode === 'pay_cycle') {
+                // Calculate pay cycle dates
+                const startDay = payrollStartDay;
+                const year = parseInt(selectedYear);
+                const month = parseInt(selectedMonth);
+                
+                // If cycle starts on 1st, it's just the full month
+                if (startDay === 1) {
+                    params.startDate = dayjs(`${year}-${month}-01`).format('YYYY-MM-DD');
+                    params.endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+                } else {
+                    // Cycle from (startDay) of prev month to (startDay - 1) of current month
+                    const currentMonthStart = dayjs(`${year}-${month}-${startDay}`);
+                    const prevMonthStart = currentMonthStart.subtract(1, 'month');
+                    params.startDate = prevMonthStart.format('YYYY-MM-DD');
+                    params.endDate = currentMonthStart.subtract(1, 'day').format('YYYY-MM-DD');
+                }
             } else {
                 params.startDate = startDate;
                 params.endDate = endDate;
             }
 
-            if (departmentId !== 'all') params.departmentId = departmentId;
-            if (divisionId !== 'all') params.divisionId = divisionId;
-            if (employeeId !== 'all') params.employeeId = employeeId;
+            if (departmentIds.length > 0) params.departmentId = departmentIds;
+            if (divisionIds.length > 0) params.divisionId = divisionIds;
+            if (designationIds.length > 0) params.designationId = designationIds;
+            if (employeeIds.length > 0) params.employeeId = employeeIds;
 
             const response = await api.getAttendanceReportSummary(params);
             if (response.success) {
@@ -172,7 +194,7 @@ export default function AttendanceReportsTab() {
         } finally {
             setLoading(false);
         }
-    }, [page, limit, searchQuery, viewMode, drilldownLevel, activeTab, selectedMonth, selectedYear, startDate, endDate, departmentId, divisionId, employeeId]);
+    }, [page, limit, searchQuery, viewMode, drilldownLevel, dateMode, selectedMonth, selectedYear, startDate, endDate, departmentIds, divisionIds, designationIds, employeeIds]);
 
     useEffect(() => {
         loadInitialFilters();
@@ -180,55 +202,129 @@ export default function AttendanceReportsTab() {
 
     useEffect(() => {
         loadReport(1);
-    }, [loadReport, drilldownLevel, divisionId, departmentId, employeeId, viewMode, activeTab, selectedMonth, selectedYear]);
+    }, [loadReport, drilldownLevel, divisionIds, departmentIds, designationIds, employeeIds, viewMode, dateMode, selectedMonth, selectedYear]);
 
     const loadInitialFilters = async () => {
         setFetchingFilters(true);
+        setFetchingSettings(true);
         try {
-            const divRes = await api.getDivisions(true);
+            const [divRes, desRes, settingRes] = await Promise.all([
+                api.getDivisions(true),
+                api.getAllDesignations(),
+                api.getSetting('payroll_cycle_start_day')
+            ]);
             if (divRes.success) setDivisions(divRes.data || []);
+            if (desRes.success) {
+                setAllDesignations(desRes.data || []);
+                setDesignations(desRes.data || []);
+            }
+            if (settingRes?.success && settingRes.data?.value) {
+                setPayrollStartDay(parseInt(settingRes.data.value));
+            }
         } catch (error) {
-            console.error('Error loading divisions:', error);
+            console.error('Error loading initial filters or settings:', error);
         } finally {
             setFetchingFilters(false);
+            setFetchingSettings(false);
         }
     };
 
-    const handleDivisionChange = async (val: string) => {
-        setDivisionId(val);
-        setDepartmentId('all');
-        setEmployeeId('all');
+    const handleDivisionChange = async (ids: string[]) => {
+        setDivisionIds(ids);
+        setDepartmentIds([]);
+        setEmployeeIds([]);
         setDepartments([]);
         setEmployees([]);
+        setDesignationIds([]);
 
-        if (val !== 'all') {
+        if (ids.length > 0) {
             setDrilldownLevel('division');
             try {
-                const deptRes = await api.getDepartments(true, val);
-                if (deptRes.success) setDepartments(deptRes.data || []);
+                // Fetch departments for all selected divisions
+                const deptPromises = ids.map(id => api.getDepartments(true, id));
+                const results = await Promise.all(deptPromises);
+                let allDepts: Department[] = [];
+                results.forEach(res => {
+                    if (res.success) allDepts = [...allDepts, ...(res.data || [])];
+                });
+                // Unique depts by ID
+                const uniqueDepts = Array.from(new Map(allDepts.map(item => [item._id, item])).values());
+                setDepartments(uniqueDepts);
+
+                // Filter designations: Show only those that belong to these departments or are global
+                // Collect all designation IDs from departments
+                const linkedDesignationIds = new Set<string>();
+                uniqueDepts.forEach(dept => {
+                    if (dept.designations) {
+                        dept.designations.forEach((des: any) => {
+                            linkedDesignationIds.add(typeof des === 'string' ? des : des._id);
+                        });
+                    }
+                });
+                
+                const filtered = allDesignations.filter(des => 
+                    linkedDesignationIds.has(des._id) || !des.department
+                );
+                setDesignations(filtered);
+
             } catch (error) {
                 console.error('Error loading departments:', error);
             }
         } else {
             setDrilldownLevel('all');
+            setDesignations(allDesignations);
         }
     };
 
-    const handleDepartmentChange = async (val: string) => {
-        setDepartmentId(val);
-        setEmployeeId('all');
+    const handleDepartmentChange = async (ids: string[]) => {
+        setDepartmentIds(ids);
+        setEmployeeIds([]);
         setEmployees([]);
+        setDesignationIds([]);
 
-        if (val !== 'all') {
+        if (ids.length > 0) {
             setDrilldownLevel('department');
             try {
-                const empRes = await api.getEmployees({ department_id: val, is_active: true });
-                if (empRes.success) setEmployees(empRes.data || []);
+                // Fetch employees for all selected departments
+                const empPromises = ids.map(id => api.getEmployees({ department_id: id, is_active: true }));
+                const results = await Promise.all(empPromises);
+                let allEmps: Employee[] = [];
+                results.forEach(res => {
+                    if (res.success) allEmps = [...allEmps, ...(res.data || [])];
+                });
+                const uniqueEmps = Array.from(new Map(allEmps.map(item => [item._id, item])).values());
+                setEmployees(uniqueEmps);
+
+                // Filter designations to only those in selected departments
+                const linkedDesignationIds = new Set<string>();
+                departments.filter(d => ids.includes(d._id)).forEach(dept => {
+                    if (dept.designations) {
+                        dept.designations.forEach((des: any) => {
+                            linkedDesignationIds.add(typeof des === 'string' ? des : des._id);
+                        });
+                    }
+                });
+                const filtered = allDesignations.filter(des => linkedDesignationIds.has(des._id));
+                setDesignations(filtered.length > 0 ? filtered : allDesignations.filter(des => !des.department));
             } catch (error) {
                 console.error('Error loading employees:', error);
             }
         } else {
-            setDrilldownLevel(divisionId === 'all' ? 'all' : 'division');
+            setDrilldownLevel(divisionIds.length === 0 ? 'all' : 'division');
+            if (divisionIds.length > 0) {
+                // Re-apply division filter for designations
+                const linkedDesignationIds = new Set<string>();
+                departments.forEach(dept => {
+                    if (dept.designations) {
+                        dept.designations.forEach((des: any) => {
+                            linkedDesignationIds.add(typeof des === 'string' ? des : des._id);
+                        });
+                    }
+                });
+                setDesignations(allDesignations.filter(des => linkedDesignationIds.has(des._id) || !des.department));
+            } else {
+                setDesignations(allDesignations);
+            }
         }
     };
 
@@ -238,18 +334,32 @@ export default function AttendanceReportsTab() {
             const params: any = {
                 startDate: exportParams.startDate,
                 endDate: exportParams.endDate,
-                divisionId: divisionId,
-                departmentId: departmentId,
-                employeeId: employeeId,
+                divisionId: divisionIds,
+                departmentId: departmentIds,
+                designationId: designationIds,
+                employeeId: employeeIds,
                 groupBy: drilldownLevel === 'all' ? 'division' : (drilldownLevel === 'division' ? 'department' : 'employee')
             };
             if (exportParams.strict) params.strict = true;
 
-            if (activeTab === 'monthly') {
+            if (dateMode === 'monthly') {
                 params.month = selectedMonth;
                 params.year = selectedYear;
                 delete params.startDate;
                 delete params.endDate;
+            } else if (dateMode === 'pay_cycle') {
+                const startDay = payrollStartDay;
+                const year = parseInt(selectedYear);
+                const month = parseInt(selectedMonth);
+                if (startDay === 1) {
+                    params.startDate = dayjs(`${year}-${month}-01`).format('YYYY-MM-DD');
+                    params.endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+                } else {
+                    const currentMonthStart = dayjs(`${year}-${month}-${startDay}`);
+                    const prevMonthStart = currentMonthStart.subtract(1, 'month');
+                    params.startDate = prevMonthStart.format('YYYY-MM-DD');
+                    params.endDate = currentMonthStart.subtract(1, 'day').format('YYYY-MM-DD');
+                }
             }
 
             let blob;
@@ -281,47 +391,51 @@ export default function AttendanceReportsTab() {
     const navigateTo = (level: 'all' | 'division' | 'department' | 'employee', id?: string) => {
         if (level === 'employee') {
             setViewMode('detailed');
-            if (id) setEmployeeId(id);
+            if (id) setEmployeeIds([id]);
             setDrilldownLevel('employee');
         } else {
             setViewMode('abstract');
             if (level === 'all') {
-                setDivisionId('all');
-                setDepartmentId('all');
-                setEmployeeId('all');
+                setDivisionIds([]);
+                setDepartmentIds([]);
+                setEmployeeIds([]);
+                setDesignationIds([]);
                 setDrilldownLevel('all');
             } else if (level === 'division') {
                 if (id) {
-                    setDivisionId(id);
-                    handleDivisionChange(id);
+                    setDivisionIds([id]);
+                    handleDivisionChange([id]);
                 }
-                setDepartmentId('all');
-                setEmployeeId('all');
+                setDepartmentIds([]);
+                setEmployeeIds([]);
+                setDesignationIds([]);
                 setDrilldownLevel('division');
             } else if (level === 'department') {
                 if (id) {
-                    setDepartmentId(id);
-                    handleDepartmentChange(id);
+                    setDepartmentIds([id]);
+                    handleDepartmentChange([id]);
                 }
-                setEmployeeId('all');
+                setEmployeeIds([]);
+                setDesignationIds([]);
                 setDrilldownLevel('department');
             }
         }
-        setPage(1); 
+        setPage(1);
     };
 
+    const isFiltered = divisionIds.length > 0 || departmentIds.length > 0 || designationIds.length > 0 || employeeIds.length > 0;
     const getBreadcrumbs = () => {
         const items = [{ label: 'Reports', level: 'all', id: 'all' }];
-        if (divisionId !== 'all') {
-            const div = divisions.find(d => d._id === divisionId);
-            items.push({ label: div?.name || 'Division', level: 'division', id: divisionId });
+        if (divisionIds.length > 0) {
+            const div = divisions.find(d => d._id === divisionIds[0]);
+            items.push({ label: div?.name || 'Division', level: 'division', id: divisionIds[0] });
         }
-        if (departmentId !== 'all') {
-            const dept = departments.find(d => d._id === departmentId);
-            items.push({ label: dept?.name || 'Department', level: 'department', id: departmentId });
+        if (departmentIds.length > 0) {
+            const dept = departments.find(d => d._id === departmentIds[0]);
+            items.push({ label: dept?.name || 'Department', level: 'department', id: departmentIds[0] });
         }
-        if (employeeId !== 'all') {
-            items.push({ label: 'Employee Stats', level: 'employee', id: employeeId });
+        if (employeeIds.length > 0) {
+            items.push({ label: 'Employee Stats', level: 'employee', id: employeeIds[0] });
         }
         return items;
     };
@@ -351,8 +465,8 @@ export default function AttendanceReportsTab() {
                     <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-between items-center">
                         <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-widest">
                             {drilldownLevel === 'all' ? 'Attendance by Division' :
-                                drilldownLevel === 'division' ? `Departments in ${divisions.find(d => d._id === divisionId)?.name || 'Division'}` :
-                                    `Employees in ${departments.find(d => d._id === departmentId)?.name || 'Department'}`}
+                                drilldownLevel === 'division' ? `Departments in ${divisions.find(d => d._id === divisionIds[0])?.name || 'Selected Division'}` :
+                                    `Employees in ${departments.find(d => d._id === departmentIds[0])?.name || 'Selected Department'}`}
                         </h3>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">Double-click row to drill-down</p>
                     </div>
@@ -439,17 +553,30 @@ export default function AttendanceReportsTab() {
                                                 {item.presentPercent}%
                                             </span>
                                         </td>
-                                        <td className="px-6 py-4 text-center">
-                                            {drilldownLevel !== 'department' && (
+                                         <td className="px-6 py-4 text-center">
+                                            {drilldownLevel !== 'department' ? (
                                                 <button
-                                                    onClick={() => {
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
                                                         if (drilldownLevel === 'all') navigateTo('division', item.id);
                                                         else if (drilldownLevel === 'division') navigateTo('department', item.id);
                                                     }}
-                                                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 uppercase tracking-widest transition-colors flex items-center gap-1 mx-auto"
+                                                    className="relative text-[10px] font-black text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 uppercase tracking-widest transition-all flex items-center gap-1 mx-auto group/btn"
                                                 >
-                                                    Drill Down
-                                                    <ChevronRight className="h-3 w-3" />
+                                                    <span className="relative z-10">Drill Down</span>
+                                                    <ChevronRight className="h-3 w-3 group-hover/btn:translate-x-1 transition-transform" />
+                                                    <span className="absolute -inset-x-2 -inset-y-1 bg-indigo-50 dark:bg-indigo-900/20 rounded-md scale-0 group-hover/btn:scale-100 transition-transform origin-center"></span>
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        navigateTo('employee', item.id);
+                                                    }}
+                                                    className="text-[10px] font-black text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 uppercase tracking-widest transition-all flex items-center gap-1 mx-auto group/btn"
+                                                >
+                                                    View Detailed
+                                                    <List className="h-3 w-3 group-hover/btn:scale-110 transition-transform" />
                                                 </button>
                                             )}
                                         </td>
@@ -579,29 +706,6 @@ export default function AttendanceReportsTab() {
                 <div className="flex items-center gap-3">
                     <div className="flex items-center p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
                         <button
-                            onClick={() => setActiveTab('today')}
-                            className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'today' ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            Today
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('monthly')}
-                            className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'monthly' ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            Monthly
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('range')}
-                            className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'range' ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            Range
-                        </button>
-                    </div>
-
-                    <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-
-                    <div className="flex items-center p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-                        <button
                             onClick={() => setViewMode('abstract')}
                             className={`p-1.5 rounded-lg transition-all ${viewMode === 'abstract' ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700' : 'text-slate-500'}`}
                         >
@@ -614,10 +718,33 @@ export default function AttendanceReportsTab() {
                             <List className="h-4 w-4" />
                         </button>
                     </div>
-
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => {
+                            setDivisionIds([]);
+                            setDepartmentIds([]);
+                            setEmployeeIds([]);
+                            setDesignationIds([]);
+                            setDesignations(allDesignations);
+                            setDrilldownLevel('all');
+                        }}
+                        className="h-10 px-4 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+                    >
+                        <X className="h-4 w-4" />
+                        Clear
+                    </button>
+                    <button
+                        onClick={() => loadReport(1)}
+                        className="h-10 px-6 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all flex items-center gap-2"
+                        disabled={loading}
+                    >
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                        Apply
+                    </button>
                     <button
                         onClick={() => setIsExportDialogOpen(true)}
-                        className="h-9 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-[0_4px_12px_rgba(79,70,229,0.3)] active:scale-95 flex items-center gap-2"
+                        className="h-10 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-indigo-200 dark:shadow-none active:scale-95 flex items-center gap-2"
                     >
                         <Download className="h-4 w-4" />
                         Export XLSX
@@ -625,116 +752,217 @@ export default function AttendanceReportsTab() {
                 </div>
             </div>
 
-            {/* Monthly Selector - Styled simply */}
-            {activeTab === 'monthly' && (
-                <div className="flex items-center gap-4 p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                    <div className="flex items-center gap-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Select Period:</label>
-                        <select 
-                            value={selectedMonth} 
-                            onChange={(e) => setSelectedMonth(e.target.value)}
-                            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-indigo-500/20 outline-none dark:bg-slate-800 dark:border-slate-700"
-                        >
-                            {["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"].map((m, i) => (
-                                <option key={i} value={(i + 1).toString()}>{m}</option>
-                            ))}
-                        </select>
-                        <select 
-                            value={selectedYear} 
-                            onChange={(e) => setSelectedYear(e.target.value)}
-                            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-indigo-500/20 outline-none dark:bg-slate-800 dark:border-slate-700"
-                        >
-                            {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => (
-                                <option key={y} value={y.toString()}>{y}</option>
-                            ))}
-                        </select>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 relative z-10">
+                {/* Hierarchy Filters */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm dark:bg-slate-900 dark:border-slate-800 flex flex-col h-full relative z-30">
+                    <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 dark:bg-slate-800/50 dark:border-slate-800 flex items-center justify-between rounded-t-2xl">
+                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                            <Filter className="h-3.5 w-3.5" />
+                            Hierarchy Filters
+                        </h4>
+                        {fetchingFilters && <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />}
                     </div>
-                    <div className="h-4 w-px bg-slate-200 dark:bg-slate-800" />
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                        Payroll Period logic applied automatically
-                    </p>
+                    <div className="p-5 grid gap-4 grid-cols-2">
+                        <MultiSelect
+                            label="Division"
+                            options={divisions.map(d => ({ id: d._id, name: d.name }))}
+                            selectedIds={divisionIds}
+                            onChange={handleDivisionChange}
+                            loading={fetchingFilters}
+                        />
+                        <MultiSelect
+                            label="Department"
+                            options={departments.map(d => ({ id: d._id, name: d.name }))}
+                            selectedIds={departmentIds}
+                            onChange={handleDepartmentChange}
+                            disabled={divisionIds.length === 0}
+                        />
+                        <MultiSelect
+                            label="Designation"
+                            options={designations.map(d => ({ id: d._id, name: d.name }))}
+                            selectedIds={designationIds}
+                            onChange={setDesignationIds}
+                            loading={fetchingFilters}
+                        />
+                        <MultiSelect
+                            label="Employee"
+                            options={employees.map(e => ({ id: e._id, name: `${e.employee_name} (${e.emp_no})` }))}
+                            selectedIds={employeeIds}
+                            onChange={setEmployeeIds}
+                            disabled={departmentIds.length === 0}
+                        />
+                    </div>
                 </div>
-            )}
+
+                <div className="space-y-6">
+                    {/* Period Selector Card */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden dark:bg-slate-900 dark:border-slate-800 flex flex-col">
+                        <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 dark:bg-slate-800/50 dark:border-slate-800 flex items-center justify-between">
+                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                <Calendar className="h-3.5 w-3.5" />
+                                {dateMode === 'monthly' ? 'Monthly Period' : (dateMode === 'range' ? 'Date Range' : 'Pay Cycle Period')}
+                            </h4>
+                            <div className="flex items-center p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                                <button
+                                    onClick={() => setDateMode('pay_cycle')}
+                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${dateMode === 'pay_cycle' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 dark:shadow-none' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    Pay Cycle
+                                </button>
+                                <button
+                                    onClick={() => setDateMode('monthly')}
+                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${dateMode === 'monthly' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 dark:shadow-none' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    Monthly
+                                </button>
+                                <button
+                                    onClick={() => setDateMode('range')}
+                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${dateMode === 'range' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 dark:shadow-none' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    Range
+                                </button>
+                            </div>
+                        </div>
+                        <div className="p-5 flex-1 flex flex-col justify-center">
+                            {(dateMode === 'monthly' || dateMode === 'pay_cycle') && (
+                                <div className="flex flex-col gap-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex-1 space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Month</label>
+                                            <select
+                                                value={selectedMonth}
+                                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                                className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-indigo-500/20 outline-none dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                                            >
+                                                {["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"].map((m, i) => (
+                                                    <option key={i} value={(i + 1).toString()}>{m}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div className="flex-1 space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Year</label>
+                                            <select
+                                                value={selectedYear}
+                                                onChange={(e) => setSelectedYear(e.target.value)}
+                                                className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-indigo-500/20 outline-none dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                                            >
+                                                {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => (
+                                                    <option key={y} value={y.toString()}>{y}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-start gap-2 p-3 bg-indigo-50/50 dark:bg-indigo-900/10 rounded-xl border border-indigo-100/50 dark:border-indigo-900/20">
+                                        <Clock className="h-3.5 w-3.5 text-indigo-500 mt-0.5" />
+                                        <p className="text-[10px] font-bold text-slate-500 leading-normal">
+                                            {dateMode === 'pay_cycle' 
+                                                ? `Payroll logic applied: Cycle from ${payrollStartDay} of previous month to ${payrollStartDay - 1} of current month.`
+                                                : 'Monthly logic applied: Data shown from 1st to last day of selected month.'}
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
+                            {dateMode === 'range' && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Start Date</label>
+                                        <input
+                                            type="date"
+                                            value={startDate}
+                                            onChange={(e) => setStartDate(e.target.value)}
+                                            className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50/50 px-4 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">End Date</label>
+                                        <input
+                                            type="date"
+                                            value={endDate}
+                                            onChange={(e) => setEndDate(e.target.value)}
+                                            className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50/50 px-4 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             {/* Stats Overview */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <div className="relative overflow-hidden group rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
                     <div className="flex flex-row items-center justify-between pb-2 border-b border-slate-50 dark:border-slate-800 mb-4">
                         <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                            {activeTab === 'today' ? 'Present' : 'Total Working Days'}
+                            Total Working Days
                         </span>
                         <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
                             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                         </div>
                     </div>
                     <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter">
-                        {activeTab === 'today' ? reportStats.present : reportStats.daysInRange}
+                        {reportStats.daysInRange}
                     </p>
                     <p className="mt-1 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                        {activeTab === 'today' ? 'Total employees present' : 'Calculated payroll days'}
+                        Calculated payroll days
                     </p>
                 </div>
 
                 <div className="relative overflow-hidden group rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
                     <div className="flex flex-row items-center justify-between pb-2 border-b border-slate-50 dark:border-slate-800 mb-4">
                         <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                            {activeTab === 'today' ? 'Present %' : 'Total P. Days'}
+                            Total P. Days
                         </span>
                         <div className="p-2 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl">
                             <Users className="h-4 w-4 text-indigo-600" />
                         </div>
                     </div>
                     <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter">
-                        {activeTab === 'today' 
-                            ? (totalCount > 0 ? ((reportStats.present / totalCount) * 100).toFixed(0) : 0) + '%'
-                            : reportStats.present.toFixed(1)
-                        }
+                        {reportStats.present.toFixed(1)}
                     </p>
                     <p className="mt-1 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                        {activeTab === 'today' ? 'Current rate' : 'Total Present Days (Group)'}
+                        Total Present Days (Group)
                     </p>
                 </div>
 
                 <div className="relative overflow-hidden group rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
                     <div className="flex flex-row items-center justify-between pb-2 border-b border-slate-50 dark:border-slate-800 mb-4">
                         <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                             {activeTab === 'today' ? 'Absent' : 'Total A. Days'}
+                             Total A. Days
                         </span>
                         <div className="p-2 bg-rose-50 dark:bg-rose-900/20 rounded-xl">
                             <XCircle className="h-4 w-4 text-rose-600" />
                         </div>
                     </div>
                     <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter">
-                        {activeTab === 'today'
-                            ? reportStats.absent
-                            : reportStats.absent.toFixed(1)
-                        }
+                        {reportStats.absent.toFixed(1)}
                     </p>
                     <p className="mt-1 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                        {activeTab === 'today' ? 'Total absent today' : 'Total Absent Days (Group)'}
+                        Total Absent Days (Group)
                     </p>
                 </div>
 
                 <div className="relative overflow-hidden group rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
                     <div className="flex flex-row items-center justify-between pb-2 border-b border-slate-50 dark:border-slate-800 mb-4">
                         <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                            {activeTab === 'today' ? 'Late' : 'Total Leave'}
+                            Total Leave
                         </span>
                         <div className="p-2 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
                             <Calendar className="h-4 w-4 text-amber-600" />
                         </div>
                     </div>
                     <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter">
-                        {activeTab === 'today' ? reportStats.late : reportStats.onLeave}
+                        {reportStats.onLeave}
                     </p>
                     <p className="mt-1 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
-                        {activeTab === 'today' ? 'Arrived late' : 'Approved leave count'}
+                        Approved leave count
                     </p>
                 </div>
             </div>
 
             {/* Filters Section for Range Tab */}
-            {activeTab === 'range' && (
+            {dateMode === 'range' && (
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 flex flex-wrap items-end gap-4">
                     <div className="space-y-1.5 min-w-[140px]">
                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Start Date</label>
@@ -760,6 +988,37 @@ export default function AttendanceReportsTab() {
             {/* Main Content Area */}
             {viewMode === 'abstract' ? renderAbstractView() : renderDetailedView()}
 
+            {/* Ready for Export Card - consistent with Leave/OD */}
+            <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-sm dark:bg-slate-900 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-50 flex items-center justify-center dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30">
+                        <Download className="h-6 w-6 text-rose-600 shadow-sm" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">Attendance PDF Report</p>
+                        <p className="text-[11px] text-slate-500 font-medium">Download the current view as a professional PDF document.</p>
+                    </div>
+                </div>
+                
+                <button
+                    onClick={() => handleAdvancedExport('pdf')}
+                    disabled={loading}
+                    className="w-full md:w-auto flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-8 py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all shadow-[0_8px_20px_rgba(225,29,72,0.3)] active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+                >
+                    {loading ? (
+                        <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Generating...
+                        </>
+                    ) : (
+                        <>
+                            <Download className="h-4 w-4" />
+                            Download PDF
+                        </>
+                    )}
+                </button>
+            </div>
+
             {isExportDialogOpen && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
                     <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -771,7 +1030,7 @@ export default function AttendanceReportsTab() {
                              <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500">Start Date</label>
-                                    <input type="date" value={exportParams.startDate} onChange={e => setExportParams({...exportParams, startDate: e.target.value})} className="w-full h-10 rounded-xl border border-slate-200 px-3 text-xs font-bold" />
+                                    <input type="date" value={exportParams.startDate} onChange={e => setExportParams({...exportParams, startDate: e.target.value})} className="w-full h-10 rounded-xl border border-slate-200 px-3 text-xs font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500">End Date</label>

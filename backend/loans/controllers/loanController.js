@@ -519,11 +519,11 @@ exports.applyLoan = async (req, res) => {
       });
     }
 
-    // Validate guarantors (at least two required)
-    if (!guarantorIds || !Array.isArray(guarantorIds) || guarantorIds.length < 2) {
+    // Validate guarantors (at least two required for loans)
+    if (requestType === 'loan' && (!guarantorIds || !Array.isArray(guarantorIds) || guarantorIds.length < 2)) {
       return res.status(400).json({
         success: false,
-        error: 'At least two guarantors are required for a loan/advance application',
+        error: 'At least two guarantors are required for a loan application',
       });
     }
 
@@ -627,44 +627,46 @@ exports.applyLoan = async (req, res) => {
       });
     }
 
-    // Process Guarantors
+    // Process Guarantors (only for loans)
     const processedGuarantors = [];
-    const uniqueGuarantorIds = new Set();
+    if (requestType === 'loan' && guarantorIds && Array.isArray(guarantorIds)) {
+      const uniqueGuarantorIds = new Set();
 
-    for (const gId of guarantorIds) {
-      const guarantor = await findEmployeeByIdOrEmpNo(gId);
-      if (!guarantor) {
-        return res.status(400).json({
-          success: false,
-          error: `Guarantor with ID ${gId} not found`,
+      for (const gId of guarantorIds) {
+        const guarantor = await findEmployeeByIdOrEmpNo(gId);
+        if (!guarantor) {
+          return res.status(400).json({
+            success: false,
+            error: `Guarantor with ID ${gId} not found`,
+          });
+        }
+
+        if (guarantor._id.toString() === employee._id.toString()) {
+          return res.status(400).json({
+            success: false,
+            error: 'Applicant cannot be their own guarantor',
+          });
+        }
+
+        if (uniqueGuarantorIds.has(guarantor._id.toString())) {
+          continue; // Skip duplicate guarantors
+        }
+
+        uniqueGuarantorIds.add(guarantor._id.toString());
+        processedGuarantors.push({
+          employeeId: guarantor._id,
+          emp_no: guarantor.emp_no,
+          name: guarantor.employee_name,
+          status: 'pending',
         });
       }
 
-      if (guarantor._id.toString() === employee._id.toString()) {
+      if (processedGuarantors.length < 2) {
         return res.status(400).json({
           success: false,
-          error: 'Applicant cannot be their own guarantor',
+          error: 'At least two unique guarantors are required',
         });
       }
-
-      if (uniqueGuarantorIds.has(guarantor._id.toString())) {
-        continue; // Skip duplicate guarantors
-      }
-
-      uniqueGuarantorIds.add(guarantor._id.toString());
-      processedGuarantors.push({
-        employeeId: guarantor._id,
-        emp_no: guarantor.emp_no,
-        name: guarantor.employee_name,
-        status: 'pending',
-      });
-    }
-
-    if (processedGuarantors.length < 2) {
-      return res.status(400).json({
-        success: false,
-        error: 'At least two unique guarantors are required',
-      });
     }
 
     // Get workflow settings

@@ -85,7 +85,11 @@ exports.getAllDepartments = async (req, res) => {
       query.isActive = isActive === 'true';
     }
 
+    if (division) {
+      query.divisions = division;
+    }
 
+    console.log('Executing Department Query:', JSON.stringify(query));
 
     const departments = await Department.find(query)
       .populate('hod', 'name email role') // Legacy
@@ -314,6 +318,7 @@ exports.updateDepartment = async (req, res) => {
       paidLeaves,
       leaveLimits,
       isActive,
+      divisions,
     } = req.body;
 
     const department = await Department.findById(req.params.id);
@@ -350,6 +355,10 @@ exports.updateDepartment = async (req, res) => {
     if (name) department.name = name;
     if (code !== undefined) department.code = code;
     if (description !== undefined) department.description = description;
+    
+    if (divisions !== undefined) {
+      department.divisions = Array.isArray(divisions) ? divisions : (divisions ? [divisions] : []);
+    }
 
     // Handle Division HODs Sync
     if (req.body.divisionHODs !== undefined) {

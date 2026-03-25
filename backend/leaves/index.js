@@ -184,6 +184,9 @@ router.get('/', authorize('employee', 'manager', 'hod', 'hr', 'sub_admin', 'supe
 // Export PDF report
 router.get('/export/pdf', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), applyScopeFilter, leaveController.exportReportPDF);
 
+// Export XLSX report
+router.get('/export/xlsx', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), applyScopeFilter, leaveController.exportReportXLSX);
+
 // Apply for leave
 router.post('/', leaveController.applyLeave);
 

@@ -21,6 +21,8 @@ const OD = require('../model/OD');
 const leaveRegisterService = require('../services/leaveRegisterService');
 const dateCycleService = require('../services/dateCycleService');
 const PDFDocument = require('pdfkit');
+const XLSX = require('xlsx');
+const dayjs = require('dayjs');
 
 /**
  * Get employee settings from database
@@ -191,10 +193,22 @@ exports.getLeaves = async (req, res) => {
     };
 
     if (status) filter.status = status;
-    if (employeeId) filter.employeeId = employeeId;
-    if (department) filter.department = department;
-    if (division) filter.division_id = division;
-    if (designation) filter.designation = designation;
+    if (employeeId && employeeId !== 'all') {
+      const ids = String(employeeId).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.employeeId = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.department = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.division_id = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) filter.designation = ids.length > 1 ? { $in: ids } : ids[0];
+    }
     if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
 
@@ -222,7 +236,14 @@ exports.getLeaves = async (req, res) => {
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
-        .populate('employeeId', 'employee_name emp_no')
+        .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
         .populate('department', 'name')
         .populate('designation', 'name')
         .populate('appliedBy', 'name email')
@@ -286,7 +307,14 @@ exports.getMyLeaves = async (req, res) => {
     if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
 
     const leaves = await Leave.find(filter)
-      .populate('employeeId', 'employee_name emp_no')
+      .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
       .populate('department', 'name')
       .populate('designation', 'name')
       .populate('appliedBy', 'name email')
@@ -312,7 +340,14 @@ exports.getMyLeaves = async (req, res) => {
 exports.getLeave = async (req, res) => {
   try {
     const leave = await Leave.findById(req.params.id)
-      .populate('employeeId', 'employee_name emp_no email phone_number')
+      .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no email phone_number department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
       .populate('department', 'name code')
       .populate('designation', 'name')
       .populate('appliedBy', 'name email')
@@ -1269,7 +1304,14 @@ exports.getPendingApprovals = async (req, res) => {
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
-        .populate('employeeId', 'employee_name emp_no first_name last_name')
+        .populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no first_name last_name department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        })
         .populate('department', 'name')
         .populate('designation', 'name')
         .sort({ appliedAt: -1 })
@@ -2017,17 +2059,29 @@ exports.getDashboardStats = async (req, res) => {
     const leaveFilter = { ...baseFilter };
     const odFilter = { ...baseFilter };
 
-    if (department) {
-      leaveFilter.department = department;
-      odFilter.department = department;
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) {
+        const val = ids.length > 1 ? { $in: ids } : ids[0];
+        leaveFilter.department = val;
+        odFilter.department = val;
+      }
     }
-    if (division) {
-      leaveFilter.division_id = division;
-      odFilter.division_id = division;
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) {
+        const val = ids.length > 1 ? { $in: ids } : ids[0];
+        leaveFilter.division_id = val;
+        odFilter.division_id = val;
+      }
     }
-    if (designation) {
-      leaveFilter.designation = designation;
-      odFilter.designation = designation;
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) {
+        const val = ids.length > 1 ? { $in: ids } : ids[0];
+        leaveFilter.designation = val;
+        odFilter.designation = val;
+      }
     }
 
     if (fromDate) {
@@ -2474,7 +2528,7 @@ exports.validateLeaveSplits = async (req, res) => {
  * Helper to draw a simple table in PDFKit
  */
 const drawPDFTable = (doc, headers, data, startX, startY, colWidths, options = {}) => {
-  const { headerFill = '#2980b9', rowFill = '#f8f9fa', fontSize = 8 } = options;
+  const { headerFill = '#2980b9', rowFill = '#f8f9fa', fontSize = 7 } = options;
   let y = startY;
   const tableWidth = colWidths.reduce((a, b) => a + b, 0);
 
@@ -2493,10 +2547,21 @@ const drawPDFTable = (doc, headers, data, startX, startY, colWidths, options = {
 
   // Draw Rows
   data.forEach((row, rowIndex) => {
-    // Check for page break
-    if (y > 750) {
+    // Check for page break - landscape height is ~595
+    if (y > 480) {
       doc.addPage();
       y = 50;
+      
+      // Re-draw header
+      doc.fillColor(headerFill).rect(startX, y, tableWidth, 20).fill();
+      doc.fillColor('#FFFFFF').fontSize(fontSize + 1).font('Helvetica-Bold');
+      let xH = startX;
+      headers.forEach((h, i) => {
+        doc.text(h, xH + 4, y + 6, { width: colWidths[i] - 8, align: 'left' });
+        xH += colWidths[i];
+      });
+      y += 20;
+      doc.font('Helvetica').fontSize(fontSize).fillColor('#333333');
     }
 
     if (rowIndex % 2 === 0) {
@@ -2506,7 +2571,12 @@ const drawPDFTable = (doc, headers, data, startX, startY, colWidths, options = {
     doc.fillColor('#333333');
     let xRow = startX;
     row.forEach((cell, i) => {
-      doc.text(String(cell || ''), xRow + 4, y + 5, { width: colWidths[i] - 8, align: 'left', lineBreak: false });
+      doc.text(String(cell || ''), xRow + 4, y + 5, { 
+        width: colWidths[i] - 8, 
+        align: 'left', 
+        lineBreak: false,
+        ellipsis: true
+      });
       xRow += colWidths[i];
     });
     y += 18;
@@ -2557,10 +2627,22 @@ exports.exportReportPDF = async (req, res) => {
     };
 
     if (status && !['leaves', 'od', 'all'].includes(status)) baseFilter.status = status;
-    if (employeeId) baseFilter.employeeId = employeeId;
-    if (department) baseFilter.department = department;
-    if (division) baseFilter.division_id = division;
-    if (designation) baseFilter.designation = designation;
+    if (employeeId && employeeId !== 'all') {
+      const ids = String(employeeId).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.employeeId = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.department = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.division_id = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.designation = ids.length > 1 ? { $in: ids } : ids[0];
+    }
     if (fromDate) baseFilter.fromDate = { $gte: new Date(fromDate) };
     if (toDate) baseFilter.toDate = { ...baseFilter.toDate, $lte: new Date(toDate) };
 
@@ -2592,12 +2674,26 @@ exports.exportReportPDF = async (req, res) => {
     // OD status mapping if needed (OD uses similar statuses)
 
     const [leaves, ods] = await Promise.all([
-      includeLeaves === 'true' ? Leave.find(leaveFilter).populate('employeeId', 'employee_name emp_no first_name last_name').lean() : [],
-      includeODs === 'true' ? OD.find(odFilter).populate('employeeId', 'employee_name emp_no first_name last_name').lean() : []
+      includeLeaves === 'true' ? Leave.find(leaveFilter).populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no first_name last_name department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        }).lean() : [],
+      includeODs === 'true' ? OD.find(odFilter).populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no first_name last_name department_id division_id department',
+          populate: [
+            { path: 'department', select: 'name code' },
+            { path: 'division', select: 'name code' }
+          ]
+        }).lean() : []
     ]);
 
-    // Setup PDF
-    const doc = new PDFDocument({ margin: 30, size: 'A4', bufferPages: true });
+    // Setup PDF - LANDSCAPE
+    const doc = new PDFDocument({ margin: 30, size: 'A4', layout: 'landscape', bufferPages: true });
     const filename = `Report_${new Date().toISOString().split('T')[0]}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -2622,45 +2718,59 @@ exports.exportReportPDF = async (req, res) => {
     let currentY = doc.y;
 
     const formatDate = (date) => date ? new Date(date).toLocaleDateString('en-GB') : '-';
+    // Helper to get name without ID part (since ID is now a separate column)
+    const getCleanEmpName = (emp) => {
+      if (!emp) return '-';
+      return emp.employee_name || `${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+    };
+
     const getEmpName = (emp) => {
       if (!emp) return '-';
       if (emp.employee_name) return emp.employee_name;
       return `${emp.first_name || ''} ${emp.last_name || ''} (${emp.emp_no || ''})`.trim();
     };
 
-    // --- Leaves Table ---
+    // Columns: [S.No(30), Emp ID(60), Employee Name(150), Division(120), Department(120), Type(70), Dates(120), Days(40), Status(70)]
+    const tableHeader = ['S.No', 'Emp ID', 'Employee Name', 'Division', 'Department', 'Type', 'Dates', 'Days', 'Status'];
+    const tableColWidths = [30, 60, 150, 120, 120, 70, 120, 40, 70];
     if (includeLeaves === 'true' && leaves.length > 0) {
       doc.fontSize(11).font('Helvetica-Bold').text("LEAVE APPLICATIONS", margin, currentY);
       currentY = drawPDFTable(doc, 
-        ['S.No', 'Employee Name', 'Type', 'Dates', 'Days', 'Status'],
+        tableHeader,
         leaves.map((l, i) => [
           i + 1,
-          getEmpName(l.employeeId),
+          l.employeeId?.emp_no || '-',
+          getCleanEmpName(l.employeeId),
+          l.employeeId?.division?.name || '-',
+          l.employeeId?.department?.name || '-',
           l.leaveType,
           `${formatDate(l.fromDate)}${l.fromDate !== l.toDate ? ' - ' + formatDate(l.toDate) : ''}`,
           l.numberOfDays,
           (l.status || '').toUpperCase()
         ]),
-        margin, currentY + 15, [30, 180, 60, 150, 40, 75]
+        margin, currentY + 15, tableColWidths
       );
       currentY += 25;
     }
 
     // --- OD Table ---
     if (includeODs === 'true' && ods.length > 0) {
-      if (currentY > 700) { doc.addPage(); currentY = 50; }
+      if (currentY > 450) { doc.addPage(); currentY = 50; }
       doc.fontSize(11).font('Helvetica-Bold').text("ON DUTY (OD) APPLICATIONS", margin, currentY);
       currentY = drawPDFTable(doc, 
-        ['S.No', 'Employee Name', 'Type', 'Dates', 'Days', 'Status'],
+        tableHeader,
         ods.map((o, i) => [
           i + 1,
-          getEmpName(o.employeeId),
+          o.employeeId?.emp_no || '-',
+          getCleanEmpName(o.employeeId),
+          o.employeeId?.division?.name || '-',
+          o.employeeId?.department?.name || '-',
           (o.odType || '').replace('_', ' '),
           `${formatDate(o.fromDate)}${o.fromDate !== o.toDate ? ' - ' + formatDate(o.toDate) : ''}`,
           o.numberOfDays,
           (o.status || '').toUpperCase()
         ]),
-        margin, currentY + 15, [30, 180, 60, 150, 40, 75],
+        margin, currentY + 15, tableColWidths,
         { headerFill: '#8e44ad' }
       );
       currentY += 25;
@@ -2668,40 +2778,65 @@ exports.exportReportPDF = async (req, res) => {
 
     // --- Summary Table ---
     if (includeSummary === 'true') {
-      if (currentY > 600) { doc.addPage(); currentY = 50; }
+      if (currentY > 400) { doc.addPage(); currentY = 50; }
       doc.fontSize(11).font('Helvetica-Bold').text("SUMMARY (APPROVED)", margin, currentY);
       
       const summaryMap = {};
       const process = (item, isOD) => {
         if (item.status !== 'approved' && item.status !== 'split_approved') return;
-        const name = getEmpName(item.employeeId);
-        if (!summaryMap[name]) summaryMap[name] = { CL: 0, OTHER: 0, OD: 0 };
+        const emp = item.employeeId;
+        const empKey = emp?._id?.toString() || getEmpName(emp);
+        if (!summaryMap[empKey]) {
+          summaryMap[empKey] = { 
+            empNo: emp?.emp_no || '-',
+            name: getCleanEmpName(emp),
+            division: emp?.division?.name || '-',
+            department: emp?.department?.name || '-',
+            CL: 0, 
+            OTHER: 0, 
+            OD: 0 
+          };
+        }
         const days = item.numberOfDays || 0;
-        if (isOD) summaryMap[name].OD += days;
-        else if (item.leaveType === 'CL') summaryMap[name].CL += days;
-        else summaryMap[name].OTHER += days;
+        if (isOD) summaryMap[empKey].OD += days;
+        else if (item.leaveType === 'CL') summaryMap[empKey].CL += days;
+        else summaryMap[empKey].OTHER += days;
       };
 
       if (includeLeaves === 'true') leaves.forEach(l => process(l, false));
       if (includeODs === 'true') ods.forEach(o => process(o, true));
 
-      const headers = ['S.No', 'Employee Name'];
-      const colWidths = [30, 200];
-      if (includeLeaves === 'true') { headers.push('CL', 'Other'); colWidths.push(50, 50); }
-      if (includeODs === 'true') { headers.push('OD'); colWidths.push(50); }
-      headers.push('Total'); colWidths.push(60);
+      const summaryHeaders = ['S.No', 'Emp ID', 'Employee Name', 'Division', 'Department'];
+      const summaryColWidths = [30, 60, 150, 120, 120];
+      
+      if (includeLeaves === 'true') { 
+        summaryHeaders.push('CL', 'Other'); 
+        summaryColWidths.push(45, 45); 
+      }
+      if (includeODs === 'true') { 
+        summaryHeaders.push('OD'); 
+        summaryColWidths.push(45); 
+      }
+      summaryHeaders.push('Total'); 
+      summaryColWidths.push(55);
 
-      const summaryData = Object.entries(summaryMap).map(([name, counts], i) => {
-        const row = [i + 1, name];
+      const summaryData = Object.values(summaryMap).map((emp, i) => {
+        const row = [i + 1, emp.empNo, emp.name, emp.division, emp.department];
         let total = 0;
-        if (includeLeaves === 'true') { row.push(counts.CL, counts.OTHER); total += counts.CL + counts.OTHER; }
-        if (includeODs === 'true') { row.push(counts.OD); total += counts.OD; }
+        if (includeLeaves === 'true') { 
+          row.push(emp.CL, emp.OTHER); 
+          total += emp.CL + emp.OTHER; 
+        }
+        if (includeODs === 'true') { 
+          row.push(emp.OD); 
+          total += emp.OD; 
+        }
         row.push(total);
         return row;
       });
 
       if (summaryData.length > 0) {
-        currentY = drawPDFTable(doc, headers, summaryData, margin, currentY + 15, colWidths, { headerFill: '#34495e' });
+        currentY = drawPDFTable(doc, summaryHeaders, summaryData, margin, currentY + 15, summaryColWidths, { headerFill: '#34495e' });
       } else {
         doc.fontSize(9).font('Helvetica-Oblique').text("No approved requests found for summary.", margin, currentY + 15);
       }
@@ -2713,7 +2848,7 @@ exports.exportReportPDF = async (req, res) => {
         doc.switchToPage(i);
         doc.fontSize(8).fillColor('#999999').text(
             `Generated on ${new Date().toLocaleString()} | Page ${i + 1} of ${pages.count}`,
-            margin, doc.page.height - 25, { align: 'center' }
+            margin, doc.page.height - 35, { align: 'center', lineBreak: false }
         );
     }
 
@@ -2727,3 +2862,163 @@ exports.exportReportPDF = async (req, res) => {
   }
 };
 
+
+
+// @desc    Export Excel report
+// @route   GET /api/leaves/export/xlsx
+// @access  Private
+exports.exportReportXLSX = async (req, res) => {
+  try {
+    const { 
+      status, fromDate, toDate, leaveType, department, division, designation, search, employeeId,
+      includeLeaves = 'true', includeODs = 'true'
+    } = req.query;
+
+    // Reuse filter logic from exportReportPDF
+    const scopeFilter = req.scopeFilter || { isActive: true };
+    const workflowFilter = buildWorkflowVisibilityFilter(req.user);
+    const scopedEmployeeIds = await getEmployeeIdsInScope(req.user);
+    
+    let jurisdictionFilter = scopeFilter;
+    let visibilityFilter = workflowFilter;
+    
+    if (Array.isArray(scopedEmployeeIds) && scopedEmployeeIds.length > 0) {
+      jurisdictionFilter = {
+        $or: [
+          scopeFilter,
+          { employeeId: { $in: scopedEmployeeIds } }
+        ]
+      };
+      visibilityFilter = {
+        $or: [
+          workflowFilter,
+          { employeeId: { $in: scopedEmployeeIds } }
+        ]
+      };
+    }
+
+    const baseFilter = {
+      $and: [
+        jurisdictionFilter,
+        visibilityFilter,
+        { isActive: true }
+      ]
+    };
+
+    if (status && !['leaves', 'od', 'all'].includes(status)) baseFilter.status = status;
+    if (employeeId && employeeId !== 'all') {
+      const ids = String(employeeId).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.employeeId = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (department && department !== 'all') {
+      const ids = String(department).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.department = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (division && division !== 'all') {
+      const ids = String(division).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.division_id = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (designation && designation !== 'all') {
+      const ids = String(designation).split(',').filter(id => id && id !== 'all');
+      if (ids.length > 0) baseFilter.designation = ids.length > 1 ? { $in: ids } : ids[0];
+    }
+    if (fromDate) baseFilter.fromDate = { $gte: new Date(fromDate) };
+    if (toDate) baseFilter.toDate = { ...baseFilter.toDate, $lte: new Date(toDate) };
+
+    if (search && String(search).trim()) {
+      const searchStr = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(searchStr, 'i');
+      const matchedEmployees = await Employee.find({
+        $or: [
+          { emp_no: regex },
+          { employee_name: regex },
+          { first_name: regex },
+          { last_name: regex }
+        ]
+      }).select('_id').lean();
+      const ids = matchedEmployees.map(e => e._id);
+      if (ids.length > 0) {
+        baseFilter.employeeId = { $in: ids };
+      } else {
+        baseFilter.employeeId = { $in: [] };
+      }
+    }
+
+    const leaveFilter = { ...baseFilter };
+    if (leaveType) leaveFilter.leaveType = leaveType;
+
+    const [leaves, ods] = await Promise.all([
+      includeLeaves === 'true' ? Leave.find(leaveFilter).populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id',
+          populate: [
+            { path: 'department_id', select: 'name' },
+            { path: 'division_id', select: 'name' }
+          ]
+        }).lean() : [],
+      includeODs === 'true' ? OD.find(baseFilter).populate({
+          path: 'employeeId',
+          select: 'employee_name emp_no department_id division_id',
+          populate: [
+            { path: 'department_id', select: 'name' },
+            { path: 'division_id', select: 'name' }
+          ]
+        }).lean() : []
+    ]);
+
+    const wb = XLSX.utils.book_new();
+
+    if (includeLeaves === 'true' && leaves.length > 0) {
+      const leaveData = leaves.map(l => ({
+        'Emp No': l.employeeId?.emp_no || 'N/A',
+        'Employee Name': l.employeeId?.employee_name || 'N/A',
+        'Division': l.employeeId?.division_id?.name || 'N/A',
+        'Department': l.employeeId?.department_id?.name || 'N/A',
+        'Leave Type': l.leaveType || 'N/A',
+        'From Date': dayjs(l.fromDate).format('DD-MM-YYYY'),
+        'To Date': dayjs(l.toDate).format('DD-MM-YYYY'),
+        'Days': l.numberOfDays || 0,
+        'Status': l.status || 'N/A',
+        'Applied At': dayjs(l.appliedAt).format('DD-MM-YYYY HH:mm')
+      }));
+      const wsLeaves = XLSX.utils.json_to_sheet(leaveData);
+      XLSX.utils.book_append_sheet(wb, wsLeaves, 'Leaves');
+    }
+
+    if (includeODs === 'true' && ods.length > 0) {
+      const odData = ods.map(o => ({
+        'Emp No': o.employeeId?.emp_no || 'N/A',
+        'Employee Name': o.employeeId?.employee_name || 'N/A',
+        'Division': o.employeeId?.division_id?.name || 'N/A',
+        'Department': o.employeeId?.department_id?.name || 'N/A',
+        'OD Type': o.odType || 'N/A',
+        'From Date': dayjs(o.fromDate).format('DD-MM-YYYY'),
+        'To Date': dayjs(o.toDate).format('DD-MM-YYYY'),
+        'Place': o.placeVisited || 'N/A',
+        'Status': o.status || 'N/A',
+        'Applied At': dayjs(o.createdAt).format('DD-MM-YYYY HH:mm')
+      }));
+      const wsODs = XLSX.utils.json_to_sheet(odData);
+      XLSX.utils.book_append_sheet(wb, wsODs, 'On-Duty');
+    }
+
+    if (wb.SheetNames.length === 0) {
+      // Create empty sheet if no data
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ Message: 'No data found for selected filters' }]), 'No Data');
+    }
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `Report_${dayjs().format('YYYY-MM-DD_HHmm')}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+
+  } catch (error) {
+    console.error('Error exporting XLSX:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export XLSX',
+    });
+  }
+};
