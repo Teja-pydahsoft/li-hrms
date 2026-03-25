@@ -3052,6 +3052,12 @@ export default function LeavesPage() {
                 </div>
               )}
 
+              {applyType === 'leave' && isCLSelected && clBalanceForMonth !== null && Number(clBalanceForMonth) <= 0 && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+                  Monthly apply limit reached for this payroll period. You can’t submit a new request for the selected from-date period.
+                </div>
+              )}
+
               {/* Buttons */}
               <div className="flex gap-3 pt-4">
                 <button
@@ -3063,8 +3069,20 @@ export default function LeavesPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || !isFormValid()}
-                  className={`flex-1 px-4 py-2.5 text-sm font-semibold text-white rounded-xl transition-all ${(loading || !isFormValid())
+                  disabled={
+                    loading ||
+                    !isFormValid() ||
+                    (applyType === 'leave' &&
+                      isCLSelected &&
+                      clBalanceForMonth !== null &&
+                      Number(clBalanceForMonth) <= 0)
+                  }
+                  className={`flex-1 px-4 py-2.5 text-sm font-semibold text-white rounded-xl transition-all ${(loading ||
+                    !isFormValid() ||
+                    (applyType === 'leave' &&
+                      isCLSelected &&
+                      clBalanceForMonth !== null &&
+                      Number(clBalanceForMonth) <= 0))
                     ? 'opacity-40 cursor-not-allowed grayscale'
                     : 'opacity-100 hover:scale-[1.02] active:scale-95'
                     } ${applyType === 'leave'

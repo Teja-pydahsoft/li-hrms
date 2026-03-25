@@ -198,6 +198,24 @@ async function addTransaction(transactionData) {
 
   if (!doc.months[mi].transactions) doc.months[mi].transactions = [];
 
+  // Keep the "monthly apply pool" (slot.clCredits/compensatoryOffs/elCredits) in sync
+  // with ledger CREDIT postings. This is required so monthlyLeaveApplicationCap
+  // recomputations reflect CCL credits (e.g. holiday/week-off OD CO credit).
+  const leaveTypeUpper = String(transactionData.leaveType || '').toUpperCase();
+  const txTypeUpper = String(transactionData.transactionType || '').toUpperCase();
+  const creditDays = roundHalf(Number(transactionData.days) || 0);
+
+  if (txTypeUpper === 'CREDIT' && creditDays > 0) {
+    if (leaveTypeUpper === 'CL') {
+      doc.yearlyClCreditDaysPosted = roundHalf((Number(doc.yearlyClCreditDaysPosted) || 0) + creditDays);
+    }
+    if (leaveTypeUpper === 'CCL') {
+      doc.yearlyCclCreditDaysPosted = roundHalf((Number(doc.yearlyCclCreditDaysPosted) || 0) + creditDays);
+      const curPool = roundHalf(Number(doc.months[mi].compensatoryOffs) || 0);
+      doc.months[mi].compensatoryOffs = roundHalf(curPool + creditDays);
+    }
+  }
+
   doc.months[mi].transactions.push({
     at: new Date(),
     leaveType: transactionData.leaveType,
@@ -233,10 +251,20 @@ async function addTransaction(transactionData) {
     transactionData.startDate
   );
 
-  leaveRegisterYearMonthlyApplyService.scheduleSyncMonthApply(
-    transactionData.employeeId,
-    transactionData.startDate
-  );
+  // Any ledger CREDIT can change the effective monthly apply pool (or at minimum
+  // the UI cached ceiling/consumption). Force an immediate sync so the UI updates
+  // right after credit posting.
+  if (txTypeUpper === 'CREDIT') {
+    await leaveRegisterYearMonthlyApplyService.syncStoredMonthApplyFieldsForEmployeeDate(
+      transactionData.employeeId,
+      transactionData.startDate
+    );
+  } else {
+    leaveRegisterYearMonthlyApplyService.scheduleSyncMonthApply(
+      transactionData.employeeId,
+      transactionData.startDate
+    );
+  }
 
   const reloaded = await LeaveRegisterYear.findById(doc._id);
   const slot = reloaded.months[mi];

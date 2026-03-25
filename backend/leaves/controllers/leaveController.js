@@ -20,6 +20,7 @@ const Department = require('../../departments/model/Department');
 const OD = require('../model/OD');
 const leaveRegisterService = require('../services/leaveRegisterService');
 const dateCycleService = require('../services/dateCycleService');
+const leaveRegisterYearMonthlyApplyService = require('../services/leaveRegisterYearMonthlyApplyService');
 const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 const dayjs = require('dayjs');

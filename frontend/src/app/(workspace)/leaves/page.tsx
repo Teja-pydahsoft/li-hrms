@@ -3983,6 +3983,12 @@ export default function LeavesPage() {
                 </div>
 
                 {/* Actions - Sticky Bottom */}
+                {applyType === 'leave' && isCLSelected && clBalanceForMonth !== null && Number(clBalanceForMonth) <= 0 && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+                    Monthly apply limit reached for this payroll period. You can’t submit a new request for the selected from-date period.
+                  </div>
+                )}
+
                 <div className="sticky bottom-0 z-10 -mx-5 -mb-5 p-5 sm:-mx-8 sm:-mb-8 sm:p-8 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-slate-100 dark:border-slate-800 flex gap-3 mt-6">
                   <button
                     type="button"
@@ -3993,8 +3999,20 @@ export default function LeavesPage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading || !isFormValid()}
-                    className={`flex-1 py-2.5 sm:py-3 text-sm font-bold text-white rounded-xl transition-all ${(loading || !isFormValid())
+                    disabled={
+                      loading ||
+                      !isFormValid() ||
+                      (applyType === 'leave' &&
+                        isCLSelected &&
+                        clBalanceForMonth !== null &&
+                        Number(clBalanceForMonth) <= 0)
+                    }
+                    className={`flex-1 py-2.5 sm:py-3 text-sm font-bold text-white rounded-xl transition-all ${(loading ||
+                      !isFormValid() ||
+                      (applyType === 'leave' &&
+                        isCLSelected &&
+                        clBalanceForMonth !== null &&
+                        Number(clBalanceForMonth) <= 0))
                       ? 'opacity-40 cursor-not-allowed grayscale'
                       : 'opacity-100 hover:scale-[1.02] active:scale-95 shadow-lg shadow-blue-500/20'
                       } ${applyType === 'leave' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700 shadow-purple-500/20'}`}

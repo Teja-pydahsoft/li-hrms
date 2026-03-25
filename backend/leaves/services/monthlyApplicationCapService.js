@@ -115,18 +115,17 @@ async function resolvePooledMonthlyApplyCeiling(employeeId, fromDate, policy) {
       Number(m.payrollCycleYear) === Number(pc.year)
   );
 
+  // Enforce scheduled pooled ceiling even for future payroll periods.
+  // Otherwise, UI can show "0 left" (stored ceiling/consumption) while backend allows apply
+  // just because the period hasn't started yet.
   if (slot?.payPeriodStart) {
-    const todayStr = extractISTComponents(new Date()).dateStr;
-    const startStr = extractISTComponents(slot.payPeriodStart).dateStr;
-    if (startStr <= todayStr) {
-      const scheduled = {
-        clCredits: slot.clCredits,
-        compensatoryOffs: slot.compensatoryOffs,
-        elCredits: slot.elCredits,
-      };
-      const c = computeScheduledPoolApplyCeiling(scheduled, policy);
-      if (c != null && Number.isFinite(c)) return Math.max(0, c);
-    }
+    const scheduled = {
+      clCredits: slot.clCredits,
+      compensatoryOffs: slot.compensatoryOffs,
+      elCredits: slot.elCredits,
+    };
+    const c = computeScheduledPoolApplyCeiling(scheduled, policy);
+    if (c != null && Number.isFinite(c)) return Math.max(0, c);
   }
 
   if (policyCapActive) return maxDays;
@@ -150,9 +149,6 @@ async function getRegisterClApplicationCap(employeeId, fromDate, policy) {
       Number(m.payrollCycleMonth) === Number(pc.month) && Number(m.payrollCycleYear) === Number(pc.year)
   );
   if (!slot?.payPeriodStart) return null;
-  const todayStr = extractISTComponents(new Date()).dateStr;
-  const startStr = extractISTComponents(slot.payPeriodStart).dateStr;
-  if (startStr > todayStr) return null;
   return Math.max(0, Number(slot.clCredits) || 0);
 }
 
