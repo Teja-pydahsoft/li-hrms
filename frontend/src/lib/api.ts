@@ -1492,6 +1492,37 @@ export const api = {
   },
 
   // Employees
+  getEmployeeFormSettings: async () => {
+    return apiRequest<any>('/employee-applications/form-settings', { method: 'GET' });
+  },
+
+  exportEmployees: async (fields: string[], filters?: any, empNo?: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/employees/export`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ fields, filters, empNo }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let errorMsg = 'Failed to export employees';
+      try {
+        const json = JSON.parse(text);
+        errorMsg = json.message || errorMsg;
+      } catch (e) { }
+      throw new Error(errorMsg);
+    }
+    return await response.blob();
+  },
+
   getEmployees: async (filters?: { is_active?: boolean; department_id?: string; division_id?: string; designation_id?: string; employee_group_id?: string; includeLeft?: boolean; search?: string; startDate?: string; endDate?: string; page?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (filters?.is_active !== undefined) params.append('is_active', String(filters.is_active));
@@ -2666,10 +2697,10 @@ export const api = {
   },
 
   // Process loan action (approve/reject/forward)
-  processLoanAction: async (id: string, action: string, comments?: string) => {
+  processLoanAction: async (id: string, payload: any) => {
     return apiRequest<any>(`/loans/${id}/action`, {
       method: 'PUT',
-      body: JSON.stringify({ action, comments }),
+      body: JSON.stringify(payload),
     });
   },
 
