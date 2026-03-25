@@ -897,10 +897,6 @@ exports.createEmployee = async (req, res) => {
     const leaveInitResults = await initializeEmployeeLeaves(createdEmployee._id);
     console.log('[createEmployee] Leave initialization results:', leaveInitResults);
 
-    // Initialize prorated leave balances for the new employee
-    const leaveInitResults = await initializeEmployeeLeaves(createdEmployee._id);
-    console.log('[createEmployee] Leave initialization results:', leaveInitResults);
-
     // Send notifications
     const notificationResults = await sendCredentials(
       createdEmployee,
