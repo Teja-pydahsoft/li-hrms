@@ -3666,12 +3666,12 @@ export default function LeavesPage() {
                               <span className="font-bold text-slate-700 dark:text-slate-300">{pooledLimit ?? 0} Days</span>
                             </div>
 
-                            {pendingDaysInCycle > 0 && (
+                            {(pendingDaysInCycle ?? 0) > 0 && (
                               <div className="flex items-center justify-between text-xs text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 p-2 rounded-lg border border-orange-100 dark:border-orange-900/30">
                                 <span className="flex items-center gap-1.5 font-bold uppercase tracking-tight text-[10px]">
                                   <AlertCircle className="w-3 h-3" /> Already Pending
                                 </span>
-                                <span className="font-black text-sm">{pendingDaysInCycle} Days</span>
+                                <span className="font-black text-sm">{pendingDaysInCycle ?? 0} Days</span>
                               </div>
                             )}
 
