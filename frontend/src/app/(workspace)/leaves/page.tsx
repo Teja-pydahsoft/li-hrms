@@ -523,6 +523,7 @@ const getPolicyDateBounds = (policy: { allowBackdated?: boolean; maxBackdatedDay
 export default function LeavesPage() {
   const { getModuleConfig, hasPermission, activeWorkspace } = useWorkspace();
   const [activeTab, setActiveTab] = useState<'leaves' | 'od' | 'pending' | 'in_progress'>('leaves');
+  const [pendingTab, setPendingTab] = useState<'leaves' | 'od'>('leaves');
   const [leaves, setLeaves] = useState<LeaveApplication[]>([]);
   const [ods, setODs] = useState<ODApplication[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<LeaveApplication[]>([]);
@@ -2778,6 +2779,8 @@ export default function LeavesPage() {
                       {currentUser?.role !== 'employee' && (
                         <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Employee</th>
                       )}
+                      <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Division</th>
+                      <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Department</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Leave Type</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dates</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Duration</th>
@@ -2837,6 +2840,12 @@ export default function LeavesPage() {
                               </div>
                             </td>
                           )}
+                          <td className="px-6 py-3.5">
+                            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{getItemDivisionName(leave) || 'N/A'}</span>
+                          </td>
+                          <td className="px-6 py-3.5">
+                            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{getItemDepartmentName(leave) || 'N/A'}</span>
+                          </td>
                           <td className="px-6 py-3.5">
                             <span className="text-sm font-medium text-slate-700 dark:text-slate-300 capitalize">
                               {leave.leaveType?.replace('_', ' ')}
@@ -3008,6 +3017,8 @@ export default function LeavesPage() {
                       {currentUser?.role !== 'employee' && (
                         <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Employee</th>
                       )}
+                      <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Division</th>
+                      <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Department</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">OD Type</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Place Visited</th>
                       <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dates</th>
@@ -3068,6 +3079,12 @@ export default function LeavesPage() {
                               </div>
                             </td>
                           )}
+                          <td className="px-6 py-3.5">
+                            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{getItemDivisionName(od) || 'N/A'}</span>
+                          </td>
+                          <td className="px-6 py-3.5">
+                            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{getItemDepartmentName(od) || 'N/A'}</span>
+                          </td>
                           <td className="px-6 py-3.5">
                             <span className="text-sm font-medium text-slate-700 dark:text-slate-300 capitalize">
                               {od.odType?.replace('_', ' ')}
@@ -3241,6 +3258,32 @@ export default function LeavesPage() {
 
           {activeTab === 'pending' && (
             <div className="p-4 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+              {/* Sub-tabs for Pending */}
+              <div className="flex gap-2 mb-6 px-1">
+                <button
+                  onClick={() => setPendingTab('leaves')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all border ${
+                    pendingTab === 'leaves'
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-500/20'
+                      : 'bg-white dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800 hover:border-blue-400'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                  Pending Leaves ({filteredPendingLeaves.length})
+                </button>
+                <button
+                  onClick={() => setPendingTab('od')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all border ${
+                    pendingTab === 'od'
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-lg shadow-purple-500/20'
+                      : 'bg-white dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800 hover:border-purple-400'
+                  }`}
+                >
+                  <Briefcase className="w-4 h-4" />
+                  Pending ODs ({filteredPendingODs.length})
+                </button>
+              </div>
+
               {loading ? (
                 <div className="space-y-4">
                   <div className="h-5 w-40 bg-slate-200 dark:bg-slate-700 rounded animate-pulse mb-4"></div>
@@ -3266,8 +3309,8 @@ export default function LeavesPage() {
                   </div>
                 </div>
               ) : (<>
-                {/* Pending Leaves */}
-                {filteredPendingLeaves.length > 0 && (
+                {/* Pending Leaves Sub-tab */}
+                {pendingTab === 'leaves' && (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between px-2">
                       <h3 className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-blue-700 dark:bg-blue-400/20 dark:text-blue-300 border border-blue-200/60 dark:border-blue-500/30">
@@ -3275,7 +3318,81 @@ export default function LeavesPage() {
                         Pending Leaves ({filteredPendingLeaves.length})
                       </h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+                    {/* Desktop Table: Pending Leaves */}
+                    <div className="hidden md:block overflow-x-auto scrollbar-hide bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/60 dark:border-slate-800 shadow-sm overflow-hidden mb-6">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200/60 dark:border-slate-800">
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Employee</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Division</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Department</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dates</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Days</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Status</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {filteredPendingLeaves.map((leave) => (
+                            <tr key={leave._id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer" onClick={() => openDetailDialog(leave, 'leave')}>
+                              <td className="px-6 py-3.5">
+                                <div className="flex items-center gap-3">
+                                  <div className="h-8 w-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-700 dark:text-blue-400 font-bold text-xs shrink-0">
+                                    {getEmployeeInitials({ employee_name: leave.employeeId?.employee_name || '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: '' } as any)}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-medium text-slate-900 dark:text-white text-xs truncate max-w-[150px]">
+                                      {getEmployeeName({ employee_name: leave.employeeId?.employee_name || '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: leave.employeeId?.emp_no || leave.emp_no || '' } as Employee)}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">{leave.employeeId?.emp_no || leave.emp_no}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">{getItemDivisionName(leave) || 'N/A'}</span>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">{getItemDepartmentName(leave) || 'N/A'}</span>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 capitalize">{leave.leaveType.replace('_', ' ')}</span>
+                              </td>
+                              <td className="px-6 py-3.5 whitespace-nowrap">
+                                <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                                  <span className="font-medium">{formatDate(leave.fromDate)}</span>
+                                  {leave.fromDate !== leave.toDate && <span className="text-slate-400 mx-1"> - {formatDate(leave.toDate)}</span>}
+                                </div>
+                              </td>
+                              <td className="px-6 py-3.5 text-center">
+                                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">{leave.numberOfDays}d</span>
+                              </td>
+                              <td className="px-6 py-3.5 text-center">
+                                <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${getStatusColor(leave.status)}`}>
+                                  {leave.status.replace('_', ' ')}
+                                </span>
+                              </td>
+                              <td className="px-6 py-3.5 text-right">
+                                {canPerformAction(leave, 'leave') && hasManagePermission && (
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button onClick={(e) => { e.stopPropagation(); handleAction(leave._id, 'leave', 'approve'); }} className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-all" title="Approve">
+                                      <Check className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleAction(leave._id, 'leave', 'reject'); }} className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all" title="Reject">
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Cards: Pending Leaves */}
+                    <div className="md:hidden grid grid-cols-1 gap-4">
                       {filteredPendingLeaves.map((leave) => (
                         <div key={leave._id} className="group relative flex flex-col justify-between rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-blue-200/60 dark:border-slate-800 dark:bg-slate-900">
                           {/* Status Strip */}
@@ -3383,14 +3500,88 @@ export default function LeavesPage() {
                   </div>
                 )}
 
-                {/* Pending ODs */}
-                {filteredPendingODs.length > 0 && (
+                {/* Pending ODs Sub-tab */}
+                {pendingTab === 'od' && (
                   <div>
                     <h3 className="inline-flex items-center gap-2 rounded-xl bg-purple-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-purple-700 dark:bg-purple-400/20 dark:text-purple-300 mb-3 border border-purple-200/60 dark:border-purple-500/30">
                       <Briefcase className="w-4 h-4" />
                       Pending ODs ({filteredPendingODs.length})
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+                    {/* Desktop Table: Pending ODs */}
+                    <div className="hidden md:block overflow-x-auto scrollbar-hide bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/60 dark:border-slate-800 shadow-sm overflow-hidden mb-6">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200/60 dark:border-slate-800">
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Employee</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Division</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Department</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dates</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Duration</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Status</th>
+                            <th className="px-6 py-4 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {filteredPendingODs.map((od) => (
+                            <tr key={od._id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer" onClick={() => openDetailDialog(od, 'od')}>
+                              <td className="px-6 py-3.5">
+                                <div className="flex items-center gap-3">
+                                  <div className="h-8 w-8 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-700 dark:text-purple-400 font-bold text-xs shrink-0">
+                                    {getEmployeeInitials({ employee_name: od.employeeId?.employee_name || '', first_name: od.employeeId?.first_name, last_name: od.employeeId?.last_name, emp_no: '' } as any)}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-medium text-slate-900 dark:text-white text-xs truncate max-w-[150px]">
+                                      {getEmployeeName({ employee_name: od.employeeId?.employee_name || '', first_name: od.employeeId?.first_name, last_name: od.employeeId?.last_name, emp_no: od.employeeId?.emp_no || od.emp_no || '' } as Employee)}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">{od.employeeId?.emp_no || od.emp_no}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">{getItemDivisionName(od) || 'N/A'}</span>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">{getItemDepartmentName(od) || 'N/A'}</span>
+                              </td>
+                              <td className="px-6 py-3.5">
+                                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 capitalize">{od.odType.replace('_', ' ')}</span>
+                              </td>
+                              <td className="px-6 py-3.5 whitespace-nowrap">
+                                <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                                  <span className="font-medium">{formatDate(od.fromDate)}</span>
+                                  {od.fromDate !== od.toDate && <span className="text-slate-400 mx-1"> - {formatDate(od.toDate)}</span>}
+                                </div>
+                              </td>
+                              <td className="px-6 py-3.5 text-center">
+                                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">{od.numberOfDays}d</span>
+                              </td>
+                              <td className="px-6 py-3.5 text-center">
+                                <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${getStatusColor(od.status)}`}>
+                                  {od.status.replace('_', ' ')}
+                                </span>
+                              </td>
+                              <td className="px-6 py-3.5 text-right">
+                                {canPerformAction(od, 'od') && hasManagePermission && (
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button onClick={(e) => { e.stopPropagation(); handleAction(od._id, 'od', 'approve'); }} className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-all" title="Approve">
+                                      <Check className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleAction(od._id, 'od', 'reject'); }} className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all" title="Reject">
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Cards: Pending ODs */}
+                    <div className="md:hidden grid grid-cols-1 gap-4">
                       {filteredPendingODs.map((od) => (
                         <div key={od._id} className="group relative flex flex-col justify-between rounded-xl border border-slate-200 border-l-4 border-l-purple-500 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700 dark:bg-slate-800">
 

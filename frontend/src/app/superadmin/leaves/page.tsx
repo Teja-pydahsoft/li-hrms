@@ -265,6 +265,30 @@ const getEmployeeInitials = (emp: Employee) => {
   return (name[0] || 'E').toUpperCase();
 };
 
+// Helper: get department name from item (top-level or nested on employeeId)
+const getItemDepartmentName = (item: any) => {
+  const populated = item?.department?.name || (item?.employeeId as any)?.department?.name;
+  const fallback = item?.department_name;
+  const val = populated || fallback || '';
+  return val === 'N/A' || val === 'undefined' ? '' : val;
+};
+
+// Helper: get division name from item (top-level or nested)
+const getItemDivisionName = (item: any) => {
+  const populated = (item?.employeeId as any)?.division?.name || (item?.employeeId as any)?.department?.division?.name || (item?.division_id as any)?.name;
+  const fallback = item?.division_name;
+  const val = populated || fallback || '';
+  return val === 'N/A' || val === 'undefined' ? '' : val;
+};
+
+// Helper: get designation name from item (top-level or nested on employeeId)
+const getItemDesignationName = (item: any) => {
+  const populated = item?.designation?.name || (item?.employeeId as any)?.designation?.name;
+  const fallback = item?.designation_name;
+  const val = populated || fallback || '';
+  return val === 'N/A' || val === 'undefined' ? '' : val;
+};
+
 interface LeaveApplication {
   _id: string;
   employeeId?: {
@@ -557,6 +581,7 @@ export default function LeavesPage() {
   };
 
   const [dateRange, setDateRange] = useState(() => getDefaultDateRange(1));
+  const [pendingTab, setPendingTab] = useState<'leaves' | 'od'>('leaves');
 
   // Pagination for Leaves and OD tabs (all requests list)
   const PER_PAGE_OPTIONS = [10, 20, 50, 100];
@@ -2260,6 +2285,8 @@ export default function LeavesPage() {
               <thead className="bg-slate-50 dark:bg-slate-900">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Employee</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Division</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Department</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Duration</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Days</th>
@@ -2269,7 +2296,7 @@ export default function LeavesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {loading ? <TableSkeletonRows rows={10} cols={7} /> : leaves.map((leave) => (
+                {loading ? <TableSkeletonRows rows={10} cols={9} /> : leaves.map((leave) => (
                   <tr
                     key={leave._id}
                     className="hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors"
@@ -2280,6 +2307,12 @@ export default function LeavesPage() {
                         {leave.employeeId?.employee_name || `${leave.employeeId?.first_name || ''} ${leave.employeeId?.last_name || ''}`.trim() || leave.emp_no}
                       </div>
                       <div className="text-xs text-slate-500">{leave.employeeId?.emp_no || leave.emp_no}</div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {getItemDivisionName(leave)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {getItemDepartmentName(leave)}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 capitalize">
                       {leave.leaveType?.replace('_', ' ') || '-'}
@@ -2305,7 +2338,7 @@ export default function LeavesPage() {
                 ))}
                 {!loading && leaves.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
                       No leave applications found
                     </td>
                   </tr>
@@ -2367,6 +2400,8 @@ export default function LeavesPage() {
               <thead className="bg-slate-50 dark:bg-slate-900">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Employee</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Division</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Department</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Place</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">Duration</th>
@@ -2376,7 +2411,7 @@ export default function LeavesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {loading ? <TableSkeletonRows rows={10} cols={7} /> : ods.map((od) => (
+                {loading ? <TableSkeletonRows rows={10} cols={9} /> : ods.map((od) => (
                   <tr
                     key={od._id}
                     className="hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors"
@@ -2387,6 +2422,12 @@ export default function LeavesPage() {
                         {od.employeeId?.employee_name || `${od.employeeId?.first_name || ''} ${od.employeeId?.last_name || ''}`.trim() || od.emp_no}
                       </div>
                       <div className="text-xs text-slate-500">{od.employeeId?.emp_no || od.emp_no}</div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {getItemDivisionName(od)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {getItemDepartmentName(od)}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 capitalize">
                       {od.odType?.replace('_', ' ') || '-'}
@@ -2412,7 +2453,7 @@ export default function LeavesPage() {
                 ))}
                 {!loading && ods.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
                       No OD applications found
                     </td>
                   </tr>
@@ -2425,6 +2466,31 @@ export default function LeavesPage() {
 
         {activeTab === 'pending' && (
           <div className="p-4 space-y-6">
+            {/* Sub-tabs for Pending */}
+            <div className="flex gap-2 mb-6 px-1">
+              <button
+                onClick={() => setPendingTab('leaves')}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all border ${
+                  pendingTab === 'leaves'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-500/20'
+                    : 'bg-white dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800 hover:border-blue-400'
+                }`}
+              >
+                <CalendarIcon />
+                Pending Leaves ({loadingPending ? '…' : pendingLeavesTotal})
+              </button>
+              <button
+                onClick={() => setPendingTab('od')}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all border ${
+                  pendingTab === 'od'
+                    ? 'bg-purple-600 text-white border-purple-600 shadow-lg shadow-purple-500/20'
+                    : 'bg-white dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800 hover:border-purple-400'
+                }`}
+              >
+                <BriefcaseIcon />
+                Pending ODs ({loadingPending ? '…' : pendingODsTotal})
+              </button>
+            </div>
             {/* Pending: Per page & summary */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-sm text-slate-600 dark:text-slate-400">
@@ -2452,7 +2518,8 @@ export default function LeavesPage() {
             </div>
 
             {/* Pending Leaves */}
-            <div>
+            {pendingTab === 'leaves' && (
+              <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-blue-700 dark:bg-blue-400/20 dark:text-blue-300 mb-3 border border-blue-200/60 dark:border-blue-500/30">
                 <CalendarIcon />
                 Pending Leaves ({loadingPending ? '…' : pendingLeavesTotal})
@@ -2464,6 +2531,8 @@ export default function LeavesPage() {
                   <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
                     <tr>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Employee</th>
+                      <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Division</th>
+                      <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Department</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Type</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Dates</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Days</th>
@@ -2472,10 +2541,10 @@ export default function LeavesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {loadingPending ? <TableSkeletonRows rows={6} cols={6} /> : (
+                    {loadingPending ? <TableSkeletonRows rows={6} cols={8} /> : (
                       <>
                     {pendingLeaves.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No pending leaves</td></tr>
+                      <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">No pending leaves</td></tr>
                     )}
                     {pendingLeaves.map((leave) => (
                       <tr key={leave._id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
@@ -2483,6 +2552,8 @@ export default function LeavesPage() {
                           <div className="font-medium text-slate-900 dark:text-white">{getEmployeeName({ employee_name: leave.employeeId?.employee_name ?? '', first_name: leave.employeeId?.first_name, last_name: leave.employeeId?.last_name, emp_no: leave.employeeId?.emp_no ?? leave.emp_no ?? '' } as Employee)}</div>
                           <div className="text-xs text-slate-500">{leave.employeeId?.emp_no ?? leave.emp_no}</div>
                         </td>
+                        <td className="px-4 py-3">{getItemDivisionName(leave)}</td>
+                        <td className="px-4 py-3">{getItemDepartmentName(leave)}</td>
                         <td className="px-4 py-3">{leave.leaveType}</td>
                         <td className="px-4 py-3">{formatDate(leave.fromDate)} – {formatDate(leave.toDate)}</td>
                         <td className="px-4 py-3">{leave.numberOfDays}</td>
@@ -2548,10 +2619,12 @@ export default function LeavesPage() {
                   </div>
                 )}
               </div>
-            </div>
+              </div>
+            )}
 
             {/* Pending ODs */}
-            <div>
+            {pendingTab === 'od' && (
+              <div>
               <h3 className="inline-flex items-center gap-2 rounded-xl bg-purple-500/15 px-4 py-2.5 text-sm font-black uppercase tracking-wider text-purple-700 dark:bg-purple-400/20 dark:text-purple-300 mb-3 border border-purple-200/60 dark:border-purple-500/30">
                 <BriefcaseIcon />
                 Pending ODs ({loadingPending ? '…' : pendingODsTotal})
@@ -2563,6 +2636,8 @@ export default function LeavesPage() {
                   <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
                     <tr>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Employee</th>
+                      <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Division</th>
+                      <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Department</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Type</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Place</th>
                       <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Dates</th>
@@ -2572,10 +2647,10 @@ export default function LeavesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {loadingPending ? <TableSkeletonRows rows={6} cols={7} /> : (
+                    {loadingPending ? <TableSkeletonRows rows={6} cols={9} /> : (
                       <>
                     {pendingODs.length === 0 && (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">No pending ODs</td></tr>
+                      <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">No pending ODs</td></tr>
                     )}
                     {pendingODs.map((od) => (
                       <tr key={od._id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
@@ -2583,6 +2658,8 @@ export default function LeavesPage() {
                           <div className="font-medium text-slate-900 dark:text-white">{getEmployeeName({ employee_name: od.employeeId?.employee_name ?? '', first_name: od.employeeId?.first_name, last_name: od.employeeId?.last_name, emp_no: od.employeeId?.emp_no ?? od.emp_no ?? '' } as Employee)}</div>
                           <div className="text-xs text-slate-500">{od.employeeId?.emp_no ?? od.emp_no}</div>
                         </td>
+                        <td className="px-4 py-3">{getItemDivisionName(od)}</td>
+                        <td className="px-4 py-3">{getItemDepartmentName(od)}</td>
                         <td className="px-4 py-3">{od.odType}</td>
                         <td className="px-4 py-3 max-w-[120px] truncate" title={od.placeVisited}>{od.placeVisited || '–'}</td>
                         <td className="px-4 py-3">{formatDate(od.fromDate)} – {formatDate(od.toDate)}</td>
@@ -2639,7 +2716,8 @@ export default function LeavesPage() {
                   </div>
                 )}
               </div>
-            </div>
+              </div>
+            )}
           </div>
         )}
 
