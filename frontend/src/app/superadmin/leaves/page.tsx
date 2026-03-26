@@ -509,7 +509,7 @@ export default function LeavesPage() {
   const [pendingODsTotal, setPendingODsTotal] = useState(0);
   const [pendingLeavesPage, setPendingLeavesPage] = useState(1);
   const [pendingODsPage, setPendingODsPage] = useState(1);
-  const [pendingLimit, setPendingLimit] = useState(20);
+  const [pendingLimit, setPendingLimit] = useState(1000);
   const [loadingPending, setLoadingPending] = useState(false);
   const [loading, setLoading] = useState(true);
 

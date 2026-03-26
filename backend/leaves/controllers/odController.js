@@ -1325,7 +1325,7 @@ exports.getPendingApprovals = async (req, res) => {
     const userRole = req.user.role;
     const { page = 1, limit = 20, search, odType, fromDate, toDate, department, division, designation } = req.query;
     const pageNum = Math.max(1, parseInt(page, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+    const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10)));
     const skip = (pageNum - 1) * limitNum;
 
     let filter = {

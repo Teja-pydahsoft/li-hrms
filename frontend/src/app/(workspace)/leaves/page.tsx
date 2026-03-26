@@ -861,8 +861,8 @@ export default function LeavesPage() {
         const [leavesRes, odsRes, pendingLeavesRes, pendingODsRes] = await Promise.all([
           api.getLeaves({ limit: 500, fromDate: activeRange.from, toDate: activeRange.to }),
           api.getODs({ limit: 500, fromDate: activeRange.from, toDate: activeRange.to }),
-          api.getPendingLeaveApprovals({ fromDate: activeRange.from, toDate: activeRange.to }),
-          api.getPendingODApprovals({ fromDate: activeRange.from, toDate: activeRange.to }),
+          api.getPendingLeaveApprovals({ limit: 1000, fromDate: activeRange.from, toDate: activeRange.to }),
+          api.getPendingODApprovals({ limit: 1000, fromDate: activeRange.from, toDate: activeRange.to }),
         ]);
 
         if (leavesRes.success) setLeaves(leavesRes.data || []);
