@@ -23,6 +23,7 @@ export const MODULE_CATEGORIES = [
         name: 'Time & Attendance',
         icon: '⏰',
         modules: [
+            { code: 'ATTENDANCE', label: 'Attendance', href: '/attendance' },
             { code: 'LEAVE_OD', label: 'Leave & OD', href: '/leaves' },
             { code: 'LEAVE_REGISTER', label: 'Leave register', href: '/leave-register' },
             { code: 'CCL', label: 'CCL (Compensatory)', href: '/ccl' },
