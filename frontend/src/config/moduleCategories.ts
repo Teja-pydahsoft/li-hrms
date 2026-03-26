@@ -25,15 +25,12 @@ export const MODULE_CATEGORIES = [
         modules: [
             { code: 'ATTENDANCE', label: 'Attendance', href: '/attendance' },
             { code: 'LEAVE_OD', label: 'Leave & OD', href: '/leaves' },
-            { code: 'LEAVE_REGISTER', label: 'Leave register', href: '/leave-register' },
+            { code: 'LEAVE_REGISTER', label: 'Leave Register', href: '/leave-register' },
             { code: 'CCL', label: 'CCL (Compensatory)', href: '/ccl' },
             { code: 'OT_PERMISSIONS', label: 'OT & Permissions', href: '/ot-permissions' },
             { code: 'CONFUSED_SHIFTS', label: 'Confused Shifts', href: '/confused-shifts' },
             { code: 'SHIFT_ROSTER', label: 'Shift Roster', href: '/shift-roster' },
             { code: 'HOLIDAY_CALENDAR', label: 'Holiday Calendar', href: '/holidays' },
-            { code: 'LEAVE_OD', label: 'Leave & OD', href: '/leaves' },
-            { code: 'LEAVE_REGISTER', label: 'Leave Register', href: '/leave-register' },
-            { code: 'CCL', label: 'CCL (Compensatory)', href: '/ccl' },
             { code: 'SHIFTS', label: 'Shifts', href: '/shifts' }
         ]
     },
