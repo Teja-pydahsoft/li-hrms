@@ -9,6 +9,8 @@ const biometricReportService = require('../services/biometricReportService');
 const dayjs = require('dayjs');
 const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
+const { calculateMonthlySummary } = require('../services/summaryCalculationService');
+const MonthlyAttendanceSummary = require('../model/MonthlyAttendanceSummary');
 
 // Date format DD-Mon-YY (e.g. 01-Dec-25)
 function formatPDate(d) {
@@ -517,7 +519,7 @@ exports.exportAttendanceReport = async (req, res) => {
         }
 
         // ── 1. Fetch employee map ────────────────────────────────────────────────
-        const empQuery = { is_active: { $ne: false } };
+        const empQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
         if (designationId && designationId !== 'all') {
             const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
             empQuery.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
@@ -798,16 +800,16 @@ exports.exportAttendanceReport = async (req, res) => {
             let children = [];
             if (groupBy === 'division') {
                 const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
-                const divQuery = { is_active: { $ne: false } };
+                const divQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
                 if (divIds.length > 0) divQuery._id = { $in: divIds };
                 children = await Division.find(divQuery).select('name').lean();
             } else if (groupBy === 'department') {
                 const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
-                const deptQuery = { is_active: { $ne: false } };
+                const deptQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
                 if (divIds.length > 0) deptQuery.divisions = { $in: divIds };
                 children = await Department.find(deptQuery).select('name').lean();
             } else if (groupBy === 'employee') {
-                const empQuery = { is_active: { $ne: false } };
+                const empQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
                 if (designationId && designationId !== 'all') {
                     const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
                     empQuery.designation_id = { $in: desigIds };
@@ -1027,9 +1029,13 @@ const drawSummaryBox = (doc, label, value, x, y, width, height, color) => {
  * Helper to draw a modern table in PDFKit
  */
 const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, options = {}) => {
-    const { headerFill = '#4f46e5', rowFill = '#f8fafc', fontSize = 8 } = options;
+    const { headerFill = '#4f46e5', rowFill = '#f8fafc', fontSize = 8, onPageAdd } = options;
     let y = startY;
     const tableWidth = colWidths.reduce((a, b) => a + b, 0);
+    // Explicitly use landscape if not specified, or use current page layout
+    const layout = options.layout || doc.page?.layout || 'landscape';
+    const pageHeight = layout === 'landscape' ? 595.28 : 841.89;
+    const threshold = pageHeight - 70; // Tighten footer space
 
     // Draw Header
     doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
@@ -1042,14 +1048,23 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
     });
     
     y += 24;
-    doc.font('Helvetica').fontSize(fontSize).fillColor('#334155');
+    doc.font('Helvetica').fontSize(fontSize).fillColor('#33414d');
 
     // Draw Rows
     data.forEach((row, rowIndex) => {
-        // Check for page break (landscape A4 height is ~595)
-        if (y > 520) {
-            doc.addPage({ layout: 'landscape', margin: 30 });
-            y = 50;
+        // Special case: Section Header (String instead of Array)
+        if (typeof row === 'string') {
+            doc.fillColor('#f1f5f9').rect(startX, y, tableWidth, 20).fill();
+            doc.fillColor('#4f46e5').fontSize(fontSize + 1).font('Helvetica-Bold').text(row.toUpperCase(), startX + 5, y + 5);
+            y += 20;
+            return;
+        }
+
+        // Check for page break
+        if (y > threshold) {
+            doc.addPage({ size: 'A4', layout: layout, margin: 25 });
+            if (onPageAdd) onPageAdd();
+            y = onPageAdd ? 65 : 50; 
             
             // Re-draw header
             doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
@@ -1060,14 +1075,14 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
                 xH += colWidths[i];
             });
             y += 24;
-            doc.font('Helvetica').fontSize(fontSize).fillColor('#334155');
+            doc.font('Helvetica').fontSize(fontSize).fillColor('#33414d');
         }
 
         if (rowIndex % 2 === 0) {
             doc.fillColor(rowFill).rect(startX, y, tableWidth, 20).fill();
         }
 
-        doc.fillColor('#334155');
+        doc.fillColor('#33414d');
         let xRow = startX;
         row.forEach((cell, i) => {
             doc.text(String(cell || ''), xRow + 5, y + 6, { 
@@ -1093,8 +1108,9 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
  * @access  Private
  */
 exports.exportAttendanceReportPDF = async (req, res) => {
+    console.log('--- EXPORT PDF CALLED ---', req.query);
     try {
-        let { startDate, endDate, departmentId, divisionId, employeeId, designationId, groupBy, month, year } = req.query;
+        let { startDate, endDate, departmentId, divisionId, employeeId, designationId, search, strict, groupBy, month, year } = req.query;
 
         // Sync dates for payroll months
         if (month && year) {
@@ -1107,147 +1123,448 @@ exports.exportAttendanceReportPDF = async (req, res) => {
             return res.status(400).json({ success: false, message: 'startDate and endDate are required' });
         }
 
-        // --- Fetch Summary Data (Reusing the Abstract Logic) ---
-        let children = [];
-        if (groupBy === 'division') {
-            const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
-            const divQuery = { is_active: { $ne: false } };
-            if (divIds.length > 0) divQuery._id = { $in: divIds };
-            children = await Division.find(divQuery).select('name').lean();
-        } else if (groupBy === 'department') {
-            const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
-            const deptQuery = { is_active: { $ne: false } };
-            if (divIds.length > 0) deptQuery.divisions = { $in: divIds };
-            children = await Department.find(deptQuery).select('name').lean();
-        } else if (groupBy === 'employee') {
-            const empQuery = { is_active: { $ne: false } };
-            if (designationId && designationId !== 'all') {
-                const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
-                empQuery.designation_id = { $in: desigIds };
+        const isStrict = strict === 'true';
+
+        // --- BRANCH: Summary Report (Division/Department aggregate) ---
+        if (groupBy === 'division' || groupBy === 'department') {
+            let children = [];
+            if (groupBy === 'division') {
+                const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+                const divQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
+                if (divIds.length > 0) divQuery._id = { $in: divIds };
+                children = await Division.find(divQuery).select('name').lean();
+            } else if (groupBy === 'department') {
+                const divIds = (divisionId && divisionId !== 'all') ? String(divisionId).split(',').filter(id => id && id !== 'all') : [];
+                const deptQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
+                if (divIds.length > 0) deptQuery.divisions = { $in: divIds };
+                children = await Department.find(deptQuery).select('name').lean();
+            } else {
+                const empQuery = { is_active: { $ne: false } };
+                if (designationId && designationId !== 'all') {
+                    const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+                    empQuery.designation_id = { $in: desigIds };
+                }
+                if (departmentId && departmentId !== 'all') {
+                    const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+                    empFilter.department_id = { $in: deptIds };
+                }
+                children = await Employee.find(empQuery).select('emp_no employee_name').lean();
             }
-            if (departmentId && departmentId !== 'all') {
-                const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
-                empQuery.department_id = { $in: deptIds };
+
+            const PRE = await PreScheduledShift.find({
+                date: { $gte: startDate, $lte: endDate },
+                status: { $in: ['WO', 'HOL'] }
+            }).select('employeeNumber status');
+
+            const nonWorkingMap = {}; 
+            PRE.forEach(p => {
+                if (!nonWorkingMap[p.employeeNumber]) nonWorkingMap[p.employeeNumber] = { wo: 0, hol: 0 };
+                if (p.status === 'WO') nonWorkingMap[p.employeeNumber].wo++;
+                if (p.status === 'HOL') nonWorkingMap[p.employeeNumber].hol++;
+            });
+
+            const daysInRange = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
+
+            const doc = new PDFDocument({ margin: 25, size: 'A4', layout: 'landscape', bufferPages: true });
+            const fname = `attendance_summary_${startDate}_${endDate}.pdf`;
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+            doc.pipe(res);
+
+            // Header Section
+            doc.fillColor('#4f46e5').rect(0, 0, 842, 60).fill();
+            doc.fillColor('#ffffff').fontSize(20).font('Helvetica-Bold').text('HRMS ATTENDANCE SUMMARY', 30, 20);
+            doc.fontSize(10).font('Helvetica').text(`Generated on ${dayjs().format('DD MMM YYYY, hh:mm A')}`, 30, 42);
+            doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text(`PERIOD: ${dayjs(startDate).format('DD MMM YYYY')} TO ${dayjs(endDate).format('DD MMM YYYY')}`, 30, 80, { align: 'right' });
+
+            const headers = ['NAME / ENTITY', 'E.NO', 'PRES', 'LVE', 'OD', 'WO', 'HOL', 'OT', 'EX', 'PRM', 'L/E', 'DED', 'PAYABLE'];
+            const colWidths = [185, 55, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
+            const tableData = [];
+
+            const monthStr = (year && month) ? `${year}-${String(month).padStart(2, '0')}` : null;
+
+            for (const child of children) {
+                const childEmpFilter = { is_active: { $ne: false } };
+                if (groupBy === 'division') {
+                    const division = await Division.findById(child._id).select('departments').lean();
+                    const depts = await Department.find({ $or: [{ divisions: child._id }, { _id: { $in: division?.departments || [] } }] }).select('_id');
+                    childEmpFilter.$or = [{ division_id: child._id }, { department_id: { $in: depts.map(d => d._id) } }];
+                } else if (groupBy === 'department') {
+                    childEmpFilter.department_id = child._id;
+                } else {
+                    childEmpFilter.emp_no = child.emp_no;
+                }
+
+                const childEmployees = await Employee.find(childEmpFilter).select('emp_no');
+                const childEmpNos = childEmployees.map(e => e.emp_no);
+                const childEmpIds = childEmployees.map(e => e._id);
+
+                let entityStats = {
+                    present: 0, leaves: 0, od: 0, wo: 0, hol: 0, ot: 0, extra: 0, perm: 0, lateEarly: 0, ded: 0, payable: 0
+                };
+
+                // Use MonthlyAttendanceSummary if possible for 100% parity
+                if (monthStr) {
+                    const summaries = await MonthlyAttendanceSummary.find({
+                        employeeId: { $in: childEmpIds },
+                        month: monthStr
+                    }).lean();
+
+                    for (const emp of childEmployees) {
+                        let s = summaries.find(x => String(x.employeeId) === String(emp._id));
+                        if (!s) {
+                            try {
+                                s = await calculateMonthlySummary(emp._id, emp.emp_no, parseInt(year), parseInt(month));
+                            } catch (err) { console.error('Calc failed', err); }
+                        }
+                        if (s) {
+                            entityStats.present += (s.totalPresentDays || 0);
+                            entityStats.leaves += (s.totalLeaves || 0);
+                            entityStats.od += (s.totalODs || 0);
+                            entityStats.wo += (s.totalWeeklyOffs || 0);
+                            entityStats.hol += (s.totalHolidays || 0);
+                            entityStats.ot += (s.totalOTHours || 0);
+                            entityStats.extra += (s.totalExtraHours || 0);
+                            entityStats.perm += (s.totalPermissionHours || 0);
+                            entityStats.lateEarly += (s.lateOrEarlyCount || 0);
+                            entityStats.ded += (s.totalAttendanceDeductionDays || 0);
+                            entityStats.payable += (s.totalPayableShifts || 0);
+                        }
+                    }
+                } else {
+                    // Fallback to legacy aggregate if no month provided (rare for PDF)
+                    const stats = await AttendanceDaily.aggregate([
+                        { $match: { date: { $gte: startDate, $lte: endDate }, employeeNumber: { $in: childEmpNos } } },
+                        { $group: {
+                            _id: null,
+                            present: { $sum: "$payableShifts" },
+                            lateEarly: { $sum: { $cond: [{ $or: [{ $gt: ["$totalLateInMinutes", 0] }, { $gt: ["$totalEarlyOutMinutes", 0] }] }, 1, 0] } },
+                            ot: { $sum: "$totalOTHours" },
+                            extra: { $sum: "$extraHours" },
+                            perm: { $sum: "$permissionHours" },
+                            ded: { $sum: "$attendanceDeductionDays" }
+                        }}
+                    ]);
+                    const s = stats[0] || {};
+                    entityStats.present = s.present || 0;
+                    entityStats.lateEarly = s.lateEarly || 0;
+                    entityStats.ot = s.ot || 0;
+                    entityStats.extra = s.extra || 0;
+                    entityStats.perm = s.perm || 0;
+                    entityStats.ded = s.ded || 0;
+                    entityStats.payable = s.present || 0;
+                    // Leaves/ODs would still be missing in this fallback case
+                }
+                
+                tableData.push([
+                    child.employee_name || child.name,
+                    child.emp_no || '-',
+                    entityStats.present.toFixed(1),
+                    entityStats.leaves.toFixed(1),
+                    entityStats.od.toFixed(1),
+                    entityStats.wo.toFixed(1),
+                    entityStats.hol.toFixed(1),
+                    entityStats.ot.toFixed(2),
+                    entityStats.extra.toFixed(2),
+                    entityStats.perm.toFixed(2),
+                    entityStats.lateEarly,
+                    entityStats.ded.toFixed(1),
+                    entityStats.payable.toFixed(1)
+                ]);
             }
-            if (divisionId && divisionId !== 'all') {
-                const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
-                empQuery.division_id = { $in: divIds };
+
+            drawPDFTableModern(doc, headers, tableData, 30, doc.y + 20, colWidths);
+            const pages = doc.bufferedPageRange();
+            for (let i = 0; i < pages.count; i++) {
+                doc.switchToPage(i);
+                doc.fontSize(8).fillColor('#94a3b8').text(`Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`, 30, doc.page.height - 30, { align: 'center' });
             }
-            children = await Employee.find(empQuery).select('emp_no employee_name').lean();
+            doc.end();
+            return;
         }
 
-        const PRE = await PreScheduledShift.find({
-            date: { $gte: startDate, $lte: endDate },
-            status: { $in: ['WO', 'HOL'] }
-        }).select('employeeNumber status');
+        // --- BRANCH: Detailed Tabular Report (Two-Section: Logs + Summary) ---
+        
+        // 1. Fetch employees
+        const empQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
+        if (designationId && designationId !== 'all') {
+            const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
+            empQuery.designation_id = { $in: desigIds };
+        }
+        if (departmentId && departmentId !== 'all') {
+            const deptIds = String(departmentId).split(',').filter(id => id && id !== 'all');
+            empQuery.department_id = { $in: deptIds };
+        }
+        if (divisionId && divisionId !== 'all') {
+            const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
+            empQuery.division_id = { $in: divIds };
+        }
+        if (employeeId && employeeId !== 'all') {
+            const empIds = String(employeeId).split(',').filter(id => id && id !== 'all');
+            empQuery._id = { $in: empIds };
+        }
+        if (search) {
+            empQuery.$or = [{ employee_name: { $regex: search, $options: 'i' } }, { emp_no: { $regex: search, $options: 'i' } }];
+        }
 
-        const nonWorkingMap = {}; 
-        PRE.forEach(p => {
-            if (!nonWorkingMap[p.employeeNumber]) nonWorkingMap[p.employeeNumber] = { wo: 0, hol: 0 };
-            if (p.status === 'WO') nonWorkingMap[p.employeeNumber].wo++;
-            if (p.status === 'HOL') nonWorkingMap[p.employeeNumber].hol++;
+        const employees = await Employee.find(empQuery)
+            .populate('department_id', 'name')
+            .populate('division_id', 'name')
+            .select('emp_no employee_name department_id division_id')
+            .lean();
+
+        if (employees.length === 0) {
+            return res.status(404).json({ success: false, message: 'No employees found with the selected filters' });
+        }
+
+        const empNos = employees.map(e => String(e.emp_no).toUpperCase());
+
+        // 2. Fetch Biometric Logs (Gracefully handle missing URI)
+        let pairedData = {};
+        if (process.env.MONGODB_BIOMETRIC_URI) {
+            try {
+                const fetchStart = new Date(startDate); fetchStart.setHours(0,0,0,0);
+                const fetchEnd = new Date(endDate); fetchEnd.setHours(23,59,59,999);
+                fetchEnd.setTime(fetchEnd.getTime() + 36 * 60 * 60 * 1000); // +36h window
+
+                const logsResult = await biometricReportService.getThumbReports({
+                    startDate: fetchStart.toISOString(),
+                    endDate: fetchEnd.toISOString(),
+                    employeeIds: empNos,
+                    limit: 100000
+                });
+                const logs = logsResult.logs || [];
+
+                // Pairing logic (Mirroring reportsController.js)
+                const byEmpDate = {};
+                logs.forEach(log => {
+                    const eid =String(log.employeeId).toUpperCase();
+                    const time = new Date(log.timestamp);
+                    const dk = time.toISOString().slice(0, 10);
+                    if (!byEmpDate[eid]) byEmpDate[eid] = {};
+                    if (!byEmpDate[eid][dk]) byEmpDate[eid][dk] = [];
+                    let type = 'IN';
+                    if ((log.logType || '').toUpperCase().includes('OUT')) type = 'OUT';
+                    byEmpDate[eid][dk].push({ time, type });
+                });
+
+                for (const eid of Object.keys(byEmpDate)) {
+                    const allLogs = [];
+                    for (const dk in byEmpDate[eid]) byEmpDate[eid][dk].forEach(l => allLogs.push(l));
+                    allLogs.sort((a,b) => a.time - b.time);
+                    
+                    const uniqueLogs = [];
+                    if (allLogs.length > 0) {
+                        uniqueLogs.push(allLogs[0]);
+                        for(let i=1; i<allLogs.length; i++) {
+                            if (allLogs[i].type === allLogs[i-1].type && (allLogs[i].time - allLogs[i-1].time) < 120000) continue;
+                            uniqueLogs.push(allLogs[i]);
+                        }
+                    }
+
+                    const pairsByDate = {};
+                    let pendingIn = null;
+                    for (const log of uniqueLogs) {
+                        if (log.type === 'IN') {
+                            if (pendingIn && (log.time - pendingIn.time) > 3600000) {
+                                const dk = pendingIn.time.toISOString().slice(0, 10);
+                                if(!pairsByDate[dk]) pairsByDate[dk] = [];
+                                pairsByDate[dk].push({ in: pendingIn.time, out: null });
+                            }
+                            if (!pendingIn || (log.time - pendingIn.time) > 3600000) pendingIn = { time: log.time };
+                        } else {
+                            if (pendingIn) {
+                                const gap = log.time - pendingIn.time;
+                                if (gap <= 36 * 3600000 && gap > 0) {
+                                   const dk = pendingIn.time.toISOString().slice(0, 10);
+                                   if(!pairsByDate[dk]) pairsByDate[dk] = [];
+                                   pairsByDate[dk].push({ in: pendingIn.time, out: log.time });
+                                   pendingIn = null;
+                                }
+                            }
+                        }
+                    }
+                    if (pendingIn) {
+                        const dk = pendingIn.time.toISOString().slice(0,10);
+                        if(!pairsByDate[dk]) pairsByDate[dk] = [];
+                        pairsByDate[dk].push({ in: pendingIn.time, out: null });
+                    }
+                    pairedData[eid] = pairsByDate;
+                }
+            } catch (err) {
+                console.error('Biometric fetch failed, using Daily Records only:', err);
+            }
+        }
+
+        // 3. Fetch AttendanceDaily records
+        const dailyRecords = await AttendanceDaily.find({
+            date: { $gte: startDate, $lte: endDate },
+            employeeNumber: { $in: empNos }
+        }).lean();
+        
+        const dailyMap = {};
+        dailyRecords.forEach(r => {
+            const key = `${String(r.employeeNumber).toUpperCase()}_${r.date}`;
+            dailyMap[key] = r;
         });
 
-        const startArr = startDate.split('-').reverse();
-        const endArr = endDate.split('-').reverse();
-        const daysInRange = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
+        // 4. Generate PDF
+        // Determine days in range for the grid
+        const startDayjs = dayjs(startDate);
+        const endDayjs = dayjs(endDate);
+        const daysArray = [];
+        let curD = startDayjs;
+        while (curD.isBefore(endDayjs) || curD.isSame(endDayjs, 'day')) {
+            daysArray.push(curD.format('YYYY-MM-DD'));
+            curD = curD.add(1, 'day');
+        }
 
-        // --- Generate PDF Document ---
-        const doc = new PDFDocument({ margin: 30, size: 'A4', layout: 'landscape', bufferPages: true });
+        const doc = new PDFDocument({ margin: 25, size: 'A4', layout: 'landscape', bufferPages: true });
         const fname = `attendance_report_${startDate}_${endDate}.pdf`;
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
         doc.pipe(res);
 
-        // Header Section
-        doc.fillColor('#4f46e5').rect(0, 0, 842, 60).fill(); // Indigo top bar
-        doc.fillColor('#ffffff').fontSize(20).font('Helvetica-Bold').text('HRMS ATTENDANCE REPORT', 30, 20);
-        doc.fontSize(10).font('Helvetica').text(`Generated on ${dayjs().format('DD MMM YYYY, hh:mm A')}`, 30, 42);
-        
-        doc.fillColor('#1e293b').fontSize(12).font('Helvetica-Bold').text(`PERIOD: ${dayjs(startDate).format('DD MMM YYYY')} TO ${dayjs(endDate).format('DD MMM YYYY')}`, 30, 80, { align: 'right' });
+        const pWidth = 841.89; const pHeight = 595.28; const m = 25;
 
-        // Calculate Overall Stats for Summary Boxes
-        const statsQuery = { date: { $gte: startDate, $lte: endDate } };
-        if (divisionId && divisionId !== 'all') {
-            const dIds = String(divisionId).split(',').filter(id => id && id !== 'all');
-            const depts = await Department.find({ divisions: { $in: dIds } }).select('_id');
-            statsQuery.employeeNumber = { $in: (await Employee.find({ $or: [{ division_id: { $in: dIds } }, { department_id: { $in: depts.map(d => d._id) } }] }).select('emp_no')).map(e => e.emp_no) };
-        } else if (departmentId && departmentId !== 'all') {
-            const dIds = String(departmentId).split(',').filter(id => id && id !== 'all');
-            statsQuery.employeeNumber = { $in: (await Employee.find({ department_id: { $in: dIds } }).select('emp_no')).map(e => e.emp_no) };
-        }
+        const drawMainHeader = (title, sub = `Period: ${startDate} to ${endDate}`) => {
+            doc.fillColor('#4f46e5').rect(0, 0, pWidth, 45).fill();
+            doc.fillColor('#ffffff').fontSize(14).font('Helvetica-Bold').text(title, m, 12);
+            doc.fontSize(8).font('Helvetica').text(sub, m, 30);
+            return 60; // Returns next Y
+        };
 
-        const overallStats = await AttendanceDaily.aggregate([
-            { $match: statsQuery },
-            { $group: { _id: null, present: { $sum: "$payableShifts" }, late: { $sum: { $cond: [{ $gt: ["$totalLateInMinutes", 0] }, 1, 0] } }, od: { $sum: { $cond: [{ $gt: ["$odHours", 0] }, 1, 0] } } } }
-        ]);
-        const oStats = overallStats[0] || { present: 0, late: 0, od: 0 };
+        // Grouping Data
+        const grouped = {};
+        employees.forEach(e => {
+            const div = e.division_id?.name || 'Unassigned Division';
+            const dept = e.department_id?.name || 'Unassigned Department';
+            if (!grouped[div]) grouped[div] = {};
+            if (!grouped[div][dept]) grouped[div][dept] = [];
+            grouped[div][dept].push(e);
+        });
 
-        // Draw Summary Boxes
-        let boxY = 110;
-        drawSummaryBox(doc, 'Total Days', String(daysInRange), 30, boxY, 120, 45, '#4f46e5');
-        drawSummaryBox(doc, 'Present Days', oStats.present.toFixed(1), 160, boxY, 120, 45, '#10b981');
-        drawSummaryBox(doc, 'Late Ins', String(oStats.late), 290, boxY, 120, 45, '#f59e0b');
-        drawSummaryBox(doc, 'On Duty', String(oStats.od), 420, boxY, 120, 45, '#3b82f6');
+        const sumHeaders = ['NAME', 'E.NO', 'PRES', 'LVE', 'OD', 'WO', 'HOL', 'OT', 'EX', 'PRM', 'L/E', 'DED', 'PAYABLE'];
+        const sumWidths = [185, 55, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
+        const gridHeaders = ['Employee Name', 'Emp ID', ...daysArray.map(d => dayjs(d).date().toString())];
+        const gridWidthSum = daysArray.length * 19.5;
+        const gridWidths = [150, 55, ...daysArray.map(() => 19.5)]; 
 
-        doc.moveDown(4);
+        const sortedDivisions = Object.keys(grouped).sort();
+        let firstPageProcessed = false;
 
-        // Table Header & Rows
-        const headers = ['NAME / ENTITY', 'E.NO', 'HEADS', 'PRES', 'ABS', 'LATE', 'OD', 'LVE', 'WO', 'HOL', '%'];
-        const colWidths = [190, 60, 50, 50, 50, 50, 50, 50, 50, 50, 80];
-        
-        const tableData = [];
-        for (const child of children) {
-            const childEmpFilter = { is_active: { $ne: false } };
-            if (groupBy === 'division') {
-                const division = await Division.findById(child._id).select('departments').lean();
-                const depts = await Department.find({ $or: [{ divisions: child._id }, { _id: { $in: division?.departments || [] } }] }).select('_id');
-                childEmpFilter.$or = [{ division_id: child._id }, { department_id: { $in: depts.map(d => d._id) } }];
-            } else if (groupBy === 'department') {
-                childEmpFilter.department_id = child._id;
-            } else if (groupBy === 'employee') {
-                childEmpFilter.emp_no = child.emp_no;
+        for (const divName of sortedDivisions) {
+            const sortedDepts = Object.keys(grouped[divName]).sort();
+            for (const deptName of sortedDepts) {
+                if (firstPageProcessed) doc.addPage({ size: 'A4', layout: 'landscape', margin: 25 });
+                firstPageProcessed = true;
+
+                let currentY = drawMainHeader(`ATTENDANCE REPORT - DIV: ${divName.toUpperCase()}`, `Department: ${deptName.toUpperCase()} | Period: ${startDate} to ${endDate}`);
+                
+                const deptEmps = grouped[divName][deptName].sort((a,b) => (a.employee_name || '').localeCompare(b.employee_name || ''));
+                const deptSumData = [], deptGridData = [];
+
+                const monthStr = (year && month) ? `${year}-${String(month).padStart(2, '0')}` : null;
+                const summaries = monthStr ? await MonthlyAttendanceSummary.find({
+                    employeeId: { $in: deptEmps.map(e => e._id) },
+                    month: monthStr
+                }).lean() : [];
+
+                for (const emp of deptEmps) {
+                    const eid = String(emp.emp_no).toUpperCase();
+                    const eName = emp.employee_name || '-';
+                    const empDaily = dailyRecords.filter(r => String(r.employeeNumber).toUpperCase() === eid);
+                    
+                    let summary = summaries.find(s => String(s.employeeId) === String(emp._id));
+                    if (!summary && monthStr) {
+                        try {
+                            summary = await calculateMonthlySummary(emp._id, emp.emp_no, parseInt(year), parseInt(month));
+                        } catch (err) { console.error('Calc failed', err); }
+                    }
+
+                    const gridRow = [eName, emp.emp_no];
+                    daysArray.forEach(dStr => {
+                        const rec = empDaily.find(r => r.date === dStr);
+                        if (rec) {
+                            let s = '-';
+                            if (rec.status === 'PRESENT') s = 'P';
+                            else if (rec.status === 'ABSENT') s = 'A';
+                            else if (rec.status === 'WEEK_OFF') s = 'WO';
+                            else if (rec.status === 'HOLIDAY') s = 'H';
+                            else if (rec.status === 'LEAVE') s = 'L';
+                            else if (rec.status === 'OD') s = 'OD';
+                            else if (rec.status === 'PARTIAL') s = 'PT';
+                            else if (rec.status === 'HALF_DAY') s = 'HD';
+                            gridRow.push(s);
+                        } else {
+                            // Check if this date has a leave/OD that might not be in AttendanceDaily
+                            const isWO = summary?.contributingDates?.weeklyOffs?.some(cd => cd.date === dStr);
+                            const isHOL = summary?.contributingDates?.holidays?.some(cd => cd.date === dStr);
+                            const isLve = summary?.contributingDates?.leaves?.some(cd => cd.date === dStr);
+                            const isOD = summary?.contributingDates?.ods?.some(cd => cd.date === dStr);
+                            
+                            if (isLve) gridRow.push('L');
+                            else if (isOD) gridRow.push('OD');
+                            else if (isWO) gridRow.push('WO');
+                            else if (isHOL) gridRow.push('H');
+                            else gridRow.push('-');
+                        }
+                    });
+
+                    deptSumData.push([
+                        eName, 
+                        emp.emp_no, 
+                        (summary?.totalPresentDays || 0).toFixed(1),
+                        (summary?.totalLeaves || 0).toFixed(1),
+                        (summary?.totalODs || 0).toFixed(1),
+                        (summary?.totalWeeklyOffs || 0).toFixed(1),
+                        (summary?.totalHolidays || 0).toFixed(1),
+                        (summary?.totalOTHours || 0).toFixed(2),
+                        (summary?.totalExtraHours || 0).toFixed(2),
+                        (summary?.totalPermissionHours || 0).toFixed(2),
+                        summary?.lateOrEarlyCount || 0, 
+                        (summary?.totalAttendanceDeductionDays || 0).toFixed(1), 
+                        (summary?.totalPayableShifts || 0).toFixed(1)
+                    ]);
+                    deptGridData.push(gridRow);
+                }
+
+                // 1. Dept Summary Section
+                doc.fillColor('#f8fafc').rect(m, currentY, pWidth - 2 * m, 20).fill();
+                doc.fillColor('#4f46e5').fontSize(9).font('Helvetica-Bold').text(`SUMMARY: ${deptName.toUpperCase()}`, m + 10, currentY + 6);
+                currentY += 25;
+
+                currentY = drawPDFTableModern(doc, sumHeaders, deptSumData, m, currentY, sumWidths, { 
+                    fontSize: 7, 
+                    headerFill: '#4f46e5',
+                    onPageAdd: () => drawMainHeader(`ATTENDANCE SUMMARY (CONT) - ${divName.toUpperCase()}`, `Dept: ${deptName.toUpperCase()}`)
+                });
+                
+                currentY += 20;
+                if (currentY > 450) {
+                    doc.addPage({ size: 'A4', layout: 'landscape', margin: 25 });
+                    currentY = drawMainHeader(`ATTENDANCE GRID - ${divName.toUpperCase()}`, `Dept: ${deptName.toUpperCase()}`);
+                } else {
+                    doc.fillColor('#f8fafc').rect(m, currentY, pWidth - 2 * m, 20).fill();
+                    doc.fillColor('#4f46e5').fontSize(9).font('Helvetica-Bold').text(`DETAILED GRID: ${deptName.toUpperCase()}`, m + 10, currentY + 6);
+                    currentY += 25;
+                }
+
+                // 2. Dept Grid Section
+                currentY = drawPDFTableModern(doc, gridHeaders, deptGridData, m, currentY, gridWidths, { 
+                    fontSize: 6, 
+                    rowHeight: 15,
+                    onPageAdd: () => drawMainHeader(`ATTENDANCE GRID (CONT) - ${divName.toUpperCase()}`, `Dept: ${deptName.toUpperCase()}`)
+                });
             }
-
-            const childEmployees = await Employee.find(childEmpFilter).select('emp_no');
-            const childEmpNos = childEmployees.map(e => e.emp_no);
-            const childLeaveCount = await Leave.countDocuments({ status: 'approved', isActive: true, $or: [{ fromDate: { $lte: endDate }, toDate: { $gte: startDate } }], emp_no: { $in: childEmpNos } });
-            const childStatsData = await AttendanceDaily.aggregate([{ $match: { date: { $gte: startDate, $lte: endDate }, employeeNumber: { $in: childEmpNos } } }, { $group: { _id: null, present: { $sum: "$payableShifts" }, late: { $sum: { $cond: [{ $gt: ["$totalLateInMinutes", 0] }, 1, 0] } }, od: { $sum: { $cond: [{ $gt: ["$odHours", 0] }, 1, 0] } } } }]);
-            const cStats = childStatsData[0] || { present: 0, late: 0, od: 0 };
-            
-            let tWO = 0, tHOL = 0;
-            childEmpNos.forEach(eno => { const nw = nonWorkingMap[eno] || { wo: 0, hol: 0 }; tWO += nw.wo; tHOL += nw.hol; });
-            const avgWO = childEmployees.length > 0 ? tWO / childEmployees.length : 0;
-            const avgHOL = childEmployees.length > 0 ? tHOL / childEmployees.length : 0;
-            const expWorking = Math.max(0, daysInRange - avgWO - avgHOL);
-            const trueAbsent = Math.max(0, expWorking - (cStats.present || 0) - (cStats.od || 0) - (childLeaveCount || 0));
-            const pPercent = expWorking > 0 ? Math.min(100, (((cStats.present || 0) + (cStats.od || 0)) / (expWorking * childEmployees.length) * 100)).toFixed(1) + '%' : '0.0%';
-
-            tableData.push([
-                child.employee_name || child.name,
-                child.emp_no || '-',
-                childEmployees.length,
-                cStats.present.toFixed(1),
-                trueAbsent.toFixed(1),
-                cStats.late,
-                cStats.od,
-                childLeaveCount,
-                avgWO.toFixed(1),
-                avgHOL.toFixed(1),
-                pPercent
-            ]);
         }
 
-        drawPDFTableModern(doc, headers, tableData, 30, doc.y + 20, colWidths);
-
-        // Footer & Page Numbers
+        // Add page numbers
         const pages = doc.bufferedPageRange();
         for (let i = 0; i < pages.count; i++) {
             doc.switchToPage(i);
-            doc.fontSize(8).fillColor('#94a3b8').text(
-                `Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`,
-                30, doc.page.height - 30, { align: 'center' }
-            );
+            const footerY = doc.page.height - 35;
+            doc.fontSize(7).fillColor('#94a3b8').text(`Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`, 0, footerY, { align: 'center', width: doc.page.width });
         }
 
         doc.end();

@@ -1360,8 +1360,43 @@ export default function AttendancePage() {
     }
   };
 
-  const handleExportPDF = () => {
-    window.print();
+  const [exportingPDF, setExportingPDF] = useState(false);
+
+  const handleExportPDF = async () => {
+    try {
+      setExportingPDF(true);
+      setError('');
+      setSuccess('');
+
+      const params = {
+        year: String(year),
+        month: String(month),
+        search: searchQuery,
+        divisionId: selectedDivision,
+        departmentId: selectedDepartment,
+        designationId: selectedDesignation,
+        startDate: cycleDates.startDate,
+        endDate: cycleDates.endDate,
+        groupBy: 'employee'
+      };
+
+      const blob = await api.exportAttendanceReportPDF(params);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance_report_${year}_${month}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+      toast.success('PDF report downloaded successfully');
+    } catch (err: any) {
+      console.error('PDF Export error:', err);
+      toast.error(err.message || 'Failed to export PDF');
+      setError(err.message || 'Failed to export PDF');
+    } finally {
+      setExportingPDF(false);
+    }
   };
 
   const handleSyncShifts = async () => {
@@ -2200,6 +2235,22 @@ export default function AttendancePage() {
                   </svg>
                 )}
                 {exportingExcel ? 'Exporting...' : 'Export'}
+              </button>
+
+              <button
+                onClick={handleExportPDF}
+                disabled={exportingPDF}
+                title="Download PDF Attendance Report"
+                className="h-9 flex items-center px-4 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-red-600 hover:border-red-200 transition-all shadow-sm active:scale-95 disabled:opacity-50 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-red-400"
+              >
+                {exportingPDF ? (
+                  <div className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+                ) : (
+                  <svg className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                )}
+                {exportingPDF ? 'Generating...' : 'Download PDF'}
               </button>
             </div>
           </div>

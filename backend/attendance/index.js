@@ -104,8 +104,8 @@ router.get('/reports/live/filters', authorize('super_admin', 'sub_admin', 'hr'),
 // General Attendance and Biometric Report Routes
 router.get('/reports/summary', reportsController.getAttendanceReport);
 router.get('/reports/thumb', reportsController.getThumbReports);
-router.get('/reports/export', authorize('super_admin', 'sub_admin', 'hr'), reportsController.exportAttendanceReport);
-router.get('/reports/export-pdf', authorize('super_admin', 'sub_admin', 'hr'), reportsController.exportAttendanceReportPDF);
+router.get('/reports/export', applyScopeFilter, authorize('manager', 'super_admin', 'sub_admin', 'hr', 'hod'), reportsController.exportAttendanceReport);
+router.get('/reports/export-pdf', applyScopeFilter, authorize('manager', 'super_admin', 'sub_admin', 'hr', 'hod'), reportsController.exportAttendanceReportPDF);
 
 module.exports = router;
 

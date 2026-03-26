@@ -328,37 +328,49 @@ export default function AttendanceReportsTab() {
         }
     };
 
-    const handleAdvancedExport = async (format: 'xlsx' | 'pdf' = 'xlsx') => {
+    const handleExport = async (format: 'xlsx' | 'pdf' = 'xlsx', usePageFilters: boolean = false) => {
         const toastId = toast.loading(`Preparing your ${format.toUpperCase()} report...`);
         try {
             const params: any = {
-                startDate: exportParams.startDate,
-                endDate: exportParams.endDate,
                 divisionId: divisionIds,
                 departmentId: departmentIds,
                 designationId: designationIds,
                 employeeId: employeeIds,
                 groupBy: drilldownLevel === 'all' ? 'division' : (drilldownLevel === 'division' ? 'department' : 'employee')
             };
-            if (exportParams.strict) params.strict = true;
 
-            if (dateMode === 'monthly') {
-                params.month = selectedMonth;
-                params.year = selectedYear;
-                delete params.startDate;
-                delete params.endDate;
-            } else if (dateMode === 'pay_cycle') {
-                const startDay = payrollStartDay;
-                const year = parseInt(selectedYear);
-                const month = parseInt(selectedMonth);
-                if (startDay === 1) {
-                    params.startDate = dayjs(`${year}-${month}-01`).format('YYYY-MM-DD');
-                    params.endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+            if (usePageFilters) {
+                if (dateMode === 'monthly') {
+                    params.month = selectedMonth;
+                    params.year = selectedYear;
+                } else if (dateMode === 'pay_cycle') {
+                    const startDay = payrollStartDay;
+                    const year = parseInt(selectedYear);
+                    const month = parseInt(selectedMonth);
+                    if (startDay === 1) {
+                        params.startDate = dayjs(`${year}-${month}-01`).format('YYYY-MM-DD');
+                        params.endDate = dayjs(`${year}-${month}-01`).endOf('month').format('YYYY-MM-DD');
+                    } else {
+                        const currentMonthStart = dayjs(`${year}-${month}-${startDay}`);
+                        const prevMonthStart = currentMonthStart.subtract(1, 'month');
+                        params.startDate = prevMonthStart.format('YYYY-MM-DD');
+                        params.endDate = currentMonthStart.subtract(1, 'day').format('YYYY-MM-DD');
+                    }
                 } else {
-                    const currentMonthStart = dayjs(`${year}-${month}-${startDay}`);
-                    const prevMonthStart = currentMonthStart.subtract(1, 'month');
-                    params.startDate = prevMonthStart.format('YYYY-MM-DD');
-                    params.endDate = currentMonthStart.subtract(1, 'day').format('YYYY-MM-DD');
+                    params.startDate = startDate;
+                    params.endDate = endDate;
+                }
+            } else {
+                params.startDate = exportParams.startDate;
+                params.endDate = exportParams.endDate;
+                if (exportParams.strict) params.strict = true;
+
+                // Sync with page's month/year if not in range mode
+                if (dateMode === 'monthly') {
+                    params.month = selectedMonth;
+                    params.year = selectedYear;
+                    delete params.startDate;
+                    delete params.endDate;
                 }
             }
 
@@ -375,7 +387,8 @@ export default function AttendanceReportsTab() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `attendance_report_${params.startDate || 'payroll'}_to_${params.endDate || 'period'}.${extension}`;
+            const dateStr = params.startDate ? `${params.startDate}_to_${params.endDate}` : `${params.month}_${params.year}`;
+            a.download = `attendance_report_${dateStr}.${extension}`;
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
@@ -745,9 +758,18 @@ export default function AttendanceReportsTab() {
                     <button
                         onClick={() => setIsExportDialogOpen(true)}
                         className="h-10 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-indigo-200 dark:shadow-none active:scale-95 flex items-center gap-2"
+                        title="Advanced Export (Filters & Custom Range)"
                     >
                         <Download className="h-4 w-4" />
                         Export XLSX
+                    </button>
+                    <button
+                        onClick={() => handleExport('pdf', true)}
+                        className="h-10 px-4 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-rose-200 dark:shadow-none active:scale-95 flex items-center gap-2"
+                        title="Quick Download PDF (Current Filters)"
+                    >
+                        <Download className="h-4 w-4" />
+                        Download PDF
                     </button>
                 </div>
             </div>
@@ -1001,7 +1023,7 @@ export default function AttendanceReportsTab() {
                 </div>
                 
                 <button
-                    onClick={() => handleAdvancedExport('pdf')}
+                    onClick={() => handleExport('pdf', true)}
                     disabled={loading}
                     className="w-full md:w-auto flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-8 py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all shadow-[0_8px_20px_rgba(225,29,72,0.3)] active:scale-95 disabled:opacity-50 disabled:active:scale-100"
                 >
@@ -1044,8 +1066,8 @@ export default function AttendanceReportsTab() {
                         </div>
                         <div className="p-6 bg-slate-50 dark:bg-slate-800/50 flex flex-wrap gap-3">
                             <button onClick={() => setIsExportDialogOpen(false)} className="flex-1 h-10 text-[10px] font-black uppercase text-slate-500 hover:text-slate-700 transition-colors">Cancel</button>
-                            <button onClick={() => handleAdvancedExport('xlsx')} className="flex-[2] min-w-[120px] h-10 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-indigo-700 transition-colors shadow-sm">Export XLSX</button>
-                            <button onClick={() => handleAdvancedExport('pdf')} className="flex-[2] min-w-[120px] h-10 bg-rose-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-rose-700 transition-colors shadow-sm">Export PDF</button>
+                            <button onClick={() => handleExport('xlsx')} className="flex-[2] min-w-[120px] h-10 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-indigo-700 transition-colors shadow-sm">Export XLSX</button>
+                            <button onClick={() => handleExport('pdf')} className="flex-[2] min-w-[120px] h-10 bg-rose-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-rose-700 transition-colors shadow-sm">Export PDF</button>
                         </div>
                     </div>
                 </div>
