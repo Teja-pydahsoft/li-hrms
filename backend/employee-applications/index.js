@@ -82,10 +82,10 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.post('/', upload.any(), createApplication);
 
 // Bulk approve applications (Superadmin)
-router.put('/bulk-approve', authorize('super_admin', 'sub_admin'), bulkApproveApplications);
+router.put('/bulk-approve', authorize('super_admin'), bulkApproveApplications);
 
 // Bulk reject applications (Superadmin)
-router.put('/bulk-reject', authorize('super_admin', 'sub_admin'), bulkRejectApplications);
+router.put('/bulk-reject', authorize('super_admin'), bulkRejectApplications);
 
 // Bulk create applications (HR/Admin)
 router.post('/bulk', authorize('super_admin', 'sub_admin', 'hr'), bulkCreateApplications);
@@ -103,10 +103,10 @@ router.get('/:id', getApplication);
 router.put('/:id/verify', authorize('super_admin', 'sub_admin', 'hr', 'manager'), require('./controllers/employeeApplicationController').verifyApplication);
 
 // Approve salary (Superadmin) - Stage 3: Finalize Salary
-router.put('/:id/approve-salary', authorize('super_admin', 'sub_admin'), require('./controllers/employeeApplicationController').approveSalary);
+router.put('/:id/approve-salary', authorize('super_admin'), require('./controllers/employeeApplicationController').approveSalary);
 
 // Reject application (Superadmin)
-router.put('/:id/reject', authorize('super_admin', 'sub_admin'), rejectApplication);
+router.put('/:id/reject', authorize('super_admin'), rejectApplication);
 
 module.exports = router;
 

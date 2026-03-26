@@ -14,7 +14,8 @@ import {
   canEditEmployee,
   canViewApplications as hasViewApplicationsPermission,
   canVerifyFeature,
-  canUpdateBankDetails
+  canUpdateBankDetails,
+  canFinalizeSalary
 } from '@/lib/permissions';
 import {
   Users,
@@ -3731,7 +3732,7 @@ export default function EmployeesPage() {
                                 <Eye className="h-3 w-3" />
                                 <span>View Details</span>
                               </button>
-                            ) : app.status === 'verified' ? (
+                            ) : app.status === 'verified' && canFinalizeSalary(userForPermissions as any) ? (
                               <button
                                 onClick={(e) => { e.stopPropagation(); openApprovalDialog(app); }}
                                 className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-blue-500/10 px-2 py-1.5 text-[10px] font-black uppercase tracking-wider text-blue-500 transition-colors hover:bg-blue-500/20"

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { api, Employee, Department, Division, Designation, EmployeeApplication, Allowance, Deduction } from '@/lib/api';
+import { canFinalizeSalary } from '@/lib/permissions';
 import { alertSuccess, alertError, alertConfirm, alertLoading } from '@/lib/customSwal';
 import { auth } from '@/lib/auth';
 import Swal from 'sweetalert2';
@@ -3114,12 +3115,14 @@ export default function EmployeesPage() {
                                 <span className="text-xs font-bold text-slate-900 dark:text-slate-100">₹{app.proposedSalary.toLocaleString()}</span>
                               </td>
                               <td className="px-6 py-4 text-right">
-                                <button
-                                  onClick={() => openApprovalDialog(app)}
-                                  className="px-4 py-1.5 rounded-lg bg-green-600 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-600/20"
-                                >
-                                  Finalize Salary
-                                </button>
+                                {canFinalizeSalary({ role: userRole } as any) && (
+                                  <button
+                                    onClick={() => openApprovalDialog(app)}
+                                    className="px-4 py-1.5 rounded-lg bg-green-600 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-600/20"
+                                  >
+                                    Finalize Salary
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))

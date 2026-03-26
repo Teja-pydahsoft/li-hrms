@@ -927,7 +927,7 @@ exports.verifyApplication = async (req, res) => {
  */
 exports.approveSalary = async (req, res) => {
   try {
-    if (!['super_admin', 'sub_admin'].includes(req.user.role)) {
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
 
@@ -961,7 +961,7 @@ exports.approveSalary = async (req, res) => {
 exports.approveApplication = async (req, res) => {
   try {
     // Only Superadmin and Sub Admin can approve
-    if (!['super_admin', 'sub_admin'].includes(req.user.role)) {
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to approve applications',
@@ -1009,7 +1009,7 @@ exports.bulkApproveApplications = async (req, res) => {
     }
 
     // Only Superadmin and Sub Admin can approve
-    if (!['super_admin', 'sub_admin'].includes(req.user.role)) {
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to approve applications',
@@ -1120,7 +1120,7 @@ exports.rejectApplication = async (req, res) => {
     const { comments } = req.body;
 
     // Only Superadmin and Sub Admin can reject
-    if (!['super_admin', 'sub_admin'].includes(req.user.role)) {
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to reject applications',
@@ -1224,8 +1224,8 @@ exports.bulkRejectApplications = async (req, res) => {
       });
     }
 
-    // Only Superadmin and Sub Admin can reject
-    if (!['super_admin', 'sub_admin'].includes(req.user.role)) {
+    // Only Superadmin can reject
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to reject applications',

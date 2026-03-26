@@ -98,31 +98,38 @@ export function canAccessPage(user: User, pagePath: string): boolean {
 // ==========================================
 
 export function canViewEmployees(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'EMPLOYEES');
 }
 
 export function canViewApplications(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager']) && canVerifyFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager']) && canVerifyFeature(user, 'EMPLOYEES');
+}
+
+/**
+ * Stage 3: Finalize Salary - Restricted to Super Admin ONLY as per requirement.
+ */
+export function canFinalizeSalary(user: User): boolean {
+    return hasAnyRole(user, ['super_admin']);
 }
 
 export function canCreateEmployee(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
 }
 
 export function canEditEmployee(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
 }
 
 export function canDeleteEmployee(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
 }
 
 export function canExportEmployees(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canViewFeature(user, 'EMPLOYEES');
 }
 
 export function canImportEmployees(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'EMPLOYEES');
 }
 
 // ==========================================
@@ -158,15 +165,15 @@ export function canApplyLeave(user: User): boolean {
 }
 
 export function canApproveLeaves(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'LEAVE_OD');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'LEAVE_OD');
 }
 
 export function canRejectLeaves(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'LEAVE_OD');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'LEAVE_OD');
 }
 
 export function canDeleteLeaves(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'employee']) && canManageFeature(user, 'LEAVE_OD');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'employee']) && canManageFeature(user, 'LEAVE_OD');
 }
 
 // ==========================================
@@ -234,11 +241,11 @@ export function canViewDepartments(user: User): boolean {
 }
 
 export function canCreateDepartment(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
 }
 
 export function canEditDepartment(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTS');
 }
 
 export function canDeleteDepartment(user: User): boolean {
@@ -246,11 +253,11 @@ export function canDeleteDepartment(user: User): boolean {
 }
 
 export function canViewDepartmentSettings(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canViewFeature(user, 'DEPARTMENTAL_SETTINGS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canViewFeature(user, 'DEPARTMENTAL_SETTINGS');
 }
 
 export function canManageDepartmentSettings(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTAL_SETTINGS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'DEPARTMENTAL_SETTINGS');
 }
 
 // ==========================================
@@ -286,19 +293,19 @@ export function canViewShifts(user: User): boolean {
 }
 
 export function canCreateShift(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
 }
 
 export function canEditShift(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
 }
 
 export function canDeleteShift(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
 }
 
 export function canAssignShifts(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'SHIFTS');
 }
 
 export function canViewShiftRoster(user: User): boolean {
@@ -481,6 +488,8 @@ export function hasGranularPermission(user: User, featureCode: string, type: 're
  */
 export function canVerifyFeature(user: User, featureCode: string): boolean {
     if (!user) return false;
+    // Superadmin and Sub Admin ALWAYS have verify permission if no explicit control
+    if (hasAnyRole(user, ['super_admin', 'sub_admin']) && (!user.featureControl || user.featureControl.length === 0)) return true;
     if (!user.featureControl || user.featureControl.length === 0) return true; // Default allow if empty (legacy/role-based)
 
     return user.featureControl.includes(featureCode) ||
@@ -539,11 +548,11 @@ export function canApplyOT(user: User): boolean {
 }
 
 export function canApproveOT(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
 }
 
 export function canRejectOT(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
 }
 
 export function canViewPermissions(user: User): boolean {
@@ -555,11 +564,11 @@ export function canApplyPermission(user: User): boolean {
 }
 
 export function canApprovePermission(user: User): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
 }
 
 export function canRejectPermission(user: User, minRole: UserRole): boolean {
-    return hasAnyRole(user, ['sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
+    return hasAnyRole(user, ['super_admin', 'sub_admin', 'hr', 'hod', 'manager', 'employee']) && canManageFeature(user, 'OT_PERMISSIONS');
 }
 
 // ==========================================
