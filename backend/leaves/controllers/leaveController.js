@@ -211,8 +211,10 @@ exports.getLeaves = async (req, res) => {
       const ids = String(designation).split(',').filter(id => id && id !== 'all');
       if (ids.length > 0) filter.designation = ids.length > 1 ? { $in: ids } : ids[0];
     }
-    if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
-    if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+    if (fromDate || toDate) {
+      if (toDate) filter.fromDate = { ...filter.fromDate, $lte: new Date(toDate) };
+      if (fromDate) filter.toDate = { ...filter.toDate, $gte: new Date(fromDate) };
+    }
 
     // Search: by emp_no or employee name (resolve employee ids)
     if (search && String(search).trim()) {
@@ -305,8 +307,10 @@ exports.getMyLeaves = async (req, res) => {
     };
 
     if (status) filter.status = status;
-    if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
-    if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+    if (fromDate || toDate) {
+      if (toDate) filter.fromDate = { ...filter.fromDate, $lte: new Date(toDate) };
+      if (fromDate) filter.toDate = { ...filter.toDate, $gte: new Date(fromDate) };
+    }
 
     const leaves = await Leave.find(filter)
       .populate({
@@ -1234,13 +1238,15 @@ exports.getPendingApprovals = async (req, res) => {
 
     // Apply query filters
     if (leaveType) filter.leaveType = leaveType;
-    if (fromDate) {
-      filter.fromDate = filter.fromDate || {};
-      filter.fromDate.$gte = new Date(fromDate);
-    }
-    if (toDate) {
-      filter.toDate = filter.toDate || {};
-      filter.toDate.$lte = new Date(toDate);
+    if (fromDate || toDate) {
+      if (toDate) {
+        filter.fromDate = filter.fromDate || {};
+        filter.fromDate.$lte = new Date(toDate);
+      }
+      if (fromDate) {
+        filter.toDate = filter.toDate || {};
+        filter.toDate.$gte = new Date(fromDate);
+      }
     }
     if (department) filter.department = department;
     if (division) filter.division_id = division;
@@ -2075,15 +2081,17 @@ exports.getDashboardStats = async (req, res) => {
       }
     }
 
-    if (fromDate) {
-      const start = new Date(fromDate);
-      leaveFilter.fromDate = { ...leaveFilter.fromDate, $gte: start };
-      odFilter.fromDate = { ...odFilter.fromDate, $gte: start };
-    }
-    if (toDate) {
-      const end = new Date(toDate);
-      leaveFilter.toDate = { ...leaveFilter.toDate, $lte: end };
-      odFilter.toDate = { ...odFilter.toDate, $lte: end };
+    if (fromDate || toDate) {
+      if (toDate) {
+        const end = new Date(toDate);
+        leaveFilter.fromDate = { ...leaveFilter.fromDate, $lte: end };
+        odFilter.fromDate = { ...odFilter.fromDate, $lte: end };
+      }
+      if (fromDate) {
+        const start = new Date(fromDate);
+        leaveFilter.toDate = { ...leaveFilter.toDate, $gte: start };
+        odFilter.toDate = { ...odFilter.toDate, $gte: start };
+      }
     }
 
     if (search && String(search).trim()) {

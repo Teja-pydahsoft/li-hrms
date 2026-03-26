@@ -262,8 +262,10 @@ exports.getODs = async (req, res) => {
       const ids = String(designation).split(',').filter(id => id && id !== 'all');
       if (ids.length > 0) filter.designation = ids.length > 1 ? { $in: ids } : ids[0];
     }
-    if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
-    if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+    if (fromDate || toDate) {
+      if (toDate) filter.fromDate = { ...filter.fromDate, $lte: new Date(toDate) };
+      if (fromDate) filter.toDate = { ...filter.toDate, $gte: new Date(fromDate) };
+    }
 
     // Search: by emp_no or employee name (resolve employee ids)
     if (search && String(search).trim()) {
@@ -352,8 +354,10 @@ exports.getMyODs = async (req, res) => {
     };
 
     if (status) filter.status = status;
-    if (fromDate) filter.fromDate = { $gte: new Date(fromDate) };
-    if (toDate) filter.toDate = { ...filter.toDate, $lte: new Date(toDate) };
+    if (fromDate || toDate) {
+      if (toDate) filter.fromDate = { ...filter.fromDate, $lte: new Date(toDate) };
+      if (fromDate) filter.toDate = { ...filter.toDate, $gte: new Date(fromDate) };
+    }
 
     const ods = await OD.find(filter)
       .populate({
@@ -1358,13 +1362,15 @@ exports.getPendingApprovals = async (req, res) => {
     }
 
     if (odType) filter.odType = odType;
-    if (fromDate) {
-      filter.fromDate = filter.fromDate || {};
-      filter.fromDate.$gte = new Date(fromDate);
-    }
-    if (toDate) {
-      filter.toDate = filter.toDate || {};
-      filter.toDate.$lte = new Date(toDate);
+    if (fromDate || toDate) {
+      if (toDate) {
+        filter.fromDate = filter.fromDate || {};
+        filter.fromDate.$lte = new Date(toDate);
+      }
+      if (fromDate) {
+        filter.toDate = filter.toDate || {};
+        filter.toDate.$gte = new Date(fromDate);
+      }
     }
     if (department && department !== 'all') {
       const ids = String(department).split(',').filter(id => id && id !== 'all');
