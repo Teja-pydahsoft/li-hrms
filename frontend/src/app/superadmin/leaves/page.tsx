@@ -11,13 +11,70 @@ import LocationPhotoCapture from '@/components/LocationPhotoCapture';
 import EmployeeSelect from '@/components/EmployeeSelect';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Loader2, Calendar, Briefcase, X, Clock as Clock3, Star, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Loader2, Calendar, Briefcase, X, Clock as Clock3, Star, FileText, CheckCircle2, AlertCircle, Plus } from 'lucide-react';
 import { MultiSelect } from '@/components/MultiSelect';
 
 const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
 
 
-// Stat Card Component
+// Status Breakdown Modal Component
+const StatusBreakdownModal = ({ 
+  isOpen, 
+  onClose, 
+  title, 
+  breakdown 
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  title: string, 
+  breakdown: Record<string, number> 
+}) => {
+  if (!isOpen) return null;
+
+  const entries = Object.entries(breakdown)
+    .filter(([_, val]) => val > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-200">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+          <h3 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">{title} Breakdown</h3>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
+        </div>
+        <div className="p-6 max-h-[60vh] overflow-y-auto">
+          {entries.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-slate-400 text-sm font-medium">No intermediate records found.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {entries.map(([key, val]) => (
+                <div key={key} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
+                  <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    {key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                  </span>
+                  <span className="text-lg font-black text-slate-900 dark:text-white">{val}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="p-6 bg-slate-50/50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800">
+          <button
+            onClick={onClose}
+            className="w-full py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-sm font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Detailed Stat Card Component
 const DetailedStatCard = ({ 
   title, 
@@ -29,7 +86,7 @@ const DetailedStatCard = ({
 }: { 
   title: string, 
   total: number, 
-  breakdown: Array<{ label: string, value: number, color: string }>, 
+  breakdown: Array<{ label: string, value: number, color: string, onClick?: () => void, clickable?: boolean }>, 
   icon: any, 
   colorClass: string, 
   loading?: boolean 
@@ -52,8 +109,15 @@ const DetailedStatCard = ({
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         {breakdown.map((item, idx) => (
-          <div key={idx} className="relative p-4 rounded-3xl bg-slate-50/50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50 transition-all hover:scale-[1.02]">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">{item.label}</p>
+          <div 
+            key={idx} 
+            onClick={item.onClick}
+            className={`relative p-4 rounded-3xl bg-slate-50/50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50 transition-all ${item.clickable ? 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 hover:scale-[1.02] hover:border-blue-500/30' : 'hover:scale-[1.02]'}`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">{item.label}</p>
+              {item.clickable && <Plus className="w-2.5 h-2.5 text-slate-400" />}
+            </div>
             <div className="flex items-center gap-2">
               <div className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
               <p className="text-xl font-black text-slate-900 dark:text-white">{loading ? "..." : item.value}</p>
@@ -508,7 +572,14 @@ export default function LeavesPage() {
     totalLeaves: 0, totalODs: 0, totalPending: 0, totalApproved: 0, 
     totalApprovedLeaves: 0, totalApprovedODs: 0, 
     totalPendingLeaves: 0, totalPendingODs: 0,
-    totalRejectedLeaves: 0, totalRejectedODs: 0
+    totalRejectedLeaves: 0, totalRejectedODs: 0,
+    leavesBreakdown: {} as Record<string, number>,
+    odsBreakdown: {} as Record<string, number>
+  });
+  const [breakdownModal, setBreakdownModal] = useState({ 
+    isOpen: false, 
+    title: '', 
+    data: {} as Record<string, number> 
   });
   const [loadingStats, setLoadingStats] = useState(true);
 
@@ -779,6 +850,8 @@ export default function LeavesPage() {
           totalRejectedODs: data.totalRejectedODs ?? 0,
           totalPending: data.totalPending ?? 0,
           totalApproved: data.totalApproved ?? 0,
+          leavesBreakdown: data.leavesBreakdown || {},
+          odsBreakdown: data.odsBreakdown || {},
         });
       }
     } catch {
@@ -1963,8 +2036,14 @@ export default function LeavesPage() {
           loading={loadingStats}
           breakdown={[
             { label: 'Approved', value: dashboardStats.totalApprovedLeaves, color: 'bg-emerald-500' },
-            { label: 'Pending', value: dashboardStats.totalPendingLeaves, color: 'bg-amber-500' },
-            { label: 'Rejected', value: dashboardStats.totalRejectedLeaves, color: 'bg-rose-500' },
+            { 
+              label: 'Pending', 
+              value: dashboardStats.totalPendingLeaves, 
+              color: 'bg-amber-500', 
+              clickable: true,
+              onClick: () => setBreakdownModal({ isOpen: true, title: 'Leave Status', data: dashboardStats.leavesBreakdown })
+            },
+            { label: 'Rejected', value: dashboardStats.totalRejectedLeaves, color: 'bg-rose-600' },
           ]}
         />
         <DetailedStatCard
@@ -1975,8 +2054,14 @@ export default function LeavesPage() {
           loading={loadingStats}
           breakdown={[
             { label: 'Approved', value: dashboardStats.totalApprovedODs, color: 'bg-emerald-500' },
-            { label: 'Pending', value: dashboardStats.totalPendingODs, color: 'bg-amber-500' },
-            { label: 'Rejected', value: dashboardStats.totalRejectedODs, color: 'bg-rose-500' },
+            { 
+              label: 'Pending', 
+              value: dashboardStats.totalPendingODs, 
+              color: 'bg-amber-500', 
+              clickable: true,
+              onClick: () => setBreakdownModal({ isOpen: true, title: 'OD Status', data: dashboardStats.odsBreakdown })
+            },
+            { label: 'Rejected', value: dashboardStats.totalRejectedODs, color: 'bg-rose-600' },
           ]}
         />
       </div>
@@ -4388,6 +4473,13 @@ export default function LeavesPage() {
           </div>
         </div>
       )}
+      {/* Status Breakdown Modal */}
+      <StatusBreakdownModal 
+        isOpen={breakdownModal.isOpen}
+        onClose={() => setBreakdownModal(prev => ({ ...prev, isOpen: false }))}
+        title={breakdownModal.title}
+        breakdown={breakdownModal.data}
+      />
     </div >
   );
 }

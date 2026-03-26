@@ -59,6 +59,63 @@ import {
 // Custom Stat Card
 // Custom Stat Card
 // Detailed Stat Card Component
+const StatusBreakdownModal = ({ 
+  isOpen, 
+  onClose, 
+  title, 
+  breakdown 
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  title: string, 
+  breakdown: Record<string, number> 
+}) => {
+  if (!isOpen) return null;
+
+  const entries = Object.entries(breakdown)
+    .filter(([_, val]) => val > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-200">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+          <h3 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">{title} Breakdown</h3>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
+        </div>
+        <div className="p-6 max-h-[60vh] overflow-y-auto">
+          {entries.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-slate-400 text-sm font-medium">No intermediate records found.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {entries.map(([key, val]) => (
+                <div key={key} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
+                  <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    {key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                  </span>
+                  <span className="text-lg font-black text-slate-900 dark:text-white">{val}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="p-6 bg-slate-50/50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800">
+          <button
+            onClick={onClose}
+            className="w-full py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-sm font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const DetailedStatCard = ({ 
   title, 
   total, 
@@ -69,7 +126,7 @@ const DetailedStatCard = ({
 }: { 
   title: string, 
   total: number, 
-  breakdown: Array<{ label: string, value: number, color: string }>, 
+  breakdown: Array<{ label: string, value: number, color: string, onClick?: () => void, clickable?: boolean }>, 
   icon: any, 
   colorClass: string, 
   loading?: boolean 
@@ -92,8 +149,15 @@ const DetailedStatCard = ({
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {breakdown.map((item, idx) => (
-          <div key={idx} className="relative p-4 rounded-3xl bg-slate-50/50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50 transition-all hover:scale-[1.02]">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">{item.label}</p>
+          <div 
+            key={idx} 
+            onClick={item.onClick}
+            className={`relative p-4 rounded-3xl bg-slate-50/50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50 transition-all ${item.clickable ? 'cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 hover:scale-[1.05] hover:border-blue-500/50 active:scale-95' : 'hover:scale-[1.02]'}`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">{item.label}</p>
+              {item.clickable && <div className="p-0.5 rounded-full bg-blue-500/10 text-blue-600"><Plus className="w-2 h-2" /></div>}
+            </div>
             <div className="flex items-center gap-2">
               <div className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
               <p className="text-xl font-black text-slate-900 dark:text-white">{loading ? "..." : item.value}</p>
@@ -658,9 +722,18 @@ export default function LeavesPage() {
   } | null>(null);
   const [checkingApprovedRecords, setCheckingApprovedRecords] = useState(false);
 
-  // Holiday info for OD
   const [holidayInfo, setHolidayInfo] = useState<{ isHolidayOrWeekOff: boolean, message: string } | null>(null);
   const [checkingHoliday, setCheckingHoliday] = useState(false);
+
+  const [breakdownModal, setBreakdownModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    data: Record<string, number>;
+  }>({
+    isOpen: false,
+    title: '',
+    data: {},
+  });
 
   // Form validation for Apply button
   const isFormValid = () => {
@@ -2089,23 +2162,20 @@ export default function LeavesPage() {
       const pendingIds = new Set(pendingList.map(p => p._id));
       const userId = currentUser?.id || currentUser?._id;
 
-      const rejectedStatuses = [
-        'rejected',
-        'hod_rejected',
-        'hr_rejected',
-        'manager_rejected',
-        'reporting_manager_rejected',
-        'principal_rejected',
-        'cancelled',
-      ];
+      const finalRejectedStatuses = ['rejected', 'cancelled'];
+      
+      const counts: Record<string, number> = {};
+      items.forEach(i => {
+        counts[i.status] = (counts[i.status] || 0) + 1;
+      });
 
-      const approvedCount = items.filter(i => i.status === 'approved').length;
-      const rejectedCount = items.filter(i => rejectedStatuses.includes(i.status)).length;
+      const approvedCount = counts['approved'] || 0;
+      const rejectedCount = finalRejectedStatuses.reduce((sum, s) => sum + (counts[s] || 0), 0);
       
       const myActionsCount = pendingList.length;
       
       const inProgressItems = items.filter(i => {
-        if (['approved', ...rejectedStatuses].includes(i.status) || pendingIds.has(i._id)) return false;
+        if (['approved', ...finalRejectedStatuses].includes(i.status) || pendingIds.has(i._id)) return false;
         const chain = (i as any).workflow?.approvalChain || [];
         return chain.some((s: any) =>
           (s.status === 'approved' || s.status === 'rejected') &&
@@ -2123,8 +2193,22 @@ export default function LeavesPage() {
         rejected: rejectedCount,
         myActions: myActionsCount,
         inProgress: inProgressCount,
-        totalPending: othersPendingCount + myActionsCount + inProgressCount, // For labels that want "Total Pending"
+        totalPending: items.length - approvedCount - rejectedCount,
         othersPending: othersPendingCount,
+        breakdown: {
+          draft: counts['draft'] || 0,
+          pending: counts['pending'] || 0,
+          hod_approved: counts['hod_approved'] || 0,
+          hod_rejected: counts['hod_rejected'] || 0,
+          hr_approved: counts['hr_approved'] || 0,
+          hr_rejected: counts['hr_rejected'] || 0,
+          manager_approved: counts['manager_approved'] || 0,
+          manager_rejected: counts['manager_rejected'] || 0,
+          reporting_manager_approved: counts['reporting_manager_approved'] || 0,
+          reporting_manager_rejected: counts['reporting_manager_rejected'] || 0,
+          principal_approved: counts['principal_approved'] || 0,
+          principal_rejected: counts['principal_rejected'] || 0,
+        }
       };
     };
 
@@ -2389,10 +2473,14 @@ export default function LeavesPage() {
             loading={loading}
             breakdown={[
               { label: 'Approved', value: stats.leaves.approved, color: 'bg-emerald-500' },
-              { label: 'Action Required', value: stats.leaves.myActions, color: 'bg-amber-500' },
-              { label: 'In Progress', value: stats.leaves.inProgress, color: 'bg-blue-400' },
-              { label: 'Pending (Others)', value: stats.leaves.othersPending, color: 'bg-slate-400' },
-              { label: 'Rejected', value: stats.leaves.rejected, color: 'bg-rose-500' },
+              { 
+                label: 'Pending', 
+                value: stats.leaves.totalPending, 
+                color: 'bg-amber-500',
+                clickable: true,
+                onClick: () => setBreakdownModal({ isOpen: true, title: 'Leave Status', data: stats.leaves.breakdown })
+              },
+              { label: 'Rejected', value: stats.leaves.rejected, color: 'bg-rose-600' },
             ]}
           />
           <DetailedStatCard
@@ -2403,10 +2491,14 @@ export default function LeavesPage() {
             loading={loading}
             breakdown={[
               { label: 'Approved', value: stats.ods.approved, color: 'bg-emerald-500' },
-              { label: 'Action Required', value: stats.ods.myActions, color: 'bg-amber-500' },
-              { label: 'In Progress', value: stats.ods.inProgress, color: 'bg-purple-400' },
-              { label: 'Pending (Others)', value: stats.ods.othersPending, color: 'bg-slate-400' },
-              { label: 'Rejected', value: stats.ods.rejected, color: 'bg-rose-500' },
+              { 
+                label: 'Pending', 
+                value: stats.ods.totalPending, 
+                color: 'bg-amber-500',
+                clickable: true,
+                onClick: () => setBreakdownModal({ isOpen: true, title: 'OD Status', data: stats.ods.breakdown })
+              },
+              { label: 'Rejected', value: stats.ods.rejected, color: 'bg-rose-600' },
             ]}
           />
         </div>
@@ -2427,13 +2519,20 @@ export default function LeavesPage() {
                 </div>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.leaves.approved}</span>
               </div>
-              <div className="flex justify-between items-center">
+              <button 
+                onClick={() => setBreakdownModal({ isOpen: true, title: 'Leave Status', data: stats.leaves.breakdown })}
+                className="w-full flex justify-between items-center p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                title="Click for breakdown"
+              >
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-amber-500"></div>
                   <span className="text-xs text-slate-600 dark:text-slate-400">Pending</span>
                 </div>
-                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.leaves.totalPending}</span>
-              </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.leaves.totalPending}</span>
+                  <Plus className="w-2 h-2 text-slate-400" />
+                </div>
+              </button>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-rose-500"></div>
@@ -2458,13 +2557,20 @@ export default function LeavesPage() {
                 </div>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.ods.approved}</span>
               </div>
-              <div className="flex justify-between items-center">
+              <button 
+                onClick={() => setBreakdownModal({ isOpen: true, title: 'OD Status', data: stats.ods.breakdown })}
+                className="w-full flex justify-between items-center p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                title="Click for breakdown"
+              >
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-violet-500"></div>
                   <span className="text-xs text-slate-600 dark:text-slate-400">Pending</span>
                 </div>
-                <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.ods.totalPending}</span>
-              </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm font-bold text-slate-900 dark:text-white">{stats.ods.totalPending}</span>
+                  <Plus className="w-2 h-2 text-slate-400" />
+                </div>
+              </button>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-slate-500"></div>
@@ -5296,6 +5402,13 @@ export default function LeavesPage() {
           </div>
         </div>
       )}
+      {/* Status Breakdown Modal */}
+      <StatusBreakdownModal 
+        isOpen={breakdownModal.isOpen}
+        onClose={() => setBreakdownModal(prev => ({ ...prev, isOpen: false }))}
+        title={breakdownModal.title}
+        breakdown={breakdownModal.data}
+      />
     </div >
   );
 }

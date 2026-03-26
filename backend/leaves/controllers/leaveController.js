@@ -2087,53 +2087,78 @@ exports.getDashboardStats = async (req, res) => {
       odFilter.employeeId = idFilter;
     }
 
-    const rejectedStatuses = [
-      'rejected',
-      'hod_rejected',
-      'hr_rejected',
-      'manager_rejected',
-      'reporting_manager_rejected',
-      'principal_rejected',
-      'cancelled',
+    // Categories for granular breakdown
+    const finalRejectedStatuses = ['rejected', 'cancelled'];
+    const intermediateStatuses = [
+      'pending', 'draft', 
+      'hod_approved', 'hod_rejected', 
+      'hr_approved', 'hr_rejected', 
+      'manager_approved', 'manager_rejected',
+      'reporting_manager_approved', 'reporting_manager_rejected',
+      'principal_approved', 'principal_rejected'
     ];
 
-    const pendingStatusFilter = { status: { $nin: ['approved', ...rejectedStatuses] } };
-    const rejectedStatusFilter = { status: { $in: rejectedStatuses } };
-
-    const [
-      totalLeaves,
-      totalApprovedLeaves,
-      totalPendingLeaves,
-      totalRejectedLeaves,
-      totalODs,
-      totalApprovedODs,
-      totalPendingODs,
-      totalRejectedODs
-    ] = await Promise.all([
-      Leave.countDocuments(leaveFilter),
-      Leave.countDocuments({ ...leaveFilter, status: 'approved' }),
-      Leave.countDocuments({ ...leaveFilter, ...pendingStatusFilter }),
-      Leave.countDocuments({ ...leaveFilter, ...rejectedStatusFilter }),
-      OD.countDocuments(odFilter),
-      OD.countDocuments({ ...odFilter, status: 'approved' }),
-      OD.countDocuments({ ...odFilter, ...pendingStatusFilter }),
-      OD.countDocuments({ ...odFilter, ...rejectedStatusFilter })
+    const [leaveStats, odStats] = await Promise.all([
+      Leave.aggregate([
+        { $match: leaveFilter },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      OD.aggregate([
+        { $match: odFilter },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ])
     ]);
+
+    const formatStats = (aggResults) => {
+      const counts = {};
+      aggResults.forEach(r => { counts[r._id] = r.count; });
+      
+      const total = aggResults.reduce((sum, r) => sum + r.count, 0);
+      const approved = counts['approved'] || 0;
+      const rejected = finalRejectedStatuses.reduce((sum, s) => sum + (counts[s] || 0), 0);
+      const pending = total - approved - rejected;
+
+      return {
+        total,
+        approved,
+        rejected,
+        pending,
+        breakdown: {
+          draft: counts['draft'] || 0,
+          pending: counts['pending'] || 0,
+          hod_approved: counts['hod_approved'] || 0,
+          hod_rejected: counts['hod_rejected'] || 0,
+          hr_approved: counts['hr_approved'] || 0,
+          hr_rejected: counts['hr_rejected'] || 0,
+          manager_approved: counts['manager_approved'] || 0,
+          manager_rejected: counts['manager_rejected'] || 0,
+          reporting_manager_approved: counts['reporting_manager_approved'] || 0,
+          reporting_manager_rejected: counts['reporting_manager_rejected'] || 0,
+          principal_approved: counts['principal_approved'] || 0,
+          principal_rejected: counts['principal_rejected'] || 0,
+        }
+      };
+    };
+
+    const leaves = formatStats(leaveStats);
+    const ods = formatStats(odStats);
 
     res.status(200).json({
       success: true,
       data: {
-        totalLeaves,
-        totalODs,
-        totalPendingLeaves,
-        totalPendingODs,
-        totalApprovedLeaves,
-        totalApprovedODs,
-        totalRejectedLeaves,
-        totalRejectedODs,
-        totalPending: totalPendingLeaves + totalPendingODs,
-        totalApproved: totalApprovedLeaves + totalApprovedODs,
-        totalRejected: totalRejectedLeaves + totalRejectedODs
+        totalLeaves: leaves.total,
+        totalODs: ods.total,
+        totalPendingLeaves: leaves.pending,
+        totalPendingODs: ods.pending,
+        totalApprovedLeaves: leaves.approved,
+        totalApprovedODs: ods.approved,
+        totalRejectedLeaves: leaves.rejected,
+        totalRejectedODs: ods.rejected,
+        totalPending: leaves.pending + ods.pending,
+        totalApproved: leaves.approved + ods.approved,
+        totalRejected: leaves.rejected + ods.rejected,
+        leavesBreakdown: leaves.breakdown,
+        odsBreakdown: ods.breakdown
       }
     });
   } catch (error) {
