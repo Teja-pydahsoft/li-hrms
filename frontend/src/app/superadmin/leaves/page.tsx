@@ -1954,7 +1954,7 @@ export default function LeavesPage() {
       if (roleOrder.length > 0) {
         const rejectIdx = roleOrder.indexOf(rejectingRole);
         let userIdx = roleOrder.indexOf(role);
-        if (userIdx === -1 && (role === 'hr' || role === 'super_admin')) userIdx = roleOrder.length;
+        if (userIdx === -1 && (role === 'hr' || role === 'super_admin' || role === 'sub_admin')) userIdx = roleOrder.length;
         if (userIdx === -1 && role === 'manager') {
           const reportingIdx = roleOrder.indexOf('reporting_manager');
           const hrIdx = roleOrder.indexOf('hr');
@@ -1969,7 +1969,7 @@ export default function LeavesPage() {
     if (allowHigher && roleOrder.length > 0) {
       const nextIdx = roleOrder.indexOf(next);
       let userIdx = roleOrder.indexOf(role);
-      if (userIdx === -1 && (role === 'hr' || role === 'super_admin')) userIdx = roleOrder.length;
+      if (userIdx === -1 && (role === 'hr' || role === 'super_admin' || role === 'sub_admin')) userIdx = roleOrder.length;
       if (userIdx === -1 && role === 'manager') {
         const reportingIdx = roleOrder.indexOf('reporting_manager');
         const hrIdx = roleOrder.indexOf('hr');

@@ -110,7 +110,7 @@ export default function Sidebar() {
   if (!mounted) return null;
 
   // Filter items based on user permissions
-  const filteredNavItems = user?.role === 'super_admin'
+  const filteredNavItems = (user?.role === 'super_admin' || user?.role === 'sub_admin')
     ? navItems
     : navItems.filter(item => isModuleEnabled(item.moduleCode, user?.featureControl || null));
 

@@ -404,11 +404,11 @@ exports.updateOutTime = async (req, res) => {
       });
     }
 
-    // Restrict to HR/Superadmin
-    if (!req.user || (req.user.role !== 'hr' && req.user.role !== 'super_admin' && req.user.role !== 'superadmin' && req.user.role !== 'admin')) {
+    // Restrict to HR/Superadmin/Subadmin
+    if (!req.user || (req.user.role !== 'hr' && req.user.role !== 'sub_admin' && req.user.role !== 'super_admin' && req.user.role !== 'superadmin' && req.user.role !== 'admin')) {
       return res.status(403).json({
         success: false,
-        message: 'Permission denied. Only HR can edit attendance details.'
+        message: 'Permission denied. Only HR and Admins can edit attendance details.'
       });
     }
 
@@ -626,11 +626,11 @@ exports.assignShift = async (req, res) => {
     const { employeeNumber, date } = req.params;
     const { shiftId, shiftRecordId } = req.body;
 
-    // Restrict to HR/Superadmin
-    if (!req.user || (req.user.role !== 'hr' && req.user.role !== 'super_admin' && req.user.role !== 'superadmin' && req.user.role !== 'admin')) {
+    // Restrict to HR/Superadmin/Subadmin
+    if (!req.user || (req.user.role !== 'hr' && req.user.role !== 'sub_admin' && req.user.role !== 'super_admin' && req.user.role !== 'superadmin' && req.user.role !== 'admin')) {
       return res.status(403).json({
         success: false,
-        message: 'Permission denied. Only HR can assign shifts.'
+        message: 'Permission denied. Only HR and Admins can assign shifts.'
       });
     }
 
