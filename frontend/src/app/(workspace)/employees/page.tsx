@@ -1386,6 +1386,12 @@ export default function EmployeesPage() {
         (submitData as any)[key] = normalizeEntityRef((submitData as any)[key]);
       });
 
+      // Guard against stale/invalid employee group IDs on no-change updates.
+      const normalizedGroupId = String((submitData as any).employee_group_id || '').trim();
+      if (!customEmployeeGroupingEnabled || !normalizedGroupId || !employeeGroups.some((g) => String(g._id) === normalizedGroupId)) {
+        (submitData as any).employee_group_id = undefined;
+      }
+
       const enumFields = ['gender', 'marital_status', 'blood_group'];
       enumFields.forEach(field => {
         if ((submitData as any)[field] === '' || (submitData as any)[field] === undefined) {

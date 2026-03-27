@@ -1564,6 +1564,23 @@ export default function EmployeesPage() {
     }
 
     try {
+      const normalizeEntityRef = (val: any) => {
+        if (val === undefined || val === null || val === '') return val;
+        if (typeof val === 'object') return val._id || val.id || '';
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              const parsed = JSON.parse(trimmed);
+              return parsed?._id || parsed?.id || '';
+            } catch {
+              return val;
+            }
+          }
+        }
+        return val;
+      };
+
       // Build allowances and deductions: all existing employee overrides (with form edits) + any new overrides from global/dept
       let employeeAllowances = buildOverridePayload(
         componentDefaults.allowances,
@@ -1593,6 +1610,17 @@ export default function EmployeesPage() {
         ctcSalary: salarySummary.ctcSalary,
         calculatedSalary: salarySummary.netSalary,
       };
+
+      // Ensure ObjectId refs are submitted as plain IDs, never serialized objects.
+      ['division_id', 'department_id', 'designation_id', 'employee_group_id'].forEach((key) => {
+        (submitData as any)[key] = normalizeEntityRef((submitData as any)[key]);
+      });
+
+      // Guard against stale/invalid employee group IDs on no-change updates.
+      const normalizedGroupId = String((submitData as any).employee_group_id || '').trim();
+      if (!customEmployeeGroupingEnabled || !normalizedGroupId || !employeeGroups.some((g) => String(g._id) === normalizedGroupId)) {
+        (submitData as any).employee_group_id = undefined;
+      }
 
       // DEBUG: Check submitData after creation
       console.log('DEBUG: submitData.gross_salary:', (submitData as any).gross_salary);
