@@ -1488,7 +1488,7 @@ export default function AttendancePage() {
           return anyR?.leaveNature === 'lop' || anyR?.leaveInfo?.leaveType?.toLowerCase().includes('lop') || anyR?.leaveInfo?.leaveType?.toLowerCase().includes('loss of pay');
         }).length;
         const paidLeaves = totalLeaves - lopCount;
-        const totalODs = dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
+        const totalODs = item.summary?.totalODs ?? dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
         const weekOffs = item.summary?.totalWeeklyOffs ?? dailyValues.filter((r: any) => r?.status === 'WEEK_OFF').length;
         const holidays = item.summary?.totalHolidays ?? dailyValues.filter((r: any) => r?.status === 'HOLIDAY').length;
         const monthPresent = dailyValues.reduce((sum, r: any) => {
@@ -1593,7 +1593,7 @@ export default function AttendancePage() {
         const wo = item.summary?.totalWeeklyOffs ?? dailyValues.filter((r: any) => r?.status === 'WEEK_OFF').length;
         const hol = item.summary?.totalHolidays ?? dailyValues.filter((r: any) => r?.status === 'HOLIDAY').length;
         const partials = dailyValues.filter((r: any) => r?.status === 'PARTIAL').length;
-        const ods = dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
+        const ods = item.summary?.totalODs ?? dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
         const ot = dailyValues.reduce((sum, r: any) => sum + (r?.otHours || 0), 0);
         const ps = item.payableShifts ?? item.summary?.totalPayableShifts ?? 0;
         return [
@@ -1738,7 +1738,7 @@ export default function AttendancePage() {
       const odRows: (string | number)[][] = data.map((item) => {
         const dailyAttendance = (item.dailyAttendance && typeof item.dailyAttendance === 'object') ? item.dailyAttendance : {};
         const dailyValues = Object.values(dailyAttendance || {});
-        const totalODs = dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
+        const totalODs = item.summary?.totalODs ?? dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
         const dayCells = daysArrayExport.map(d => {
           const r = (dailyAttendance as Record<string, any>)[d];
           if (r?.status === 'OD' || r?.hasOD) return 'OD';
@@ -2624,7 +2624,7 @@ export default function AttendancePage() {
                       anyR?.leaveInfo?.leaveType?.toLowerCase().includes('loss of pay');
                   }).length;
                   const paidLeaves = totalLeaves - lopCount;
-                  const totalODs = dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
+                  const totalODs = item.summary?.totalODs ?? dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
 
                   // Helper for department/division names
                   const getDeptName = (emp: Employee) => {
@@ -2842,7 +2842,7 @@ export default function AttendancePage() {
                                 </td>
                               );
                             case 'od':
-                              const odsCount = dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
+                              const odsCount = item.summary?.totalODs ?? dailyValues.filter((r: any) => r?.status === 'OD' || r?.hasOD).length;
                               return (
                                 <td
                                   key={colKey}

@@ -3815,7 +3815,7 @@ export default function AttendancePage() {
                           }).length;
                           const paidLeaves = totalLeaves - lopCount;
 
-                          const totalODs = Object.values(item.dailyAttendance).filter(r => r?.status === 'OD' || r?.hasOD).length;
+                          const totalODs = item.summary?.totalODs ?? Object.values(item.dailyAttendance).filter(r => r?.status === 'OD' || r?.hasOD).length;
 
                           const isHighAbsenteeism = monthAbsent > 2;
 
