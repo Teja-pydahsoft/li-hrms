@@ -337,7 +337,15 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       const dayFirst = Math.max(attFirst, odFirst);
       const daySecond = Math.max(attSecond, odSecond);
       const dayPresent = Math.min(dayFirst + daySecond, 1.0);
-      const dayPayable = dayPresent;
+      // Use AttendanceDaily.payableShifts as source of truth for payable aggregation
+      // (supports multi-shift/custom payable values). Fallback to merged half-day logic.
+      let dayPayable = dayPresent;
+      if (day.attendance && !day.isWO && !day.isHOL) {
+        const attendancePayable = Number(day.attendance.payableShifts);
+        if (Number.isFinite(attendancePayable) && attendancePayable >= 0) {
+          dayPayable = Math.round(attendancePayable * 100) / 100;
+        }
+      }
 
       if (dayPresent > 0) {
         totalPresentDays += dayPresent;
