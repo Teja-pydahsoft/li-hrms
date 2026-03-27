@@ -4103,7 +4103,7 @@ export default function EmployeesPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-3 pt-2">
+                <div className="sticky bottom-0 z-20 -mx-6 mt-2 flex gap-3 border-t border-slate-200 bg-white/95 px-6 py-3 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-950/95">
                   <button
                     type="submit"
                     className="flex-1 rounded-2xl bg-gradient-to-r from-green-500 to-green-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-green-500/30 transition-all hover:from-green-600 hover:to-green-600"
@@ -4682,7 +4682,7 @@ export default function EmployeesPage() {
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-6">
+              <form onSubmit={handleSubmit} className="space-y-6 pb-24">
                 {/* Profile photo (optional); when editing, add or update photo */}
                 <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-900/60">
                   <h3 className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-100">Profile Photo (optional)</h3>
@@ -5038,7 +5038,7 @@ export default function EmployeesPage() {
 
 
                 {/* Actions */}
-                <div className="flex gap-3 pt-2">
+                <div className="sticky bottom-0 z-20 mt-2 flex gap-3 border-t border-slate-200 bg-white/95 pt-3 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-950/95">
                   <button
                     type="submit"
                     className="flex-1 rounded-2xl bg-gradient-to-r from-green-500 to-green-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-green-500/30 transition-all hover:from-green-600 hover:to-green-600"
