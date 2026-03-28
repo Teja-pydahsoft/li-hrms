@@ -416,12 +416,22 @@ const startWorkers = () => {
                         date: entry.date
                     });
 
-                    // Skip only this (employee, date) day if it has punches (e.g. OD, CCL). Other WO/HOL days for same employee still synced.
+                    // Re-processing for days with existing punches when they are changed to WO/HOL in roster
+                    // This ensures the status correctly becomes WEEK_OFF/HOLIDAY even with raw logs present.
                     const hasPunches = dailyRecord && (
                         (dailyRecord.totalWorkingHours > 0) ||
                         (dailyRecord.shifts && dailyRecord.shifts.length > 0 && dailyRecord.shifts.some(s => s && s.inTime))
                     );
-                    if (hasPunches) continue;
+
+                    if (hasPunches) {
+                        try {
+                            const { reprocessAttendanceForEmployeeDate } = require('../../attendance/services/attendanceSyncService');
+                            await reprocessAttendanceForEmployeeDate(empNo, entry.date);
+                        } catch (reprocessErr) {
+                            console.error(`[Worker] Failed to reprocess attendance for ${empNo} on ${entry.date} (Off day with punches):`, reprocessErr.message);
+                        }
+                        continue;
+                    }
 
                     const updateFields = {
                         status: entry.status === 'WO' ? 'WEEK_OFF' : 'HOLIDAY',
@@ -464,6 +474,15 @@ const startWorkers = () => {
                             await AttendanceDaily.deleteOne({ _id: existing._id });
                             removedCount++;
                         }
+                    }
+
+                    // TRIGGER RE-PROCESSING: Re-evaluate this day's attendance against the new rostered shift
+                    // This handles cases where punches already exist but need to be re-run for lateness/early-out etc.
+                    try {
+                        const { reprocessAttendanceForEmployeeDate } = require('../../attendance/services/attendanceSyncService');
+                        await reprocessAttendanceForEmployeeDate(empNo, entry.date);
+                    } catch (reprocessErr) {
+                        console.error(`[Worker] Failed to reprocess attendance for ${empNo} on ${entry.date}:`, reprocessErr.message);
                     }
                 }
             }
