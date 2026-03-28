@@ -180,6 +180,23 @@ const getShiftsForEmployee = async (employeeNumber, date, options = {}) => {
       console.warn(`[ShiftDetection] Employee ${employeeNumber} has no division_id assigned.`);
     }
 
+    // 0. Check DOJ and LeftDate (Joining and Resignation Boundaries)
+    if (employee.doj) {
+      const dojStr = extractISTComponents(employee.doj).dateStr;
+      if (date < dojStr) {
+        console.log(`[ShiftDetection] Skipping shifts for ${employeeNumber} on ${date}: Before joining (${dojStr})`);
+        return { shifts: [], source: 'before_joining' };
+      }
+    }
+
+    if (employee.leftDate) {
+      const leftStr = extractISTComponents(employee.leftDate).dateStr;
+      if (date > leftStr) {
+        console.log(`[ShiftDetection] Skipping shifts for ${employeeNumber} on ${date}: After resignation (${leftStr})`);
+        return { shifts: [], source: 'resigned' };
+      }
+    }
+
     const allCandidateShifts = new Map();
     let rosteredShift = null;
     let rosterRecordId = null;

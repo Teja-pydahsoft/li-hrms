@@ -26,13 +26,26 @@ exports.createPreScheduledShift = async (req, res) => {
       });
     }
 
-    // Validate employee exists
+    // Validate employee exists and check joining date
     const employee = await Employee.findOne({ emp_no: String(employeeNumber || '').toUpperCase() });
     if (!employee) {
       return res.status(404).json({
         success: false,
         message: 'Employee not found',
       });
+    }
+
+    // Check joining date (doj)
+    if (employee.doj) {
+      const { extractISTComponents } = require('../../shared/utils/dateUtils');
+      const dojStr = extractISTComponents(employee.doj).dateStr;
+      const shiftDate = String(date).split('T')[0];
+      if (shiftDate < dojStr) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot assign shift before joining date (${dojStr})`,
+        });
+      }
     }
 
     // Validate shift exists
@@ -175,6 +188,26 @@ exports.bulkCreatePreScheduledShifts = async (req, res) => {
           results.errors.push(`Missing required fields: ${JSON.stringify(schedule)}`);
           results.skipped++;
           continue;
+        }
+
+        // Validate employee exists and check joining date
+        const employee = await Employee.findOne({ emp_no: String(employeeNumber || '').toUpperCase() }).select('emp_no doj');
+        if (!employee) {
+          results.errors.push(`Employee not found: ${employeeNumber}`);
+          results.skipped++;
+          continue;
+        }
+
+        // Check joining date (doj)
+        if (employee.doj) {
+          const { extractISTComponents } = require('../../shared/utils/dateUtils');
+          const dojStr = extractISTComponents(employee.doj).dateStr;
+          const shiftDate = String(date).split('T')[0];
+          if (shiftDate < dojStr) {
+            results.errors.push(`Cannot assign shift before joining date (${dojStr}) for ${employeeNumber}`);
+            results.skipped++;
+            continue;
+          }
         }
 
         // Check if already exists
@@ -336,12 +369,18 @@ exports.saveRoster = async (req, res) => {
     if (empNos.length === 0) {
       return res.status(400).json({ success: false, message: 'Employee numbers are required in entries' });
     }
-    const existingEmps = await Employee.find({ emp_no: { $in: empNos } }).select('emp_no');
+    const existingEmps = await Employee.find({ emp_no: { $in: empNos } }).select('emp_no doj');
     const existingEmpNos = new Set(existingEmps.map((e) => String(e.emp_no || '').toUpperCase()));
     const missing = empNos.filter((x) => !existingEmpNos.has(x));
     if (missing.length) {
       return res.status(404).json({ success: false, message: `Employees not found: ${missing.join(', ')}` });
     }
+
+    // Create a map for quick access to employee data (specifically doj)
+    const empDataMap = new Map();
+    existingEmps.forEach(emp => {
+      empDataMap.set(String(emp.emp_no || '').toUpperCase(), emp);
+    });
 
     // We only update the exact (employeeNumber, date) pairs in the request — no bulk delete of whole month.
     // This keeps roster sync and attendance updates limited to the entries actually changed.
@@ -362,6 +401,18 @@ exports.saveRoster = async (req, res) => {
         skippedCount++;
         console.warn(`[Entry ${index}] Skipping: date outside month range:`, day);
         return;
+      }
+
+      // skip before joining date
+      const emp = empDataMap.get(empNo);
+      if (emp && emp.doj) {
+        const { extractISTComponents } = require('../../shared/utils/dateUtils');
+        const dojStr = extractISTComponents(emp.doj).dateStr;
+        if (day < dojStr) {
+          skippedCount++;
+          console.warn(`[Entry ${index}] Skipping: date before joining date (${dojStr}):`, day, empNo);
+          return;
+        }
       }
 
       // Validate: must have either shiftId or status='WO' or 'HOL'

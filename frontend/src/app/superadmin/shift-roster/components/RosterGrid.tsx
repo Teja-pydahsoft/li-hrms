@@ -38,6 +38,7 @@ const RosterCellComponent = memo(({
     isHoliday,
     isWeekend,
     shifts,
+    doj,
     onUpdate
 }: {
     empNo: string;
@@ -46,8 +47,11 @@ const RosterCellComponent = memo(({
     isHoliday: boolean;
     isWeekend: boolean;
     shifts: Shift[];
+    doj?: string;
     onUpdate: (empNo: string, date: string, value: RosterCell) => void;
 }) => {
+    const { format, parseISO } = require('date-fns');
+    const isBeforeJoining = doj && date < format(parseISO(doj), 'yyyy-MM-dd');
     const current = cell?.status === 'WO' ? 'WO' : (cell?.status === 'HOL' ? 'HOL' : cell?.shiftId || '');
     const shift = shifts.find(s => s._id === current);
     const shiftColor = shift?.color || '#3b82f6';
@@ -55,9 +59,10 @@ const RosterCellComponent = memo(({
 
     return (
         <td
-            className={`p-0 text-center relative h-[38px] border-r border-slate-200/30 dark:border-slate-800/20 last:border-r-0 ${isWeekend ? 'bg-slate-50/10 dark:bg-indigo-500/5' : ''} ${isHoliday ? 'bg-rose-50/10 dark:bg-rose-500/5' : ''} transition-colors`}
+            className={`p-0 text-center relative h-[38px] border-r border-slate-200/30 dark:border-slate-800/20 last:border-r-0 ${isWeekend ? 'bg-slate-50/10 dark:bg-indigo-500/5' : ''} ${isHoliday ? 'bg-rose-50/10 dark:bg-rose-500/5' : ''} ${isBeforeJoining ? 'bg-slate-100/30 dark:bg-slate-900/40 cursor-not-allowed opacity-60' : ''} transition-colors`}
+            title={isBeforeJoining ? `Pre-joining period (Joined: ${format(parseISO(doj!), 'dd-MMM-yyyy')})` : undefined}
         >
-            <div className="relative w-full h-full flex flex-col items-center justify-center group/cell overflow-hidden">
+            <div className={`relative w-full h-full flex flex-col items-center justify-center group/cell overflow-hidden ${isBeforeJoining ? 'pointer-events-none' : ''}`}>
                 {/* Interaction Layer: Fully transparent but functional */}
                 <select
                     value={current}
@@ -161,6 +166,7 @@ const RosterRow = memo(({
                     isHoliday={empHolidays.has(d)}
                     isWeekend={new Date(d).getDay() === 0 || new Date(d).getDay() === 6}
                     shifts={shifts}
+                    doj={emp.doj}
                     onUpdate={onUpdate}
                 />
             ))}

@@ -255,6 +255,7 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       earlyOut: [{ date: String, value: Number, label: String }],
       permissions: [{ date: String, value: Number, label: String }],
       absent: [{ date: String, value: Number, label: String }],
+      conflicts: [{ date: String, value: Number, label: String }],
     },
 
     // Additional metadata

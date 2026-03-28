@@ -116,6 +116,11 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     // Normalize emp_no so we match AttendanceDaily.employeeNumber (schema uses uppercase)
     const empNoNorm = (emp_no && String(emp_no).trim()) ? String(emp_no).toUpperCase() : emp_no;
 
+    // 0. Fetch employee joining/resignation dates to respect boundaries
+    const employeeInfoForBoundaries = await Employee.findById(employeeId).select('doj leftDate').lean();
+    const dojStrBound = employeeInfoForBoundaries?.doj ? extractISTComponents(employeeInfoForBoundaries.doj).dateStr : null;
+    const leftDateStrBound = employeeInfoForBoundaries?.leftDate ? extractISTComponents(employeeInfoForBoundaries.leftDate).dateStr : null;
+
     // 1. Get all attendance records for this month (fresh from DB so we see latest status/payableShifts after OD updates)
     const attendanceRecords = await AttendanceDaily.find({
       employeeNumber: empNoNorm,
@@ -366,6 +371,10 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       // Absent = each working-day half not covered by leave, OD, or attendance (present / worked half).
       // Examples: half-day leave + no other credit → 0.5 absent; half-day OD + no attendance on other half → 0.5 absent.
       if (!day.isWO && !day.isHOL && dStr <= todayIstStr) {
+        // Boundary Check: If date is before joining or after resignation, it's not "Absent"
+        if (dojStrBound && dStr < dojStrBound) continue;
+        if (leftDateStrBound && dStr > leftDateStrBound) continue;
+
         let leaveFirst = 0;
         let leaveSecond = 0;
         for (const l of day.leaves) {
