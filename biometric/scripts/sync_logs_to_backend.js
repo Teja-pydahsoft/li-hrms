@@ -14,9 +14,9 @@ const axios = require('axios');
  */
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const BACKEND_URL = process.env.BACKEND_URL;
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 const SYNC_ENDPOINT = `${BACKEND_URL}/api/internal/attendance/sync`;
-const SYSTEM_KEY = process.env.HRMS_MICROSERVICE_SECRET_KEY;
+const SYSTEM_KEY = process.env.HRMS_MICROSERVICE_SECRET_KEY || 'hrms-secret-key-2026-abc123xyz789';
 if (!BACKEND_URL) {
     console.error('ERROR: BACKEND_URL not configured in biometric service .env');
     process.exit(1);
@@ -66,21 +66,38 @@ async function main() {
     console.log(`✅ Connected to: ${mongoURI}\n`);
 
     // ── STEP 2: Resend logs to backend (Filtered by month) ───────────────────
-    // Default month: March 2026 (override with SYNC_MONTH=YYYY-MM)
-    const monthCfg = parseMonth(process.env.SYNC_MONTH || '2026-03');
-    if (!monthCfg) {
-        throw new Error('Invalid SYNC_MONTH. Use YYYY-MM (example: 2026-03)');
+    // ── STEP 2: Configure Filter ───────────────────
+    const SYNC_EMP = process.env.SYNC_EMP;
+    const SYNC_START = process.env.SYNC_START; // Format: YYYY-MM-DD
+    const SYNC_END = process.env.SYNC_END;     // Format: YYYY-MM-DD
+    const SYNC_MONTH = process.env.SYNC_MONTH || '2026-03';
+
+    let START_DATE, END_DATE;
+
+    if (SYNC_START && SYNC_END) {
+        START_DATE = new Date(`${SYNC_START}T00:00:00.000Z`);
+        END_DATE = new Date(`${SYNC_END}T23:59:59.999Z`);
+    } else {
+        // Fallback to month-based logic
+        const monthCfg = parseMonth(SYNC_MONTH);
+        if (!monthCfg) {
+            throw new Error('Invalid SYNC_MONTH. Use YYYY-MM (example: 2026-03)');
+        }
+        const { year, month } = monthCfg;
+        const startDateStr = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
+        const endDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59.999Z`;
+        START_DATE = new Date(startDateStr);
+        END_DATE = new Date(endDateStr);
     }
-    const { year, month } = monthCfg;
-    const startDateStr = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
-    const endDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59.999Z`;
-    const START_DATE = new Date(startDateStr);
-    const END_DATE = new Date(endDateStr);
 
     const query = {
         timestamp: { $gte: START_DATE, $lte: END_DATE },
     };
+
+    if (SYNC_EMP) {
+        query.employeeId = SYNC_EMP;
+    }
 
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('STEP: Resend AttendanceLog records to backend');

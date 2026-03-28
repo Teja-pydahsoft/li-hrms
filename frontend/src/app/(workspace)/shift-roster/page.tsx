@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Copy } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'react-hot-toast';
+import { format, parseISO } from 'date-fns';
 
 type Shift = { _id: string; name: string; code?: string; color?: string };
-type Employee = { _id: string; employee_name?: string; emp_no: string; department?: { name: string; _id: string } };
+type Employee = { _id: string; employee_name?: string; emp_no: string; doj?: string; department?: { name: string; _id: string } };
 type RosterCell = { shiftId?: string | null; status?: 'WO' | 'HOL' };
 type RosterState = Map<string, Record<string, RosterCell>>;
 
@@ -259,6 +260,16 @@ function RosterPage() {
   }, [month, selectedDept, selectedDivision, selectedGroup, searchQuery, cycleDates, page, limit]);
 
   const updateCell = (empNo: string, date: string, value: RosterCell) => {
+    // Check joining date (doj)
+    const emp = employees.find(e => e.emp_no === empNo);
+    if (emp?.doj) {
+      const dojStr = format(parseISO(emp.doj), 'yyyy-MM-dd');
+      if (date < dojStr) {
+        toast.error(`Cannot assign shift before joining date (${dojStr}) for ${emp.employee_name || empNo}`);
+        return;
+      }
+    }
+
     setRoster((prev) => {
       const map = new Map(prev);
       const row = { ...(map.get(empNo) || {}) };
@@ -277,8 +288,10 @@ function RosterPage() {
     setRoster((prev) => {
       const map = new Map(prev);
       employees.forEach((emp) => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
         const row: Record<string, RosterCell> = { ...(map.get(emp.emp_no) || {}) };
         days.forEach((d) => {
+          if (dojStr && d < dojStr) return;
           row[d] = { shiftId, status };
         });
         map.set(emp.emp_no, row);
@@ -287,16 +300,26 @@ function RosterPage() {
     });
     setDirtyKeys((prev) => {
       const next = new Set(prev);
-      employees.forEach((emp) => days.forEach((d) => next.add(`${emp.emp_no}|${d}`)));
+      employees.forEach((emp) => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+        days.forEach((d) => {
+          if (dojStr && d < dojStr) return;
+          next.add(`${emp.emp_no}|${d}`);
+        });
+      });
       return next;
     });
   };
 
   const applyEmployeeAllDays = (empNo: string, shiftId: string | null, status?: 'WO') => {
+    const emp = employees.find(e => e.emp_no === empNo);
+    const dojStr = emp?.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+
     setRoster((prev) => {
       const map = new Map(prev);
       const row: Record<string, RosterCell> = { ...(map.get(empNo) || {}) };
       days.forEach((d) => {
+        if (dojStr && d < dojStr) return;
         row[d] = { shiftId, status };
       });
       map.set(empNo, row);
@@ -304,7 +327,10 @@ function RosterPage() {
     });
     setDirtyKeys((prev) => {
       const next = new Set(prev);
-      days.forEach((d) => next.add(`${empNo}|${d}`));
+      days.forEach((d) => {
+        if (dojStr && d < dojStr) return;
+        next.add(`${empNo}|${d}`);
+      });
       return next;
     });
   };
@@ -382,8 +408,10 @@ function RosterPage() {
     setRoster((prev) => {
       const map = new Map(prev);
       employees.forEach((emp) => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
         const row: Record<string, RosterCell> = { ...(map.get(emp.emp_no) || {}) };
         days.forEach((d) => {
+          if (dojStr && d < dojStr) return;
           const dow = weekdays[new Date(d).getDay()];
           if (activeDays.includes(dow)) {
             row[d] = { shiftId: null, status: 'WO' };
@@ -395,7 +423,13 @@ function RosterPage() {
     });
     setDirtyKeys((prev) => {
       const next = new Set(prev);
-      employees.forEach((emp) => activeDates.forEach((d) => next.add(`${emp.emp_no}|${d}`)));
+      employees.forEach((emp) => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+        activeDates.forEach((d) => {
+          if (dojStr && d < dojStr) return;
+          next.add(`${emp.emp_no}|${d}`);
+        });
+      });
       return next;
     });
     setShowWeekOff(false);
@@ -822,42 +856,46 @@ function RosterPage() {
                         const cell = row[d];
                         const current = cell?.status || cell?.shiftId || '';
                         const isWeekend = new Date(d).getDay() === 0 || new Date(d).getDay() === 6;
+                        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+                        const isBeforeJoining = dojStr && d < dojStr;
                         return (
                           <td
                             key={d}
                             className={`p-0.5 text-center relative h-10 border-r border-black dark:border-slate-500 last:border-r-0 ${isWeekend ? 'bg-slate-50/50 dark:bg-slate-800/30' : ''
-                              }`}
+                              } ${isBeforeJoining ? 'bg-slate-200/50 dark:bg-slate-900/40 cursor-not-allowed opacity-50' : ''}`}
+                            title={isBeforeJoining ? `Pre-joining period (Joined: ${format(parseISO(emp.doj!), 'dd-MMM-yyyy')})` : undefined}
                             style={
-                              current && current !== 'WO' && current !== 'HOL'
+                              !isBeforeJoining && current && current !== 'WO' && current !== 'HOL'
                                 ? { backgroundColor: `${shifts.find(s => s._id === current)?.color || '#3b82f6'}30` }
                                 : current === 'WO' ? { backgroundColor: '#ffedd5' } : current === 'HOL' ? { backgroundColor: '#fee2e2' } : {}
                             }
                           >
-                            {/* Removed solid bar */}
-                            <select
-                              value={current}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (val === 'WO' || val === 'HOL') {
-                                  updateCell(emp.emp_no, d, { shiftId: null, status: val as any });
-                                } else {
-                                  updateCell(emp.emp_no, d, { shiftId: val || null, status: undefined });
-                                }
-                              }}
-                              className="w-full h-full text-[10px] font-medium rounded bg-transparent px-1 py-1 focus:ring-0 focus:outline-none appearance-none text-center cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                              style={{
-                                color: current === 'WO' ? '#c2410c' : (current === 'HOL' ? '#b91c1c' : 'inherit'),
-                              }}
-                            >
-                              <option value="">-</option>
-                              <option value="WO">WO</option>
-                              <option value="HOL">HOL</option>
-                              {shifts.map((s) => (
-                                <option key={s._id} value={s._id} style={{ color: s.color }}>
-                                  {shiftLabel(s)}
-                                </option>
-                              ))}
-                            </select>
+                            <div className={isBeforeJoining ? 'pointer-events-none' : ''}>
+                              <select
+                                value={current}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === 'WO' || val === 'HOL') {
+                                    updateCell(emp.emp_no, d, { shiftId: null, status: val as any });
+                                  } else {
+                                    updateCell(emp.emp_no, d, { shiftId: val || null, status: undefined });
+                                  }
+                                }}
+                                className="w-full h-full text-[10px] font-medium rounded bg-transparent px-1 py-1 focus:ring-0 focus:outline-none appearance-none text-center cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                style={{
+                                  color: current === 'WO' ? '#c2410c' : (current === 'HOL' ? '#b91c1c' : 'inherit'),
+                                }}
+                              >
+                                <option value="">-</option>
+                                <option value="WO">WO</option>
+                                <option value="HOL">HOL</option>
+                                {shifts.map((s) => (
+                                  <option key={s._id} value={s._id} style={{ color: s.color }}>
+                                    {shiftLabel(s)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
 
                             {/* Custom downward arrow for cleaner look, hidden if empty to look like a clean cell */}
                             {

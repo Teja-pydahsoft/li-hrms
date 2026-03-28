@@ -270,6 +270,16 @@ export default function RosterPage() {
   useEffect(() => { loadData(); }, [loadData]);
 
   const updateCell = useCallback((empNo: string, date: string, value: RosterCell) => {
+    // Check joining date (doj)
+    const emp = employees.find(e => e.emp_no === empNo);
+    if (emp?.doj) {
+      const dojStr = format(parseISO(emp.doj), 'yyyy-MM-dd');
+      if (date < dojStr) {
+        toast.error(`Cannot assign shift before joining date (${dojStr}) for ${emp.employee_name || empNo}`);
+        return;
+      }
+    }
+
     setRoster(prev => {
       const next = new Map(prev);
       const row = { ...(next.get(empNo) || {}) };
@@ -278,13 +288,18 @@ export default function RosterPage() {
       return next;
     });
     setDirtyKeys(prev => new Set(prev).add(`${empNo}|${date}`));
-  }, []);
+  }, [employees]);
 
   const applyEmployeeAllDays = useCallback((empNo: string, shiftId: string | null, status?: 'WO' | 'HOL') => {
+    const emp = employees.find(e => e.emp_no === empNo);
+    const dojStr = emp?.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+
     setRoster(prev => {
       const next = new Map(prev);
       const row = { ...(next.get(empNo) || {}) };
       days.forEach(d => {
+        // Skip before joining date
+        if (dojStr && d < dojStr) return;
         // Only skip if we are assigning a shift (shiftId provided) AND current status is protected
         if (shiftId && (row[d]?.status === 'WO' || row[d]?.status === 'HOL')) return;
         row[d] = { shiftId, status };
@@ -294,10 +309,13 @@ export default function RosterPage() {
     });
     setDirtyKeys(prev => {
       const next = new Set(prev);
-      days.forEach(d => next.add(`${empNo}|${d}`));
+      days.forEach(d => {
+        if (dojStr && d < dojStr) return;
+        next.add(`${empNo}|${d}`);
+      });
       return next;
     });
-  }, [days]);
+  }, [days, employees]);
 
   const applyAssignDays = useCallback((shiftId: string | null, status?: 'WO' | 'HOL') => {
     const activeDays = Object.keys(shiftAssignDays).filter(d => shiftAssignDays[d]);
@@ -306,8 +324,10 @@ export default function RosterPage() {
     setRoster(prev => {
       const next = new Map(prev);
       employees.forEach(emp => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
         const row = { ...(next.get(emp.emp_no) || {}) };
         days.forEach(d => {
+          if (dojStr && d < dojStr) return;
           const date = new Date(d);
           if (activeDays.includes(weekdays[date.getDay()])) {
             // Only skip if we are assigning a shift (shiftId provided) AND current status is protected
@@ -321,7 +341,13 @@ export default function RosterPage() {
     });
     setDirtyKeys(prev => {
       const next = new Set(prev);
-      employees.forEach(emp => activeDates.forEach(d => next.add(`${emp.emp_no}|${d}`)));
+      employees.forEach(emp => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+        activeDates.forEach(d => {
+          if (dojStr && d < dojStr) return;
+          next.add(`${emp.emp_no}|${d}`);
+        });
+      });
       return next;
     });
   }, [days, shiftAssignDays, weekdays, employees]);
@@ -339,8 +365,10 @@ export default function RosterPage() {
     setRoster(prev => {
       const next = new Map(prev);
       employees.forEach(emp => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
         const row = { ...(next.get(emp.emp_no) || {}) };
         days.forEach(d => {
+          if (dojStr && d < dojStr) return;
           const date = new Date(d);
           if (activeDays.includes(weekdays[date.getDay()])) row[d] = { shiftId: null, status: 'WO' };
         });
@@ -350,7 +378,13 @@ export default function RosterPage() {
     });
     setDirtyKeys(prev => {
       const next = new Set(prev);
-      employees.forEach(emp => activeDates.forEach(d => next.add(`${emp.emp_no}|${d}`)));
+      employees.forEach(emp => {
+        const dojStr = emp.doj ? format(parseISO(emp.doj), 'yyyy-MM-dd') : null;
+        activeDates.forEach(d => {
+          if (dojStr && d < dojStr) return;
+          next.add(`${emp.emp_no}|${d}`);
+        });
+      });
       return next;
     });
     setShowWeekOff(false);

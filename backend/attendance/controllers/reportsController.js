@@ -383,7 +383,7 @@ exports.getAttendanceReport = async (req, res) => {
         // Manual join for employee details
         const allEmpNos = [...new Set(attendance.map(a => a.employeeNumber))];
         const employeesDetails = await Employee.find({ emp_no: { $in: allEmpNos } })
-            .select('emp_no employee_name department_id division_id')
+            .select('emp_no employee_name department_id division_id doj leftDate')
             .populate('department_id', 'name')
             .populate('division_id', 'name')
             .lean();
@@ -393,10 +393,17 @@ exports.getAttendanceReport = async (req, res) => {
             return acc;
         }, {});
 
-        const reports = attendance.map(record => ({
-            ...record,
-            employee: employeeMap[record.employeeNumber] || { emp_no: record.employeeNumber, employee_name: 'Unknown' }
-        }));
+        const reports = attendance.map(record => {
+            const emp = employeeMap[record.employeeNumber];
+            if (emp && emp.leftDate) {
+                const leftDateStr = dayjs(emp.leftDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
+                if (record.date > leftDateStr) return null;
+            }
+            return {
+                ...record,
+                employee: emp || { emp_no: record.employeeNumber, employee_name: 'Unknown' }
+            };
+        }).filter(r => r !== null);
 
         res.status(200).json({
             success: true,
@@ -557,7 +564,7 @@ exports.exportAttendanceReport = async (req, res) => {
         const employees = await Employee.find(empQuery)
             .populate('department_id', 'name')
             .populate('division_id', 'name')
-            .select('emp_no employee_name department_id division_id')
+            .select('emp_no employee_name department_id division_id doj leftDate')
             .lean();
 
         const empNosFromHRMS = employees.map(e => String(e.emp_no).toUpperCase());
@@ -569,7 +576,8 @@ exports.exportAttendanceReport = async (req, res) => {
                 emp_no: e.emp_no,
                 employee_name: (e.employee_name || '').trim() || e.emp_no,
                 department: e.department_id?.name || '',
-                division: e.division_id?.name || ''
+                division: e.division_id?.name || '',
+                leftDate: e.leftDate
             };
             return acc;
         }, {});
@@ -773,6 +781,13 @@ exports.exportAttendanceReport = async (req, res) => {
 
                 for (const dk of dates) {
                     const { pairs, totHrsStr } = byEmpDate[empId][dk];
+
+                    // Boundary Check: If date is after resignation, skip Excel row
+                    if (info.leftDate) {
+                        const leftStr = dayjs(info.leftDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
+                        if (dk > leftStr) continue;
+                    }
+
                     const row = {
                         'SNO': ++sno,
                         'E.NO': info.emp_no,
@@ -1276,7 +1291,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 tableData.push([
                     child.employee_name || child.name,
                     child.emp_no || '-',
-                    entityStats.present.toFixed(1),
+                    (entityStats.present - entityStats.od).toFixed(1),
                     entityStats.leaves.toFixed(1),
                     entityStats.od.toFixed(1),
                     entityStats.wo.toFixed(1),
@@ -1327,7 +1342,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         const employees = await Employee.find(empQuery)
             .populate('department_id', 'name')
             .populate('division_id', 'name')
-            .select('emp_no employee_name department_id division_id')
+            .select('emp_no employee_name department_id division_id doj leftDate')
             .lean();
 
         if (employees.length === 0) {
@@ -1499,38 +1514,54 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     }
 
                     const gridRow = [eName, emp.emp_no];
+                    const todayIST = dayjs().tz('Asia/Kolkata').format('YYYY-MM-DD');
                     daysArray.forEach(dStr => {
+                        const dojStr = emp.doj ? dayjs(emp.doj).tz('Asia/Kolkata').format('YYYY-MM-DD') : null;
+                        const leftDateStr = emp.leftDate ? dayjs(emp.leftDate).tz('Asia/Kolkata').format('YYYY-MM-DD') : null;
+                        
+                        const isBeforeJoining = dojStr && dStr < dojStr;
+                        const isAfterResignation = leftDateStr && dStr > leftDateStr;
+                        const isFutureDate = dStr > todayIST;
+
+                        // Priority labels from summary contributing dates (source of truth for counts/UI colors)
+                        const isWO = summary?.contributingDates?.weeklyOffs?.some(cd => cd.date === dStr);
+                        const isHOL = summary?.contributingDates?.holidays?.some(cd => cd.date === dStr);
+                        const isLve = summary?.contributingDates?.leaves?.some(cd => cd.date === dStr);
+                        const isOD = summary?.contributingDates?.ods?.some(cd => cd.date === dStr);
+
                         const rec = empDaily.find(r => r.date === dStr);
-                        if (rec) {
-                            let s = '-';
+
+                        if (isBeforeJoining || isAfterResignation) {
+                            gridRow.push('');
+                        } else if (isFutureDate) {
+                            gridRow.push('-');
+                        } else if (isHOL) {
+                            gridRow.push('HOL');
+                        } else if (isWO) {
+                            gridRow.push('WO');
+                        } else if (isLve) {
+                            gridRow.push('L');
+                        } else if (isOD) {
+                            gridRow.push('OD');
+                        } else if (rec) {
+                            // Map local record status (P, PT, HD, etc)
+                            let s = 'A';
                             if (rec.status === 'PRESENT') s = 'P';
-                            else if (rec.status === 'ABSENT') s = 'A';
-                            else if (rec.status === 'WEEK_OFF') s = 'WO';
-                            else if (rec.status === 'HOLIDAY') s = 'H';
-                            else if (rec.status === 'LEAVE') s = 'L';
-                            else if (rec.status === 'OD') s = 'OD';
                             else if (rec.status === 'PARTIAL') s = 'PT';
                             else if (rec.status === 'HALF_DAY') s = 'HD';
+                            else if (rec.status === 'ABSENT') s = 'A';
+                            else if (rec.status === 'WEEK_OFF') s = 'WO';
+                            else if (rec.status === 'HOLIDAY') s = 'HOL';
                             gridRow.push(s);
                         } else {
-                            // Check if this date has a leave/OD that might not be in AttendanceDaily
-                            const isWO = summary?.contributingDates?.weeklyOffs?.some(cd => cd.date === dStr);
-                            const isHOL = summary?.contributingDates?.holidays?.some(cd => cd.date === dStr);
-                            const isLve = summary?.contributingDates?.leaves?.some(cd => cd.date === dStr);
-                            const isOD = summary?.contributingDates?.ods?.some(cd => cd.date === dStr);
-
-                            if (isLve) gridRow.push('L');
-                            else if (isOD) gridRow.push('OD');
-                            else if (isWO) gridRow.push('WO');
-                            else if (isHOL) gridRow.push('H');
-                            else gridRow.push('-');
+                            gridRow.push('A');
                         }
                     });
 
                     deptSumData.push([
                         eName,
                         emp.emp_no,
-                        (summary?.totalPresentDays || 0).toFixed(1),
+                        ((summary?.totalPresentDays || 0) - (summary?.totalODs || 0)).toFixed(1),
                         (summary?.totalLeaves || 0).toFixed(1),
                         (summary?.totalODs || 0).toFixed(1),
                         (summary?.totalWeeklyOffs || 0).toFixed(1),

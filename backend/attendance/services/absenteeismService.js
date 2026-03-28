@@ -27,9 +27,14 @@ const ensureDailyRecordsExist = async (dateStr) => {
         // Fetch all active employees (using IST date comparison)
         const dateBoundary = createISTDate(dateStr);
         const activeEmployees = await Employee.find({
+            is_active: { $ne: false },
             $or: [
-                { is_active: true },
+                { leftDate: null },
                 { leftDate: { $gte: dateBoundary } }
+            ],
+            $or: [
+                { doj: null },
+                { doj: { $lte: dateBoundary } }
             ]
         }).select('emp_no _id');
 

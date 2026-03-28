@@ -204,7 +204,7 @@ async function autoFillNextCycleFromPrevious(options = {}) {
   const empFilter = { is_active: true, leftDate: null };
   if (departmentId) empFilter.department_id = departmentId;
   if (divisionId) empFilter.division_id = divisionId;
-  const employees = await Employee.find(empFilter).select('emp_no').lean();
+  const employees = await Employee.find(empFilter).select('emp_no doj').lean();
   const empNos = employees.map((e) => String(e.emp_no || '').toUpperCase()).filter(Boolean);
 
   if (empNos.length === 0) {
@@ -218,11 +218,18 @@ async function autoFillNextCycleFromPrevious(options = {}) {
   }
 
   const targetDays = getAllDatesInRange(targetRange.startDate, targetRange.endDate);
+  const empMap = new Map(employees.map(e => [String(e.emp_no || '').toUpperCase(), e]));
 
   const entries = [];
 
   for (const empNo of empNos) {
+    const emp = empMap.get(empNo);
+    const { extractISTComponents } = require('../../shared/utils/dateUtils');
+    const dojStr = emp?.doj ? extractISTComponents(emp.doj).dateStr : null;
+
     for (const dateStr of targetDays) {
+      if (dojStr && dateStr < dojStr) continue;
+
       const weekday = getWeekday(dateStr);
       const key = `${empNo}|${weekday}`;
       const cell = rosterByWeekday.get(key);

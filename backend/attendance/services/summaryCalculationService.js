@@ -116,6 +116,11 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     // Normalize emp_no so we match AttendanceDaily.employeeNumber (schema uses uppercase)
     const empNoNorm = (emp_no && String(emp_no).trim()) ? String(emp_no).toUpperCase() : emp_no;
 
+    // 0. Fetch employee joining/resignation dates to respect boundaries
+    const employeeInfoForBoundaries = await Employee.findById(employeeId).select('doj leftDate').lean();
+    const dojStrBound = employeeInfoForBoundaries?.doj ? extractISTComponents(employeeInfoForBoundaries.doj).dateStr : null;
+    const leftDateStrBound = employeeInfoForBoundaries?.leftDate ? extractISTComponents(employeeInfoForBoundaries.leftDate).dateStr : null;
+
     // 1. Get all attendance records for this month (fresh from DB so we see latest status/payableShifts after OD updates)
     const attendanceRecords = await AttendanceDaily.find({
       employeeNumber: empNoNorm,
@@ -298,12 +303,11 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         if (status === 'PRESENT') {
           attFirst = 0.5; attSecond = 0.5;
         } else if (status === 'HALF_DAY') {
-          // Detect which half was worked. High early-out means worked first half.
-          // threshold of 120 mins (2 hours) is safe for detecting a missing half
+          // Detect which half was worked based on which penalty is higher.
           const eo = Number(day.attendance.totalEarlyOutMinutes) || 0;
           const li = Number(day.attendance.totalLateInMinutes) || 0;
-          if (eo > 120) attFirst = 0.5;
-          else if (li > 120) attSecond = 0.5;
+          if (eo > li) attFirst = 0.5;
+          else if (li > eo) attSecond = 0.5;
           else attFirst = 0.5; // Default to first half if we can't tell
         }
         // PARTIAL/ABSENT: base is 0.0 per user request
@@ -334,8 +338,8 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       }
 
       // Merge and Cap - this handles PARTIAL + OD correctly (0.0 + 0.5 = 0.5)
-      const dayFirst = Math.max(attFirst, odFirst);
-      const daySecond = Math.max(attSecond, odSecond);
+      const dayFirst = attFirst;
+      const daySecond = attSecond;
       const dayPresent = Math.min(dayFirst + daySecond, 1.0);
       // Use AttendanceDaily payables as source of truth for aggregation.
       // Prefer the higher of:
@@ -353,7 +357,7 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         dayPayable = Math.round(Math.max(...candidates) * 100) / 100;
       }
 
-      if (dayPresent > 0) {
+      if (dayPresent > 0 || dayPayable > 0) {
         totalPresentDays += dayPresent;
         if (!contributingDates.present.some(cd => cd.date === dStr)) {
           contributingDates.present.push({ date: dStr, value: dayPresent, label: 'P' });
@@ -367,6 +371,10 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       // Absent = each working-day half not covered by leave, OD, or attendance (present / worked half).
       // Examples: half-day leave + no other credit → 0.5 absent; half-day OD + no attendance on other half → 0.5 absent.
       if (!day.isWO && !day.isHOL && dStr <= todayIstStr) {
+        // Boundary Check: If date is before joining or after resignation, it's not "Absent"
+        if (dojStrBound && dStr < dojStrBound) continue;
+        if (leftDateStrBound && dStr > leftDateStrBound) continue;
+
         let leaveFirst = 0;
         let leaveSecond = 0;
         for (const l of day.leaves) {
@@ -399,7 +407,7 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       }
 
       // 3. Lates & Early Outs (only on PRESENT days)
-      if (day.attendance && day.attendance.status === 'PRESENT' && !day.isWO && !day.isHOL) {
+      if (day.attendance && (day.attendance.status === 'PRESENT' || day.attendance.status === 'OD') && !day.isWO && !day.isHOL) {
         const shifts = Array.isArray(day.attendance.shifts) ? day.attendance.shifts : [];
 
         // Late In
@@ -447,12 +455,12 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       }
     }
 
-    summary.totalPresentDays = Math.round(totalPresentDays * 10) / 10;
+    summary.totalPresentDays = Math.round(totalPresentDays * 100) / 100;
     summary.totalPayableShifts = Math.round(totalPayableShifts * 100) / 100;
-    summary.totalLeaves = Math.round(totalLeaveDays * 10) / 10;
-    summary.totalODs = Math.round(totalODDays * 10) / 10;
+    summary.totalLeaves = Math.round(totalLeaveDays * 100) / 100;
+    summary.totalODs = Math.round(totalODDays * 100) / 100;
     const totalAbsentDays = contributingDates.absent.reduce((s, cd) => s + (Number(cd.value) || 0), 0);
-    summary.totalAbsentDays = Math.round(totalAbsentDays * 10) / 10;
+    summary.totalAbsentDays = Math.round(totalAbsentDays * 100) / 100;
     summary.totalLateInMinutes = Math.round(totalLateInMinutes * 100) / 100;
     summary.lateInCount = lateInCount;
     summary.totalEarlyOutMinutes = Math.round(totalEarlyOutMinutes * 100) / 100;

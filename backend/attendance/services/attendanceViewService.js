@@ -71,7 +71,7 @@ exports.getCalendarViewData = async (employee, year, month) => {
     let dayCounter = 1;
     while (currentDate <= leaveEnd) {
       const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
-      if (dateStr >= startDate && dateStr <= endDateStr) {
+      if (dateStr >= startDateStr && dateStr <= endDateStr) {
         let approvedBy = null;
         let approvedAt = null;
         if (leave.approvals?.final?.status === 'approved' && leave.approvals.final.approvedBy) {
@@ -119,7 +119,7 @@ exports.getCalendarViewData = async (employee, year, month) => {
     let dayCounter = 1;
     while (currentDate <= odEnd) {
       const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
-      if (dateStr >= startDate && dateStr <= endDateStr) {
+      if (dateStr >= startDateStr && dateStr <= endDateStr) {
         let approvedBy = null;
         let approvedAt = null;
         if (od.approvals?.final?.status === 'approved' && od.approvals.final.approvedBy) {
@@ -128,8 +128,6 @@ exports.getCalendarViewData = async (employee, year, month) => {
         } else if (od.approvals?.hr?.status === 'approved' && od.approvals.hr.approvedBy) {
           approvedBy = od.approvals.hr.approvedBy;
           approvedAt = od.approvals.hr.approvedAt;
-        } else if (od.approvals?.hod?.status === 'approved' && od.approvals.hod.approvedBy) {
-          approvedBy = od.approvals.hod.approvedBy;
           approvedAt = od.approvals.hod.approvedAt;
         }
 
@@ -147,6 +145,11 @@ exports.getCalendarViewData = async (employee, year, month) => {
           durationHours: od.durationHours,
           odStartTime: od.odStartTime,
           odEndTime: od.odEndTime,
+          reason: od.purpose,
+          purpose: od.purpose,
+          photo: od.photoEvidence?.url,
+          photoEvidence: od.photoEvidence,
+          geoLocation: od.geoLocation,
           dayInOD: dayCounter,
           appliedAt: od.appliedAt || od.createdAt,
           approvedBy: approvedBy ? {
@@ -161,9 +164,16 @@ exports.getCalendarViewData = async (employee, year, month) => {
     }
   });
 
+  const dojStr = employee.doj ? extractISTComponents(employee.doj).dateStr : null;
+  const leftDateStr = employee.leftDate ? extractISTComponents(employee.leftDate).dateStr : null;
+
   // Create merged attendance map
   const attendanceMap = {};
   records.forEach(record => {
+    // Boundary check for display
+    if (dojStr && record.date < dojStr) return;
+    if (leftDateStr && record.date > leftDateStr) return;
+
     const hasLeave = !!leaveMap[record.date];
     const odInfo = odMap[record.date];
     const hasOD = !!odInfo;
@@ -202,8 +212,11 @@ exports.getCalendarViewData = async (employee, year, month) => {
     };
   });
 
-  // Fill in missing dates with Leave/OD info
+  // Fill in missing dates with Leave/OD info (ONLY if within employment period)
   Object.keys(leaveMap).forEach(dateStr => {
+    if (dojStr && dateStr < dojStr) return;
+    if (leftDateStr && dateStr > leftDateStr) return;
+
     if (!attendanceMap[dateStr]) {
       attendanceMap[dateStr] = {
         date: dateStr,
@@ -309,7 +322,7 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
     ],
     isActive: true,
   })
-    .select('employeeId fromDate toDate odType odType_extended isHalfDay halfDayType odStartTime odEndTime')
+    .select('employeeId fromDate toDate odType odType_extended isHalfDay halfDayType odStartTime odEndTime purpose placeVisited photoEvidence geoLocation')
     .populate('employeeId', 'emp_no')
     .lean();
 
@@ -365,6 +378,12 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
           halfDayType: od.halfDayType,
           odStartTime: od.odStartTime,
           odEndTime: od.odEndTime,
+          placeVisited: od.placeVisited,
+          reason: od.purpose,
+          purpose: od.purpose,
+          photo: od.photoEvidence?.url,
+          photoEvidence: od.photoEvidence,
+          geoLocation: od.geoLocation,
         };
       }
       currentDate.setDate(currentDate.getDate() + 1);
@@ -421,11 +440,24 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
       const odIsHalfDay = odInfo?.odType_extended === 'half_day' || odInfo?.isHalfDay;
       const isConflict = (hasLeave || (hasOD && !odIsHourBased && !odIsHalfDay)) && hasAttendance;
 
+      const dojStr = emp.doj ? extractISTComponents(emp.doj).dateStr : null;
+      const leftDateStr = emp.leftDate ? extractISTComponents(emp.leftDate).dateStr : null;
+      
+      const isBeforeJoining = dojStr && dateStr < dojStr;
+      const isAfterResignation = leftDateStr && dateStr > leftDateStr;
+
+      // Get today's IST date string for future date comparison
+      const todayIST = new Date();
+      const todayStr = extractISTComponents(todayIST).dateStr;
+      const isFutureDate = dateStr > todayStr;
+
       let status = 'ABSENT';
-      if (record) status = record.status;
+      // Pre-joining, post-resignation and future date checks take priority over any DB record
+      if (isBeforeJoining || isAfterResignation) status = '';
+      else if (isFutureDate) status = '-';
+      else if (record) status = record.status;
       else if (hasLeave) status = 'LEAVE';
       else if (hasOD) status = 'OD';
-      else if (new Date(dateStr) > new Date()) status = '-';
 
       dailyAttendance[dateStr] = {
         date: dateStr,
