@@ -3,6 +3,13 @@
  * Handles detection and pairing of multiple shifts per day
  */
 
+function getMaxPunchWindowMs() {
+    const hoursRaw = Number(process.env.ATTENDANCE_PUNCH_WINDOW_HOURS);
+    const hours = Number.isFinite(hoursRaw) && hoursRaw > 0 ? hoursRaw : 24; // default 24h
+    const clamped = Math.max(6, Math.min(48, hours)); // safety bounds
+    return clamped * 60 * 60 * 1000;
+}
+
 /**
  * Filter duplicate IN punches based on 1-hour threshold
  * @param {Array} inPunches - Array of IN punches sorted by timestamp
@@ -112,7 +119,7 @@ function detectAndPairShifts(rawLogs, date, maxShifts = 3) {
 
         // Find next OUT after this IN that hasn't been paired yet
         // MAX 36 hour window for a single shift segment (per user request)
-        const MAX_WINDOW_MS = 36 * 60 * 60 * 1000;
+        const MAX_WINDOW_MS = getMaxPunchWindowMs();
         const outPunch = allOuts.find(out => {
             const timeDiff = new Date(out.timestamp) - new Date(inPunch.timestamp);
             return timeDiff > 0 && timeDiff <= MAX_WINDOW_MS && !pairedOutIds.has(out._id || out.id);

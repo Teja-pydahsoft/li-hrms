@@ -150,8 +150,6 @@ router.post(
 
 // Apply initial CL balance from policy to all employees (manual; not annual reset)
 router.post('/initial-cl-sync', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.performInitialCLSync);
-router.get('/initial-cl-sync/preview', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.previewInitialCLSync);
-router.post('/initial-cl-sync/preview', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.previewInitialCLSync);
 router.post('/initial-cl-sync/apply', authorize('hr', 'sub_admin', 'super_admin'), annualCLResetController.applyInitialCLSync);
 
 // ==========================================

@@ -217,7 +217,7 @@ exports.previewInitialCLSync = async (req, res) => {
  */
 exports.applyInitialCLSync = async (req, res) => {
     try {
-        const { confirm, scope = 'listed', employees = [], reason } = req.body || {};
+        const { confirm } = req.body || {};
         if (!confirm) {
             return res.status(400).json({
                 success: false,
@@ -225,124 +225,52 @@ exports.applyInitialCLSync = async (req, res) => {
             });
         }
 
-        const scopeNorm = scope === 'all' ? 'all' : 'listed';
-        const reasonStr = reason ? String(reason).trim() : '';
-        const adjReason = `Initial policy sync${reasonStr ? `: ${reasonStr}` : ''}`;
         const clSyncOptions = {
             creditAllPayrollMonths: true,
             includeApprovedClUsageDebits: true,
-            carryUnusedClToNextMonth: true,
+            carryUnusedClToNextMonth: false,
+            disableInitialLedgerCarryForward: true,
         };
 
         const settings = await LeavePolicySettings.getSettings();
         const effectiveDate = createISTDate(getTodayISTDateString());
+        const employeesAll = await Employee.find({ is_active: true })
+            .select('_id emp_no employee_name department_id division_id doj is_active compensatoryOffs')
+            .populate('department_id', 'name')
+            .populate('division_id', 'name');
 
         const results = {
             processed: 0,
             successCount: 0,
             errors: [],
             details: [],
-            scope: scopeNorm,
+            scope: 'all',
         };
 
-        if (scopeNorm === 'all') {
-            const employeesAll = await Employee.find({ is_active: true })
-                .select('_id emp_no employee_name department_id division_id doj is_active compensatoryOffs')
-                .populate('department_id', 'name')
-                .populate('division_id', 'name');
-
-            for (const emp of employeesAll) {
-                try {
-                    const syncResult = await syncEmployeeCLFromPolicy(emp, settings, effectiveDate, clSyncOptions);
-                    if (!syncResult.success) {
-                        throw new Error(syncResult.error || 'CL sync failed');
-                    }
-                    results.successCount++;
-                    results.details.push({
-                        employeeId: emp._id,
-                        success: true,
-                        newBalance: syncResult.newBalance,
-                        policyOpening: syncResult.policyOpening,
-                    });
-                } catch (e) {
-                    results.errors.push({ employeeId: emp._id, error: e.message });
-                    results.details.push({ employeeId: emp._id, success: false, error: e.message });
-                } finally {
-                    results.processed++;
-                }
-            }
-
-            return res.status(200).json({
-                success: true,
-                message: `Initial sync (all active): ${results.successCount}/${results.processed} employees processed`,
-                data: results,
-            });
-        }
-
-        if (!Array.isArray(employees) || employees.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No employees in payload. Use scope "all" to process every active employee, or send the listed employees array.',
-            });
-        }
-
-        for (const row of employees) {
-            const { employeeId, targetCL, targetEL, targetCCL } = row || {};
-            if (!employeeId) continue;
-
+        for (const emp of employeesAll) {
             try {
-                const emp = await Employee.findById(employeeId)
-                    .select('_id emp_no employee_name department_id division_id doj is_active compensatoryOffs')
-                    .populate('department_id', 'name')
-                    .populate('division_id', 'name');
-                if (!emp) {
-                    throw new Error('Employee not found');
-                }
-
-                const clOpts =
-                    targetCL != null && targetCL !== '' && Number.isFinite(Number(targetCL))
-                        ? { targetCL: Number(targetCL) }
-                        : {};
-                const syncResult = await syncEmployeeCLFromPolicy(
-                    emp,
-                    settings,
-                    effectiveDate,
-                    { ...clSyncOptions, ...clOpts }
-                );
+                const syncResult = await syncEmployeeCLFromPolicy(emp, settings, effectiveDate, clSyncOptions);
                 if (!syncResult.success) {
                     throw new Error(syncResult.error || 'CL sync failed');
                 }
-
-                for (const t of [
-                    { type: 'EL', value: targetEL },
-                    { type: 'CCL', value: targetCCL },
-                ]) {
-                    if (t.value == null || t.value === '') continue;
-                    const num = Number(t.value);
-                    if (!Number.isFinite(num) || num < 0) {
-                        throw new Error(`Invalid ${t.type} target value for employee ${employeeId}`);
-                    }
-                    await leaveRegisterService.addAdjustment(employeeId, t.type, num, adjReason);
-                }
-
                 results.successCount++;
                 results.details.push({
-                    employeeId,
+                    employeeId: emp._id,
                     success: true,
                     newBalance: syncResult.newBalance,
                     policyOpening: syncResult.policyOpening,
                 });
             } catch (e) {
-                results.errors.push({ employeeId, error: e.message });
-                results.details.push({ employeeId, success: false, error: e.message });
+                results.errors.push({ employeeId: emp._id, error: e.message });
+                results.details.push({ employeeId: emp._id, success: false, error: e.message });
             } finally {
                 results.processed++;
             }
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: `Initial sync apply completed: ${results.successCount}/${results.processed} employees processed`,
+            message: `Initial sync (all active): ${results.successCount}/${results.processed} employees processed`,
             data: results,
         });
     } catch (error) {

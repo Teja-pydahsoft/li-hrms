@@ -1089,8 +1089,6 @@ exports.updateLeave = async (req, res) => {
       }
     }
 
-    await leave.save();
-
     const capAffectingFields = new Set([
       'leaveType',
       'fromDate',
@@ -1100,6 +1098,28 @@ exports.updateLeave = async (req, res) => {
       'status',
     ]);
     const affectsMonthlyApply = changes.some((c) => capAffectingFields.has(c.field));
+
+    const monthlyApplicationCapService = require('../services/monthlyApplicationCapService');
+    if (
+      affectsMonthlyApply &&
+      monthlyApplicationCapService.CAP_COUNT_STATUSES.includes(String(leave.status))
+    ) {
+      const capCheck = await monthlyApplicationCapService.assertWithinMonthlyApplicationCap(
+        leave.employeeId,
+        leave.fromDate,
+        leave.leaveType,
+        leave.numberOfDays,
+        { excludeLeaveId: leave._id }
+      );
+      if (!capCheck.ok) {
+        return res.status(400).json({
+          success: false,
+          error: capCheck.error,
+        });
+      }
+    }
+
+    await leave.save();
 
     if (affectsMonthlyApply) {
       try {

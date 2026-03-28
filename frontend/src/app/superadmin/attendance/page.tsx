@@ -12,6 +12,7 @@ import { toast } from 'react-toastify';
 import { format, parseISO } from 'date-fns';
 import { alertSuccess, alertError, alertConfirm, alertLoading } from '@/lib/customSwal';
 import * as XLSX from 'xlsx-js-style';
+import { ArrowLeftIcon, ArrowRightIcon } from 'lucide-react';
 
 interface AttendanceRecord {
   date: string;
@@ -194,6 +195,14 @@ interface Designation {
 }
 
 export default function AttendancePage() {
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollAttendanceTable = (direction: 'left' | 'right') => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    const amount = Math.max(320, Math.floor(el.clientWidth * 0.7));
+    el.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
+  };
+
   const [tableType, setTableType] = useState<'complete' | 'present_absent' | 'in_out' | 'leaves' | 'od' | 'ot'>('complete');
   const [orgCompleteSummaryColumns, setOrgCompleteSummaryColumns] = useState<
     Record<SuperadminCompleteAggregateKey, boolean>
@@ -2307,12 +2316,30 @@ export default function AttendancePage() {
 
 
         {/* Attendance Table */}
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 shadow-sm relative">
+        <div className="mb-2 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => scrollAttendanceTable('left')}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+            title="Scroll table left"
+          >
+            <ArrowLeftIcon className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollAttendanceTable('right')}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+            title="Scroll table right"
+          >
+            <ArrowRightIcon className="w-4 h-4" />
+          </button>
+        </div>
+        <div ref={tableScrollRef} className="max-h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 shadow-sm relative">
           <table className="w-full text-xs box-border">
             {/* Table Header */}
             <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0 z-20">
               <tr className="border-b border-slate-200 dark:border-slate-700 w-full">
-                <th className="sticky left-0 z-30 border-r border-slate-200 bg-slate-100 px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 w-[200px] min-w-[200px]">
+                <th className="sticky left-0 top-0 z-30 border-r border-slate-200 bg-slate-100 px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 w-[200px] min-w-[200px]">
                   Employee
                 </th>
                 {daysArray.map((dateStr) => {
@@ -2322,7 +2349,7 @@ export default function AttendancePage() {
                   return (
                     <th
                       key={dateStr}
-                      className="border-r border-slate-200 bg-slate-50 px-1 py-2 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 w-[35px] min-w-[35px]"
+                      className="sticky top-0 z-20 border-r border-slate-200 bg-slate-50 px-1 py-2 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 w-[35px] min-w-[35px]"
                     >
                       <div className="text-[10px] font-bold">{dayNum}</div>
                       <div className="text-[8px] font-medium uppercase tracking-tighter opacity-70">{dayName}</div>

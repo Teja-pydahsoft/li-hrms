@@ -1,6 +1,7 @@
 /**
- * Leave policy: combined application cap per payroll period (CL + CCL + optional EL).
- * EL counts toward the cap only when policy.includeEL is true and earnedLeave.useAsPaidInPayroll is false.
+ * Leave policy: per–leave-type application caps per payroll period (maxDaysByType / legacy CL maxDays).
+ * Scheduled pool (register) may include CL + CCL + optional EL for consumption reporting — no combined policy maxDays.
+ * EL counts toward the scheduled pool only when policy.includeEL is true and earnedLeave.useAsPaidInPayroll is false.
  */
 
 const Leave = require('../model/Leave');
@@ -40,6 +41,12 @@ function getConfiguredMonthlyTypeCap(policy, leaveType) {
     if (Number.isFinite(old) && old >= 0) return old;
   }
   return 0;
+}
+
+/** True when this leave type has a positive per-period cap from maxDaysByType (or legacy CL maxDays). */
+function isPerTypeMonthlyCapActive(policy, leaveType) {
+  const c = getConfiguredMonthlyTypeCap(policy, leaveType);
+  return Number.isFinite(c) && c > 0;
 }
 
 function parseFromDateForPeriod(fromDate) {
@@ -88,8 +95,8 @@ function countedDaysForLeave(leave, policy) {
 }
 
 /**
- * Scheduled credits pool for the payroll period: CL + CCL + EL (EL only when it counts toward monthly cap).
- * If policy monthly cap is enabled → min(pool, maxDays); otherwise → pool (register-only ceiling).
+ * Whether scheduled EL credits count in the register’s CL+CCL+EL pool total (consumption reporting).
+ * Per-type apply limits use maxDaysByType regardless.
  */
 function elCountsTowardMonthlyPool(policy) {
   const capCfg = policy?.monthlyLeaveApplicationCap;
@@ -196,26 +203,16 @@ function computeScheduledPoolApplyCeiling(scheduled, policy) {
   const cl = Number(scheduled.clCredits) || 0;
   const cco = Number(scheduled.compensatoryOffs) || 0;
   const el = Number(scheduled.elCredits) || 0;
-  const capCfg = policy?.monthlyLeaveApplicationCap;
   const elInPool = elCountsTowardMonthlyPool(policy);
   const pool = cl + cco + (elInPool ? el : 0);
-  const policyCapEnabled = !!capCfg?.enabled;
-  const maxDays = Number(capCfg?.maxDays);
-  const policyCapActive = policyCapEnabled && Number.isFinite(maxDays) && maxDays > 0;
-  if (policyCapActive) return Math.min(pool, maxDays);
   return pool;
 }
 
 /**
- * Effective days employee may apply in this payroll period (same rules as register UI):
- * min(scheduled pool, policy cap) when year slot applies; else policy maxDays if cap on; else null (no pooled ceiling).
+ * Scheduled CL+CCL[+EL] pool for this payroll period (register slot), for reporting / UI only.
+ * Per-type apply limits are enforced separately via maxDaysByType.
  */
 async function resolvePooledMonthlyApplyCeiling(employeeId, fromDate, policy) {
-  const capCfg = policy?.monthlyLeaveApplicationCap;
-  const policyCapEnabled = !!capCfg?.enabled;
-  const maxDays = Number(capCfg?.maxDays);
-  const policyCapActive = policyCapEnabled && Number.isFinite(maxDays) && maxDays > 0;
-
   const fromForPeriod = parseFromDateForPeriod(fromDate);
   const periodInfo = await dateCycleService.getPeriodInfo(fromForPeriod);
   const pc = periodInfo.payrollCycle;
@@ -227,9 +224,6 @@ async function resolvePooledMonthlyApplyCeiling(employeeId, fromDate, policy) {
       Number(m.payrollCycleYear) === Number(pc.year)
   );
 
-  // Enforce scheduled pooled ceiling even for future payroll periods.
-  // Otherwise, UI can show "0 left" (stored ceiling/consumption) while backend allows apply
-  // just because the period hasn't started yet.
   if (slot?.payPeriodStart) {
     const scheduled = {
       clCredits: slot.clCredits,
@@ -240,7 +234,6 @@ async function resolvePooledMonthlyApplyCeiling(employeeId, fromDate, policy) {
     if (c != null && Number.isFinite(c)) return Math.max(0, c);
   }
 
-  if (policyCapActive) return maxDays;
   return null;
 }
 
@@ -265,46 +258,51 @@ async function getRegisterClApplicationCap(employeeId, fromDate, policy) {
 }
 
 /**
+ * @param {object} [options]
+ * @param {import('mongoose').Types.ObjectId|string} [options.excludeLeaveId] — omit this leave when summing (e.g. edit in place).
  * @returns {{ ok: true } | { ok: false, error: string }}
  */
-async function assertWithinMonthlyApplicationCap(employeeId, fromDate, leaveType, numberOfDays) {
+async function assertWithinMonthlyApplicationCap(employeeId, fromDate, leaveType, numberOfDays, options = {}) {
+  const excludeLeaveId = options.excludeLeaveId;
   const policy = await LeavePolicySettings.getSettings();
   const requestedType = String(leaveType || '').toUpperCase();
-  const capEnabled = !!policy?.monthlyLeaveApplicationCap?.enabled;
   const typeCap = getConfiguredMonthlyTypeCap(policy, requestedType);
+  const perTypeCapActive = Number.isFinite(typeCap) && typeCap > 0;
 
   const fromForPeriod = parseFromDateForPeriod(fromDate);
   const periodInfo = await dateCycleService.getPeriodInfo(fromForPeriod);
   const start = periodInfo.payrollCycle.startDate;
   const end = periodInfo.payrollCycle.endDate;
 
-  const existing = await Leave.find({
+  const overlapLeavesQuery = {
     employeeId,
     isActive: true,
     status: { $in: CAP_COUNT_STATUSES },
-    fromDate: { $gte: start, $lte: end },
-  })
-    .select('leaveType numberOfDays splitStatus')
-    .lean();
+    fromDate: { $lte: end },
+    toDate: { $gte: start },
+  };
 
-  const add = countedDaysForLeave({ leaveType, numberOfDays }, policy);
-  if (add <= 0) return { ok: true };
-  // Cap toggle off => no cap enforcement.
-  if (!capEnabled) return { ok: true };
-  // Cap toggle on => exact configured value applies (including 0).
-  if (!Number.isFinite(typeCap) || typeCap < 0) return { ok: true };
+  const addForPerType = Math.max(0, Number(numberOfDays) || 0);
 
-  let usedTowardTypeCap = 0;
-  for (const row of existing) {
-    usedTowardTypeCap += await sumLeaveTypeDaysForLeaveInPeriod(row, requestedType, start, end);
+  if (perTypeCapActive && addForPerType > 0) {
+    const existing = await Leave.find(overlapLeavesQuery)
+      .select('leaveType numberOfDays splitStatus fromDate toDate')
+      .lean();
+
+    let usedTowardTypeCap = 0;
+    for (const row of existing) {
+      if (excludeLeaveId && String(row._id) === String(excludeLeaveId)) continue;
+      usedTowardTypeCap += await sumLeaveTypeDaysForLeaveInPeriod(row, requestedType, start, end);
+    }
+
+    if (usedTowardTypeCap + addForPerType > typeCap) {
+      return {
+        ok: false,
+        error: `${requestedType} payroll-period cap is ${typeCap} day(s). ${requestedType} days already counting (pending + approved): ${usedTowardTypeCap}; this request: ${addForPerType}.`,
+      };
+    }
   }
 
-  if (usedTowardTypeCap + add > typeCap) {
-    return {
-      ok: false,
-      error: `${requestedType} payroll-period cap is ${typeCap} day(s). ${requestedType} days already counting (pending + approved): ${usedTowardTypeCap}; this request: ${add}.`,
-    };
-  }
   return { ok: true };
 }
 
@@ -397,26 +395,30 @@ async function addLeaveCapToMonthlyBuckets(leave, policy, monthPayrollWindows, p
         { leaveType: s.leaveType, numberOfDays: s.numberOfDays },
         policy
       );
-      if (capDays <= 0) continue;
+      const perTypeDays = Math.max(0, Number(s.numberOfDays) || 0);
+      const lt = String(s.leaveType || '').toUpperCase();
+      if (capDays <= 0 && !(lt === 'EL' && perTypeDays > 0)) continue;
       const splitMs = new Date(s.date).getTime();
       for (const w of monthPayrollWindows) {
         const startMs = w.start.getTime();
         const endMs = w.end.getTime();
         if (splitMs >= startMs && splitMs <= endMs) {
-          contributions.push({ key: w.key, capDays, leaveType: s.leaveType });
+          contributions.push({ key: w.key, capDays, perTypeDays, leaveType: s.leaveType });
           break;
         }
       }
     }
   } else {
     const capDays = countedDaysForLeave(leave, policy);
-    if (capDays <= 0) return;
+    const perTypeDays = Math.max(0, Number(leave.numberOfDays) || 0);
+    const lt = String(leave.leaveType || '').toUpperCase();
+    if (capDays <= 0 && !(lt === 'EL' && perTypeDays > 0)) return;
     const leaveFromMs = new Date(leave.fromDate).getTime();
     for (const w of monthPayrollWindows) {
       const startMs = w.start.getTime();
       const endMs = w.end.getTime();
       if (leaveFromMs >= startMs && leaveFromMs <= endMs) {
-        contributions.push({ key: w.key, capDays, leaveType: leave.leaveType });
+        contributions.push({ key: w.key, capDays, perTypeDays, leaveType: leave.leaveType });
         break;
       }
     }
@@ -426,14 +428,22 @@ async function addLeaveCapToMonthlyBuckets(leave, policy, monthPayrollWindows, p
     const b = pendingByMonthKey[c.key];
     if (!b) continue;
     b.capConsumedDays += c.capDays;
-    if (isApproved) b.capApprovedDays += c.capDays;
-    else {
+    const dType = Number.isFinite(Number(c.perTypeDays))
+      ? Math.max(0, Number(c.perTypeDays))
+      : Math.max(0, Number(c.capDays) || 0);
+    if (isApproved) {
+      b.capApprovedDays += c.capDays;
+      const ua = String(c.leaveType || '').toUpperCase();
+      if (ua === 'CL') b.approvedClCapDays = (Number(b.approvedClCapDays) || 0) + dType;
+      else if (ua === 'CCL') b.approvedCclCapDays = (Number(b.approvedCclCapDays) || 0) + dType;
+      else if (ua === 'EL') b.approvedElCapDays = (Number(b.approvedElCapDays) || 0) + dType;
+    } else {
       b.capLockedDays += c.capDays;
       b.pendingCapDaysInFlight += c.capDays;
       const u = String(c.leaveType || '').toUpperCase();
-      if (u === 'CL') b.lockedClAppDays = (Number(b.lockedClAppDays) || 0) + c.capDays;
-      else if (u === 'CCL') b.lockedCclAppDays = (Number(b.lockedCclAppDays) || 0) + c.capDays;
-      else if (u === 'EL') b.lockedElAppDays = (Number(b.lockedElAppDays) || 0) + c.capDays;
+      if (u === 'CL') b.lockedClAppDays = (Number(b.lockedClAppDays) || 0) + dType;
+      else if (u === 'CCL') b.lockedCclAppDays = (Number(b.lockedCclAppDays) || 0) + dType;
+      else if (u === 'EL') b.lockedElAppDays = (Number(b.lockedElAppDays) || 0) + dType;
     }
   }
 }
@@ -451,5 +461,6 @@ module.exports = {
   CAP_COUNT_STATUSES,
   PENDING_PIPELINE_STATUSES,
   getConfiguredMonthlyTypeCap,
+  isPerTypeMonthlyCapActive,
   sumLeaveTypeDaysForLeaveInPeriod,
 };

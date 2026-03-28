@@ -1521,15 +1521,33 @@ export default function LeavesPage() {
           setIsELIncluded(false);
           return;
         }
-        const selectedType = d.selectedType || {};
-        const ceiling = selectedType.capEnabled ? Number(selectedType.cap ?? 0) : null;
-        const remaining =
-          selectedType.remaining != null ? Number(selectedType.remaining) : null;
+        const lt = selectedLeaveTypeUpper;
+        const pooledRem =
+          d.monthlyApplyRemaining != null ? Number(d.monthlyApplyRemaining) : null;
+        const typeRem =
+          d.selectedType?.remaining != null ? Number(d.selectedType.remaining) : null;
+        const pooledApplies =
+          lt === 'CL' || lt === 'CCL' || (lt === 'EL' && !!d.includeELInMonthlyPool);
+        let effectiveRemaining: number | null = null;
+        if (typeRem != null) effectiveRemaining = typeRem;
+        if (pooledApplies && pooledRem != null) {
+          effectiveRemaining =
+            effectiveRemaining != null ? Math.min(effectiveRemaining, pooledRem) : pooledRem;
+        }
+        let fyBal: number | null = null;
+        if (lt === 'CL' && d.balances?.cl != null) fyBal = Number(d.balances.cl);
+        else if (lt === 'CCL' && d.balances?.ccl != null) fyBal = Number(d.balances.ccl);
+        else if (lt === 'EL' && d.balances?.el != null) fyBal = Number(d.balances.el);
+        if (fyBal != null && Number.isFinite(fyBal)) {
+          effectiveRemaining =
+            effectiveRemaining != null ? Math.min(effectiveRemaining, fyBal) : fyBal;
+        }
+        const ceiling = d.monthlyApplyCeiling != null ? Number(d.monthlyApplyCeiling) : null;
         setClMonthlyCap(ceiling);
         setPooledLimit(ceiling);
-        setClBalanceForMonth(remaining);
+        setClBalanceForMonth(effectiveRemaining);
         setPendingDaysInCycle(
-          selectedType.locked != null ? Number(selectedType.locked) : null
+          d.monthlyApplyLocked != null ? Number(d.monthlyApplyLocked) : null
         );
         setCclBalance(d.balances?.ccl != null ? Number(d.balances.ccl) : null);
         setElBalance(
@@ -2851,8 +2869,8 @@ export default function LeavesPage() {
                         Monthly apply limit
                       </h3>
                       <p className="mt-0.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400 max-w-xl">
-                        Days this employee can still book in this payroll period for selected type ({selectedLeaveTypeUpper}).
-                        Pending and approved requests count.
+                        Days still allowed for {selectedLeaveTypeUpper} this payroll period (per-type monthly cap and FY
+                        balance). Pending and approved requests count.
                       </p>
                     </div>
                     {clBalanceLoading && <Loader2 className="w-4 h-4 shrink-0 animate-spin text-blue-500 mt-0.5" />}
@@ -2877,14 +2895,14 @@ export default function LeavesPage() {
                       <>
                         {(() => {
                           const remaining = Number(clBalanceForMonth);
-                          const selectedType = applyPeriodContext?.selectedType || {};
-                          const ceiling = Number(clMonthlyCap ?? selectedType?.cap ?? 0);
-                          const locked = Number(selectedType?.locked ?? 0);
-                          const approved = Number(selectedType?.approved ?? 0);
+                          const st = applyPeriodContext?.selectedType;
+                          const capForBar =
+                            st?.cap != null && Number(st.cap) > 0 ? Number(st.cap) : Number(clMonthlyCap ?? 0);
+                          const ceiling = capForBar;
+                          const locked = Number(st?.locked ?? 0);
+                          const approved = Number(st?.approved ?? 0);
                           const consumed =
-                            selectedType?.consumed != null
-                              ? Number(selectedType.consumed)
-                              : locked + approved;
+                            st?.consumed != null ? Number(st.consumed) : locked + approved;
                           const pct = ceiling > 0 ? Math.min(100, Math.round((consumed / ceiling) * 100)) : 0;
                           const depleted = remaining <= 0;
                           return (
@@ -2926,7 +2944,7 @@ export default function LeavesPage() {
                                     aria-valuenow={pct}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
-                                    aria-label="Share of monthly apply cap used"
+                                    aria-label="Share of per-type monthly apply cap used"
                                   >
                                     <div
                                       className={`h-full rounded-full transition-all ${depleted ? 'bg-rose-500' : 'bg-blue-500'} dark:bg-blue-400`}
@@ -2964,11 +2982,19 @@ export default function LeavesPage() {
                                 </dd>
                               </div>
                               <div className="flex justify-between gap-2 pt-1 border-t border-slate-200/80 dark:border-slate-700">
-                                <dt className="text-slate-600 dark:text-slate-300 font-semibold">Apply cap</dt>
+                                <dt className="text-slate-600 dark:text-slate-300 font-semibold">Pool total (credits)</dt>
                                 <dd className="font-black tabular-nums text-slate-900 dark:text-white">
-                                  {clMonthlyCap ?? applyPeriodContext?.selectedType?.cap ?? 0}
+                                  {pooledLimit ?? applyPeriodContext?.monthlyApplyCeiling ?? '—'}
                                 </dd>
                               </div>
+                              {(applyPeriodContext?.selectedType?.cap ?? 0) > 0 && (
+                                <div className="flex justify-between gap-2">
+                                  <dt className="text-slate-500 dark:text-slate-400">Per-type policy cap</dt>
+                                  <dd className="font-bold tabular-nums text-slate-900 dark:text-white">
+                                    {applyPeriodContext?.selectedType?.cap}
+                                  </dd>
+                                </div>
+                              )}
                             </dl>
                           </div>
 

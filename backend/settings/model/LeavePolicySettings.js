@@ -30,21 +30,21 @@ const leavePolicySettingsSchema = new mongoose.Schema({
     },
 
     /**
-     * Max days an employee may apply (pending + approved pipeline) in one payroll period,
-     * counting CL + CCL + optionally EL. EL counts only when includeEL is true and EL is not paid in payroll.
+     * Per–leave-type monthly (payroll-period) apply limits: maxDaysByType. Legacy enabled/maxDays are ignored.
+     * includeEL: include EL in scheduled pool totals on the register when EL is not paid in payroll.
      */
     monthlyLeaveApplicationCap: {
         enabled: {
             type: Boolean,
             default: false,
-            description: 'Enforce a combined monthly (payroll-period) application limit'
+            description: '[Legacy] Combined cap — ignored; use maxDaysByType only'
         },
         maxDays: {
             type: Number,
             default: 0,
             min: 0,
             max: 62,
-            description: 'Maximum combined days per payroll period (0 = unlimited when disabled)'
+            description: '[Legacy] Combined max — ignored'
         },
         maxDaysByType: {
             CL: { type: Number, default: 0, min: 0, max: 62 },
@@ -54,12 +54,12 @@ const leavePolicySettingsSchema = new mongoose.Schema({
         includeEL: {
             type: Boolean,
             default: false,
-            description: 'Include EL in cap when useAsPaidInPayroll is false (leave-only EL)'
+            description: 'Include EL in register scheduled-pool total when useAsPaidInPayroll is false'
         },
         /**
          * When not false: CL applications in a payroll period are capped by that period’s scheduled
          * clCredits on LeaveRegisterYear, but only after the period has started (IST). No future-period
-         * credits are implied. Works alongside “Enforce cap” (combined maxDays) — both must pass.
+         * credits are implied.
          */
         clCapFromLeaveRegisterYear: {
             type: Boolean,
@@ -76,6 +76,8 @@ const leavePolicySettingsSchema = new mongoose.Schema({
          * Default edit controls applied to all payroll month slots unless overridden below.
          */
         defaults: {
+            /** Master switch: when false, no month-slot edits (including sync-apply) for that payroll month index. */
+            allowEditMonth: { type: Boolean, default: true },
             allowEditClCredits: { type: Boolean, default: true },
             allowEditCclCredits: { type: Boolean, default: true },
             allowEditElCredits: { type: Boolean, default: true },

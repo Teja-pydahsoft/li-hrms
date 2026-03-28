@@ -317,9 +317,27 @@ function numOrUndef(v) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function gateMonthSlotEditFlags(flags) {
+  if (flags.allowEditMonth === false) {
+    return {
+      allowEditMonth: false,
+      allowEditClCredits: false,
+      allowEditCclCredits: false,
+      allowEditElCredits: false,
+      allowEditPolicyLock: false,
+      allowEditUsedCl: false,
+      allowEditUsedCcl: false,
+      allowEditUsedEl: false,
+      allowCarryUnusedToNextMonth: false,
+    };
+  }
+  return { ...flags, allowEditMonth: flags.allowEditMonth !== false };
+}
+
 function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
   const allow = (v) => v !== false;
   const base = {
+    allowEditMonth: true,
     allowEditClCredits: true,
     allowEditCclCredits: true,
     allowEditElCredits: true,
@@ -333,6 +351,7 @@ function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
   // Backward compatibility with older flat shape.
   const mergedDefaults = {
     ...base,
+    allowEditMonth: allow(cfg.defaults?.allowEditMonth ?? cfg.allowEditMonth),
     allowEditClCredits: allow(cfg.defaults?.allowEditClCredits ?? cfg.allowEditClCredits),
     allowEditCclCredits: allow(cfg.defaults?.allowEditCclCredits ?? cfg.allowEditCclCredits),
     allowEditElCredits: allow(cfg.defaults?.allowEditElCredits ?? cfg.allowEditElCredits),
@@ -349,9 +368,14 @@ function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
     key && cfg?.byPayrollMonthIndex && typeof cfg.byPayrollMonthIndex === 'object'
       ? cfg.byPayrollMonthIndex[key]
       : null;
-  if (!monthOverride || typeof monthOverride !== 'object') return mergedDefaults;
-  return {
+  if (!monthOverride || typeof monthOverride !== 'object') return gateMonthSlotEditFlags(mergedDefaults);
+  const merged = {
     ...mergedDefaults,
+    allowEditMonth: allow(
+      monthOverride.allowEditMonth != null
+        ? monthOverride.allowEditMonth
+        : mergedDefaults.allowEditMonth
+    ),
     allowEditClCredits: allow(
       monthOverride.allowEditClCredits != null
         ? monthOverride.allowEditClCredits
@@ -393,10 +417,20 @@ function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
         : mergedDefaults.allowCarryUnusedToNextMonth
     ),
   };
+  return gateMonthSlotEditFlags(merged);
+}
+
+/** First calendar month (1–12) of FY period 1 — must match DateCycleService FY + settings grid order. */
+function effectiveFyStartMonthForPayrollIndex(policyDoc) {
+  const fy = policyDoc?.financialYear;
+  if (fy && fy.useCalendarYear === true) return 1;
+  const m = Number(fy?.startMonth);
+  if (Number.isFinite(m) && m >= 1 && m <= 12) return m;
+  return 4;
 }
 
 function derivePolicyMonthIndexFromCycleMonth(slot, policyDoc) {
-  const startMonth = Number(policyDoc?.financialYear?.startMonth) || 4; // default Apr
+  const startMonth = effectiveFyStartMonthForPayrollIndex(policyDoc);
   const pcm = Number(slot?.payrollCycleMonth);
   if (!Number.isFinite(pcm) || pcm < 1 || pcm > 12) {
     return Number(slot?.payrollMonthIndex) || 1;
@@ -569,6 +603,11 @@ async function patchMonthSlotScheduledCredits({
   const policy = await LeavePolicySettings.getSettings().catch(() => ({}));
   const policyMonthIndex = derivePolicyMonthIndexFromCycleMonth(slot, policy);
   const editFlags = resolveMonthSlotEditFlags(policy, policyMonthIndex);
+  if (editFlags.allowEditMonth === false) {
+    throw new Error(
+      `Leave register month slot editing is disabled for policy payroll month ${policyMonthIndex} (${pm}/${py}).`
+    );
+  }
   const disallowed = [];
   if (patch.clCredits !== undefined && !editFlags.allowEditClCredits) disallowed.push('clCredits');
   if (patch.compensatoryOffs !== undefined && !editFlags.allowEditCclCredits) disallowed.push('compensatoryOffs');
@@ -908,6 +947,14 @@ async function syncMonthApplyOnly({ employeeId, financialYear, payrollCycleMonth
     (m) => Number(m.payrollCycleMonth) === pm && Number(m.payrollCycleYear) === py
   );
   if (!slot) throw new Error('Payroll month slot not found');
+  const policy = await LeavePolicySettings.getSettings().catch(() => ({}));
+  const policyMonthIndex = derivePolicyMonthIndexFromCycleMonth(slot, policy);
+  const editFlags = resolveMonthSlotEditFlags(policy, policyMonthIndex);
+  if (editFlags.allowEditMonth === false) {
+    throw new Error(
+      `Leave register month maintenance is disabled for policy payroll month ${policyMonthIndex} (${pm}/${py}).`
+    );
+  }
   const anchorDate = slot.payPeriodStart || slot.payPeriodEnd || new Date(py, pm - 1, 15);
   const sync = await leaveRegisterYearMonthlyApplyService.syncStoredMonthApplyFieldsForEmployeeDate(
     employeeId,

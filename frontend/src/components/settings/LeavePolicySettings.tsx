@@ -5,7 +5,16 @@ import { api } from '@/lib/api';
 import { toast } from 'react-toastify';
 import { alertConfirm } from '@/lib/customSwal';
 import { SettingsSkeleton } from './SettingsSkeleton';
-import { Calculator, RefreshCw, Save, AlertTriangle, Calendar, ChevronRight, Clock } from 'lucide-react';
+import {
+    Calculator,
+    RefreshCw,
+    Save,
+    AlertTriangle,
+    Calendar,
+    ChevronRight,
+    Clock,
+    Table2,
+} from 'lucide-react';
 
 interface LeavePolicySettings {
     financialYear: {
@@ -78,7 +87,7 @@ interface LeavePolicySettings {
         updateFrequency: 'daily' | 'weekly' | 'monthly';
         updateDay: number;
     };
-    /** Combined CL + CCL (+ EL when configured) application limit per payroll period */
+    /** Per-type monthly apply limits (maxDaysByType). enabled/maxDays are legacy (ignored). includeEL = EL in register pool. */
     monthlyLeaveApplicationCap: {
         enabled: boolean;
         maxDays: number;
@@ -91,6 +100,7 @@ interface LeavePolicySettings {
     };
     leaveRegisterMonthSlotEdit: {
         defaults: {
+            allowEditMonth: boolean;
             allowEditClCredits: boolean;
             allowEditCclCredits: boolean;
             allowEditElCredits: boolean;
@@ -178,9 +188,45 @@ function sumMonthlyClCredits(tier: { monthlyClCredits?: number[] }): number {
 
 function getPayrollMonthDisplayNames(startMonth: number): string[] {
     const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const s = Math.min(12, Math.max(1, Number(startMonth) || 1));
+    const s = Math.min(12, Math.max(1, Number(startMonth) || 4));
     return Array.from({ length: 12 }, (_, i) => names[(s - 1 + i) % 12]);
 }
+
+/** First calendar month of FY period 1 — same rule as backend effectiveFyStartMonthForPayrollIndex. */
+function effectiveFyStartMonthForPayrollLabels(settings: { financialYear?: { useCalendarYear?: boolean; startMonth?: number } } | null): number {
+    const fy = settings?.financialYear;
+    if (fy?.useCalendarYear) return 1;
+    const m = Number(fy?.startMonth);
+    if (Number.isFinite(m) && m >= 1 && m <= 12) return m;
+    return 4;
+}
+
+type MonthSlotEditDefaults = LeavePolicySettings['leaveRegisterMonthSlotEdit']['defaults'];
+
+function effectiveMonthSlotFlag(
+    defs: Partial<MonthSlotEditDefaults> | undefined,
+    byMonth: Record<string, Partial<MonthSlotEditDefaults>> | undefined,
+    payrollMonthIndex: number,
+    key: keyof MonthSlotEditDefaults
+): boolean {
+    const d = defs || {};
+    const row = byMonth?.[String(payrollMonthIndex)];
+    if (row && row[key] != null) return row[key] !== false;
+    const defVal = d[key];
+    return defVal !== false;
+}
+
+const SLOT_EDIT_TABLE_KEYS: Array<[keyof MonthSlotEditDefaults, string, string, string]> = [
+    ['allowEditMonth', 'Master', 'Turns on all permitted edits & sync for this FY period row.', 'on?'],
+    ['allowEditClCredits', 'CL', 'Scheduled casual leave credits (clCredits).', 'sched.'],
+    ['allowEditCclCredits', 'CCL', 'Scheduled compensatory pool (compensatoryOffs).', 'sched.'],
+    ['allowEditElCredits', 'EL', 'Scheduled earned leave credits (elCredits).', 'sched.'],
+    ['allowEditPolicyLock', 'Lock', 'Policy lock field (lockedCredits).', 'pol.'],
+    ['allowEditUsedCl', 'U·CL', 'Manual used CL override.', 'used'],
+    ['allowEditUsedCcl', 'U·CCL', 'Manual used CCL override.', 'used'],
+    ['allowEditUsedEl', 'U·EL', 'Manual used EL override.', 'used'],
+    ['allowCarryUnusedToNextMonth', 'Carry', 'Carry unused edited pool to next period.', 'pool'],
+];
 
 const LeavePolicySettings = () => {
     const [loading, setLoading] = useState(false);
@@ -192,7 +238,6 @@ const LeavePolicySettings = () => {
     const [initialSyncExpandedEmployeeId, setInitialSyncExpandedEmployeeId] = useState<string | null>(null);
     const [syncPreviewSearch, setSyncPreviewSearch] = useState('');
     const [syncApplyReason, setSyncApplyReason] = useState('');
-    const [slotEditMonthIndex, setSlotEditMonthIndex] = useState<number>(1);
 
     useEffect(() => {
         loadSettings();
@@ -271,6 +316,7 @@ const LeavePolicySettings = () => {
         },
         leaveRegisterMonthSlotEdit: {
             defaults: {
+                allowEditMonth: true,
                 allowEditClCredits: true,
                 allowEditCclCredits: true,
                 allowEditElCredits: true,
@@ -451,37 +497,7 @@ const LeavePolicySettings = () => {
     };
 
     const openInitialSyncPreview = async () => {
-        try {
-            setSyncPreviewLoading(true);
-            const res = await api.previewInitialCLSync({ page: 1, limit: 1000 });
-            if (!res?.success) {
-                toast.error(res?.message || 'Failed to load initial sync preview');
-                return;
-            }
-            const rows = (res?.data?.employees || []) as InitialSyncPreviewRow[];
-            setSyncPreviewRows(
-                rows.map((r) => ({
-                    ...r,
-                    proposedBalances: {
-                        CL: Number(r?.proposedBalances?.CL ?? r?.clCalculation?.defaultPoolBalance ?? 0),
-                        EL: Number(r?.proposedBalances?.EL ?? r?.currentBalances?.EL ?? 0),
-                        CCL: Number(r?.proposedBalances?.CCL ?? r?.currentBalances?.CCL ?? 0),
-                    },
-                }))
-            );
-            setSyncPreviewSearch('');
-            setSyncApplyReason('');
-            setSyncPreviewOpen(true);
-        } catch (e: any) {
-            const msg = String(e?.message || '');
-            if (msg.toLowerCase().includes('not found')) {
-                toast.error('Preview API not available yet. Please restart backend and try again.');
-            } else {
-                toast.error(msg || 'Failed to load preview');
-            }
-        } finally {
-            setSyncPreviewLoading(false);
-        }
+        await applyInitialSyncToAllActive();
     };
 
     const getFilteredInitialSyncPreviewRows = () => {
@@ -494,6 +510,12 @@ const LeavePolicySettings = () => {
                 (r.department || '').toLowerCase().includes(t)
             );
         });
+    };
+
+    const getBalanceDelta = (currentVal: number, proposedVal: number) => {
+        const cur = Number(currentVal || 0);
+        const next = Number(proposedVal || 0);
+        return Math.round((next - cur) * 100) / 100;
     };
 
     const applyInitialSyncToFilteredList = async () => {
@@ -662,138 +684,197 @@ const LeavePolicySettings = () => {
 
                     {/* Leave register month-slot manual edit controls */}
                     <section className="bg-white dark:bg-[#1E293B] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
-                        <div className="px-6 sm:px-8 py-6 border-b border-gray-100 dark:border-gray-800">
-                            <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
-                                Leave register month edit controls
-                            </h3>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                Configure default edit permissions, then override them for a specific payroll month (1–12).
-                            </p>
+                        <div className="px-4 sm:px-8 py-5 sm:py-6 border-b border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+                            <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-gray-200 dark:border-gray-600">
+                                <Table2 className="h-5 w-5" strokeWidth={2} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
+                                    Leave register — month slot edit permissions
+                                </h3>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed max-w-3xl">
+                                    Twelve rows = FY periods <strong>1–12</strong> in the same order as{' '}
+                                    <strong>Financial Year</strong> above: <strong>calendar year</strong> = Jan→Dec;{' '}
+                                    <strong>custom FY</strong> = first period starts at your start month/day. Row <strong>Default</strong>{' '}
+                                    applies when a period has no override. Turn <strong>Master</strong> on first; sub-columns only
+                                    apply when Master is on for that row. Scroll sideways on narrow screens.
+                                </p>
+                            </div>
                         </div>
-                        {(() => {
-                            const defs = settings.leaveRegisterMonthSlotEdit?.defaults || {};
-                            const fyStartMonth = Number(settings?.financialYear?.startMonth) || 1;
-                            const monthNames = getPayrollMonthDisplayNames(fyStartMonth);
-                            const monthKey = String(slotEditMonthIndex);
-                            const byMonth = settings.leaveRegisterMonthSlotEdit?.byPayrollMonthIndex || {};
-                            const overrideObj = (byMonth[monthKey] && typeof byMonth[monthKey] === 'object')
-                                ? byMonth[monthKey]
-                                : {};
-                            const hasOverride = Object.keys(overrideObj).length > 0;
-                            const keys: Array<[keyof LeavePolicySettings['leaveRegisterMonthSlotEdit']['defaults'], string]> = [
-                                ['allowEditClCredits', 'Allow edit: Scheduled CL (clCredits)'],
-                                ['allowEditCclCredits', 'Allow edit: Scheduled CCL (compensatoryOffs)'],
-                                ['allowEditElCredits', 'Allow edit: Scheduled EL (elCredits)'],
-                                ['allowEditPolicyLock', 'Allow edit: Policy lock (lockedCredits)'],
-                                ['allowEditUsedCl', 'Allow edit: Used CL override (usedCl)'],
-                                ['allowEditUsedCcl', 'Allow edit: Used CCL override (usedCcl)'],
-                                ['allowEditUsedEl', 'Allow edit: Used EL override (usedEl)'],
-                                ['allowCarryUnusedToNextMonth', 'Allow action: Carry unused to next month'],
-                            ];
+                        {settings && (() => {
+                            const lr = settings.leaveRegisterMonthSlotEdit || { defaults: {}, byPayrollMonthIndex: {} };
+                            const defs = lr.defaults || {};
+                            const byMonth = lr.byPayrollMonthIndex || {};
+                            const fyStartMonth = effectiveFyStartMonthForPayrollLabels(settings);
+                            const monthLabels = getPayrollMonthDisplayNames(fyStartMonth);
 
-                            const toggleDefault = (k: keyof LeavePolicySettings['leaveRegisterMonthSlotEdit']['defaults']) => {
+                            const toggleDefault = (k: keyof MonthSlotEditDefaults) => {
                                 updateSettings(
                                     `leaveRegisterMonthSlotEdit.defaults.${String(k)}`,
                                     '',
-                                    !(defs?.[k] !== false)
+                                    !(defs[k] !== false)
                                 );
                             };
 
-                            const toggleOverride = (k: keyof LeavePolicySettings['leaveRegisterMonthSlotEdit']['defaults']) => {
-                                const current = overrideObj?.[k];
-                                const nextVal = !(current != null ? current !== false : defs?.[k] !== false);
+                            const toggleMonthOverride = (pi: number, k: keyof MonthSlotEditDefaults) => {
+                                const cur = effectiveMonthSlotFlag(defs, byMonth, pi, k);
+                                const nextVal = !cur;
                                 setSettings((prev: any) => {
-                                    const prevByMonth = prev?.leaveRegisterMonthSlotEdit?.byPayrollMonthIndex || {};
-                                    const nextMonth = { ...(prevByMonth[monthKey] || {}), [k]: nextVal };
+                                    const p = prev?.leaveRegisterMonthSlotEdit || {};
+                                    const prevBy = { ...(p.byPayrollMonthIndex || {}) };
+                                    const key = String(pi);
+                                    prevBy[key] = { ...(prevBy[key] || {}), [k]: nextVal };
                                     return {
                                         ...prev,
                                         leaveRegisterMonthSlotEdit: {
-                                            ...(prev.leaveRegisterMonthSlotEdit || {}),
-                                            byPayrollMonthIndex: {
-                                                ...prevByMonth,
-                                                [monthKey]: nextMonth,
-                                            },
+                                            ...p,
+                                            byPayrollMonthIndex: prevBy,
                                         },
                                     };
                                 });
                             };
 
+                            const clearMonthOverride = (pi: number) => {
+                                setSettings((prev: any) => {
+                                    const p = prev?.leaveRegisterMonthSlotEdit || {};
+                                    const prevBy = { ...(p.byPayrollMonthIndex || {}) };
+                                    delete prevBy[String(pi)];
+                                    return {
+                                        ...prev,
+                                        leaveRegisterMonthSlotEdit: {
+                                            ...p,
+                                            byPayrollMonthIndex: prevBy,
+                                        },
+                                    };
+                                });
+                            };
+
+                            const Toggle = ({
+                                on,
+                                onToggle,
+                                disabled,
+                                ariaLabel,
+                            }: {
+                                on: boolean;
+                                onToggle: () => void;
+                                disabled?: boolean;
+                                ariaLabel: string;
+                            }) => (
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={on}
+                                    aria-label={ariaLabel}
+                                    disabled={disabled}
+                                    onClick={onToggle}
+                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full mx-auto transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 disabled:opacity-35 disabled:cursor-not-allowed ${
+                                        on ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'
+                                    }`}
+                                >
+                                    <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                                            on ? 'translate-x-6' : 'translate-x-1'
+                                        }`}
+                                    />
+                                </button>
+                            );
+
                             return (
-                                <div className="p-6 sm:p-8 space-y-4">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <div className="space-y-1.5">
-                                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400">
-                                                Override payroll month
-                                            </label>
-                                            <select
-                                                value={slotEditMonthIndex}
-                                                onChange={(e) => setSlotEditMonthIndex(Math.max(1, Math.min(12, parseInt(e.target.value, 10) || 1)))}
-                                                className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#0F172A] text-sm font-medium text-gray-900 dark:text-white"
-                                            >
-                                                {Array.from({ length: 12 }).map((_, i) => (
-                                                    <option key={i + 1} value={i + 1}>
-                                                        {monthNames[i]} (Month {i + 1})
-                                                    </option>
+                                <div className="px-0 sm:px-2 pb-5 sm:pb-6">
+                                    <div className="mx-3 sm:mx-6 lg:mx-8 rounded-xl border border-gray-200/90 dark:border-gray-700 bg-gray-50/60 dark:bg-slate-900/50 overflow-hidden shadow-inner">
+                                        <div className="overflow-x-auto overscroll-x-contain [scrollbar-gutter:stable]">
+                                            <table className="w-full min-w-[1000px] text-sm border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-slate-800/95 text-gray-700 dark:text-gray-200">
+                                                <th className="py-3 px-3 text-left font-semibold sticky left-0 z-20 min-w-[10.5rem] max-w-[14rem] bg-gray-100/95 dark:bg-slate-800/98 border-r border-gray-200/80 dark:border-gray-700 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.12)]">
+                                                    Period
+                                                </th>
+                                                {SLOT_EDIT_TABLE_KEYS.map(([k, short, title, sub]) => (
+                                                    <th
+                                                        key={String(k)}
+                                                        className="py-2.5 px-2 text-center align-bottom font-semibold min-w-[4.5rem] max-w-[5rem]"
+                                                        title={title}
+                                                    >
+                                                        <span className="block text-[11px] leading-tight text-gray-800 dark:text-gray-100">
+                                                            {short}
+                                                        </span>
+                                                        <span className="block text-[9px] font-normal text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                                                            {sub}
+                                                        </span>
+                                                    </th>
                                                 ))}
-                                            </select>
-                                        </div>
-                                        <div className="flex items-end">
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    if (!hasOverride) return;
-                                                    setSettings((prev: any) => {
-                                                        const prevByMonth = { ...(prev?.leaveRegisterMonthSlotEdit?.byPayrollMonthIndex || {}) };
-                                                        delete prevByMonth[monthKey];
-                                                        return {
-                                                            ...prev,
-                                                            leaveRegisterMonthSlotEdit: {
-                                                                ...(prev.leaveRegisterMonthSlotEdit || {}),
-                                                                byPayrollMonthIndex: prevByMonth,
-                                                            },
-                                                        };
-                                                    });
-                                                }}
-                                                disabled={!hasOverride}
-                                                className="w-full sm:w-auto px-3 py-2 rounded-lg text-xs font-semibold border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-40"
-                                            >
-                                                Clear override for {monthNames[slotEditMonthIndex - 1]} (Month {slotEditMonthIndex})
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                                        <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-3">
-                                            <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 mb-2">Default (all months)</p>
-                                            <div className="space-y-2">
-                                                {keys.map(([k, label]) => (
-                                                    <div key={`def-${String(k)}`} className="flex items-center justify-between gap-3 p-2 rounded-lg bg-gray-50/60 dark:bg-gray-800/30">
-                                                        <span className="text-xs text-gray-700 dark:text-gray-300">{label}</span>
-                                                        <button type="button" role="switch" aria-checked={defs?.[k] !== false} onClick={() => toggleDefault(k)} className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full ${defs?.[k] !== false ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-700'}`}>
-                                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${defs?.[k] !== false ? 'translate-x-6' : 'translate-x-1'}`} />
-                                                        </button>
-                                                    </div>
+                                                <th className="py-2.5 px-2 text-center font-semibold min-w-[4.75rem] bg-gray-100/90 dark:bg-slate-800/95 border-l border-gray-200/70 dark:border-gray-700">
+                                                    Reset
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50/90 dark:bg-slate-800/50">
+                                                <td className="py-3 px-3 font-semibold text-gray-900 dark:text-gray-100 sticky left-0 z-[11] bg-gray-50 dark:bg-slate-800/95 border-r border-gray-200/90 dark:border-gray-700 shadow-[4px_0_14px_-6px_rgba(0,0,0,0.15)]">
+                                                    Default (fallback)
+                                                </td>
+                                                {SLOT_EDIT_TABLE_KEYS.map(([k]) => (
+                                                    <td
+                                                        key={`def-${String(k)}`}
+                                                        className="py-2.5 px-2 text-center align-middle bg-gray-50/50 dark:bg-slate-800/30"
+                                                    >
+                                                        <Toggle
+                                                            on={defs[k] !== false}
+                                                            ariaLabel={`Default ${String(k)}`}
+                                                            onToggle={() => toggleDefault(k)}
+                                                        />
+                                                    </td>
                                                 ))}
-                                            </div>
-                                        </div>
-
-                                        <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-3">
-                                            <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 mb-2">
-                                                Override: {monthNames[slotEditMonthIndex - 1]} (Month {slotEditMonthIndex})
-                                            </p>
-                                            <div className="space-y-2">
-                                                {keys.map(([k, label]) => {
-                                                    const effective = overrideObj?.[k] != null ? overrideObj[k] !== false : defs?.[k] !== false;
-                                                    return (
-                                                        <div key={`ov-${String(k)}`} className="flex items-center justify-between gap-3 p-2 rounded-lg bg-gray-50/60 dark:bg-gray-800/30">
-                                                            <span className="text-xs text-gray-700 dark:text-gray-300">{label}</span>
-                                                            <button type="button" role="switch" aria-checked={effective} onClick={() => toggleOverride(k)} className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full ${effective ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-700'}`}>
-                                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${effective ? 'translate-x-6' : 'translate-x-1'}`} />
+                                                <td className="py-2.5 px-2 text-center text-gray-400 dark:text-gray-500 text-xs border-l border-gray-200/70 dark:border-gray-700 bg-gray-50/50 dark:bg-slate-800/30">
+                                                    —
+                                                </td>
+                                            </tr>
+                                            {Array.from({ length: 12 }, (_, i) => {
+                                                const pi = i + 1;
+                                                const editOn = effectiveMonthSlotFlag(defs, byMonth, pi, 'allowEditMonth');
+                                                const hasOv = byMonth[String(pi)] && Object.keys(byMonth[String(pi)]).length > 0;
+                                                return (
+                                                    <tr
+                                                        key={pi}
+                                                        className="border-b border-gray-100 dark:border-gray-800/90 odd:bg-white/80 even:bg-gray-50/40 dark:odd:bg-[#1E293B] dark:even:bg-slate-800/20 hover:bg-indigo-50/40 dark:hover:bg-slate-800/40 transition-colors"
+                                                    >
+                                                        <td className="py-2.5 px-3 font-medium text-gray-900 dark:text-gray-100 sticky left-0 z-[11] bg-inherit border-r border-gray-200/80 dark:border-gray-700 shadow-[4px_0_14px_-6px_rgba(0,0,0,0.12)]">
+                                                            <span className="text-sm">{monthLabels[i]}</span>
+                                                            <span className="block text-[11px] text-gray-500 dark:text-gray-400 font-normal mt-0.5">
+                                                                FY period {pi} of 12
+                                                            </span>
+                                                        </td>
+                                                        {SLOT_EDIT_TABLE_KEYS.map(([k]) => {
+                                                            const effective = effectiveMonthSlotFlag(defs, byMonth, pi, k);
+                                                            const subDisabled = k !== 'allowEditMonth' && !editOn;
+                                                            const showOn =
+                                                                k === 'allowEditMonth' ? effective : editOn && effective;
+                                                            return (
+                                                                <td key={`${pi}-${String(k)}`} className="py-2.5 px-2 text-center align-middle">
+                                                                    <Toggle
+                                                                        on={showOn}
+                                                                        disabled={subDisabled}
+                                                                        ariaLabel={`Month ${pi} ${String(k)}`}
+                                                                        onToggle={() => toggleMonthOverride(pi, k)}
+                                                                    />
+                                                                </td>
+                                                            );
+                                                        })}
+                                                        <td className="py-2.5 px-2 text-center border-l border-gray-100 dark:border-gray-800/80">
+                                                            <button
+                                                                type="button"
+                                                                disabled={!hasOv}
+                                                                onClick={() => clearMonthOverride(pi)}
+                                                                className="inline-flex items-center justify-center min-h-[1.75rem] px-2 rounded-md text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50/90 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/60 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-100/80 dark:hover:bg-indigo-900/40"
+                                                            >
+                                                                Clear
                                                             </button>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
                                         </div>
                                     </div>
                                 </div>
@@ -810,71 +891,68 @@ const LeavePolicySettings = () => {
                             <div>
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">Monthly application cap</h3>
                                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                    Set payroll-period cap per leave type. When enforce cap is ON, <strong>0 means zero allowed</strong>.
+                                    Maximum days of each leave type (CL / CCL / EL) that can be <strong>applied</strong> in one payroll
+                                    period (pending + approved). <strong>0</strong> means no per-type limit for that type.
                                 </p>
                             </div>
                         </div>
                         <div className="p-6 sm:p-8 space-y-4">
+                            <div className="space-y-2">
+                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 uppercase tracking-wide">
+                                    Per leave type (payroll period)
+                                </p>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    {(['CL', 'CCL', 'EL'] as const).map((lt) => (
+                                        <div key={lt} className="space-y-1.5">
+                                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400">
+                                                {lt} max apply days (0 = no per-type limit)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={62}
+                                                value={settings.monthlyLeaveApplicationCap?.maxDaysByType?.[lt] ?? 0}
+                                                onChange={(e) =>
+                                                    updateSettings(
+                                                        `monthlyLeaveApplicationCap.maxDaysByType.${lt}`,
+                                                        '',
+                                                        Math.max(0, parseInt(e.target.value, 10) || 0)
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#0F172A] text-sm font-medium text-gray-900 dark:text-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                             <div className="flex items-center justify-between gap-4 p-3 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
-                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Enforce cap</span>
+                                <div>
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Include EL in scheduled pool (register)</span>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                        When on and <strong>Use EL as paid days in payroll</strong> is off, scheduled EL credits count in the
+                                        register&apos;s pooled consumption figure (CL+CCL+EL). Per-type EL apply limits are unchanged.
+                                    </p>
+                                </div>
                                 <button
                                     type="button"
                                     role="switch"
-                                    aria-checked={!!settings.monthlyLeaveApplicationCap?.enabled}
-                                    onClick={() => updateSettings('monthlyLeaveApplicationCap.enabled', '', !settings.monthlyLeaveApplicationCap?.enabled)}
-                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${settings.monthlyLeaveApplicationCap?.enabled ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}`}
+                                    aria-checked={!!settings.monthlyLeaveApplicationCap?.includeEL}
+                                    disabled={settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled}
+                                    onClick={() => {
+                                        if (settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled) return;
+                                        updateSettings(
+                                            'monthlyLeaveApplicationCap.includeEL',
+                                            '',
+                                            !settings.monthlyLeaveApplicationCap?.includeEL
+                                        );
+                                    }}
+                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${settings.monthlyLeaveApplicationCap?.includeEL ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} ${settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled ? 'opacity-40 cursor-not-allowed' : ''}`}
                                 >
-                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${settings.monthlyLeaveApplicationCap?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                    <span
+                                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${settings.monthlyLeaveApplicationCap?.includeEL ? 'translate-x-6' : 'translate-x-1'}`}
+                                    />
                                 </button>
                             </div>
-                            {settings.monthlyLeaveApplicationCap?.enabled && (
-                                <>
-                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                        {(['CL', 'CCL', 'EL'] as const).map((lt) => (
-                                            <div key={lt} className="space-y-1.5">
-                                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400">
-                                                    {lt} cap (0 = zero when enforce cap ON)
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    max={62}
-                                                    value={settings.monthlyLeaveApplicationCap?.maxDaysByType?.[lt] ?? 0}
-                                                    onChange={(e) =>
-                                                        updateSettings(
-                                                            `monthlyLeaveApplicationCap.maxDaysByType.${lt}`,
-                                                            '',
-                                                            Math.max(0, parseInt(e.target.value, 10) || 0)
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#0F172A] text-sm font-medium text-gray-900 dark:text-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                                                />
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="flex items-center justify-between gap-4 p-3 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
-                                        <div>
-                                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Include EL in cap</span>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                                Applies only when <strong>Use EL as paid days in payroll</strong> is off. When EL is paid in payroll, it never counts toward this cap.
-                                            </p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            role="switch"
-                                            aria-checked={!!settings.monthlyLeaveApplicationCap?.includeEL}
-                                            disabled={settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled}
-                                            onClick={() => {
-                                                if (settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled) return;
-                                                updateSettings('monthlyLeaveApplicationCap.includeEL', '', !settings.monthlyLeaveApplicationCap?.includeEL);
-                                            }}
-                                            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${settings.monthlyLeaveApplicationCap?.includeEL ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'} ${settings.earnedLeave?.useAsPaidInPayroll !== false || !settings.earnedLeave?.enabled ? 'opacity-40 cursor-not-allowed' : ''}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${settings.monthlyLeaveApplicationCap?.includeEL ? 'translate-x-6' : 'translate-x-1'}`} />
-                                        </button>
-                                    </div>
-                                </>
-                            )}
                         </div>
                     </section>
 
@@ -1383,7 +1461,7 @@ const LeavePolicySettings = () => {
                                     }} className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">+ Add experience tier</button>
                                 </div>
                                 <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                                    <p className="text-xs text-amber-800 dark:text-amber-200">Reset runs at configured month/day. Entitlement = default or experience tier; then + carry forward if enabled. Use preview before running.</p>
+                                    <p className="text-xs text-amber-800 dark:text-amber-200">Reset runs at configured month/day. Entitlement = default or experience tier; then + carry forward if enabled.</p>
                                 </div>
                             </div>
                         )}
@@ -1399,7 +1477,7 @@ const LeavePolicySettings = () => {
                                     disabled={saving || syncPreviewLoading}
                                     className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl shadow-sm transition-colors"
                                 >
-                                    {syncPreviewLoading ? 'Preparing preview...' : 'Apply initial CL from policy'}
+                                    {saving ? 'Applying...' : 'Apply initial CL from policy'}
                                 </button>
                             </div>
                         </div>
@@ -1507,10 +1585,13 @@ const LeavePolicySettings = () => {
                                         <th className="py-2 pr-2">Policy CL</th>
                                         <th className="py-2 pr-2">Carry</th>
                                         <th className="py-2 pr-2">Target CL</th>
+                                        <th className="py-2 pr-2">CL Apply</th>
                                         <th className="py-2 pr-2">Current EL</th>
                                         <th className="py-2 pr-2">Target EL</th>
+                                        <th className="py-2 pr-2">EL Apply</th>
                                         <th className="py-2 pr-2">Current CCL</th>
                                         <th className="py-2 pr-2">Target CCL</th>
+                                        <th className="py-2 pr-2">CCL Apply</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1575,6 +1656,19 @@ const LeavePolicySettings = () => {
                                                         className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
                                                     />
                                                 </td>
+                                                <td className="py-2 pr-2 font-mono tabular-nums">
+                                                    {(() => {
+                                                        const delta = getBalanceDelta(row.currentBalances?.CL || 0, row.proposedBalances.CL || 0);
+                                                        const cls =
+                                                            delta > 0
+                                                                ? 'text-emerald-700 dark:text-emerald-400'
+                                                                : delta < 0
+                                                                    ? 'text-red-700 dark:text-red-400'
+                                                                    : 'text-gray-500 dark:text-gray-400';
+                                                        const sign = delta > 0 ? '+' : '';
+                                                        return <span className={cls}>{sign}{delta}</span>;
+                                                    })()}
+                                                </td>
                                                 <td className="py-2 pr-2">{Number(row.currentBalances?.EL || 0)}</td>
                                                 <td className="py-2 pr-2" onClick={(e) => e.stopPropagation()}>
                                                     <input
@@ -1593,6 +1687,19 @@ const LeavePolicySettings = () => {
                                                         }}
                                                         className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
                                                     />
+                                                </td>
+                                                <td className="py-2 pr-2 font-mono tabular-nums">
+                                                    {(() => {
+                                                        const delta = getBalanceDelta(row.currentBalances?.EL || 0, row.proposedBalances.EL || 0);
+                                                        const cls =
+                                                            delta > 0
+                                                                ? 'text-emerald-700 dark:text-emerald-400'
+                                                                : delta < 0
+                                                                    ? 'text-red-700 dark:text-red-400'
+                                                                    : 'text-gray-500 dark:text-gray-400';
+                                                        const sign = delta > 0 ? '+' : '';
+                                                        return <span className={cls}>{sign}{delta}</span>;
+                                                    })()}
                                                 </td>
                                                 <td className="py-2 pr-2">{Number(row.currentBalances?.CCL || 0)}</td>
                                                 <td className="py-2 pr-2" onClick={(e) => e.stopPropagation()}>
@@ -1613,12 +1720,25 @@ const LeavePolicySettings = () => {
                                                         className="w-24 px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-[#0F172A]"
                                                     />
                                                 </td>
+                                                <td className="py-2 pr-2 font-mono tabular-nums">
+                                                    {(() => {
+                                                        const delta = getBalanceDelta(row.currentBalances?.CCL || 0, row.proposedBalances.CCL || 0);
+                                                        const cls =
+                                                            delta > 0
+                                                                ? 'text-emerald-700 dark:text-emerald-400'
+                                                                : delta < 0
+                                                                    ? 'text-red-700 dark:text-red-400'
+                                                                    : 'text-gray-500 dark:text-gray-400';
+                                                        const sign = delta > 0 ? '+' : '';
+                                                        return <span className={cls}>{sign}{delta}</span>;
+                                                    })()}
+                                                </td>
                                             </tr>
                                             {initialSyncExpandedEmployeeId === row.employeeId &&
                                                 row.monthlyClBreakdown &&
                                                 row.monthlyClBreakdown.length > 0 && (
                                                     <tr className="border-b border-gray-100 dark:border-gray-800 bg-slate-50/90 dark:bg-slate-900/50">
-                                                        <td colSpan={9} className="px-4 py-3 align-top">
+                                                        <td colSpan={12} className="px-4 py-3 align-top">
                                                             <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">
                                                                 CL by payroll month (LeaveRegisterYear slots)
                                                             </div>

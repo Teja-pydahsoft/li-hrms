@@ -1672,6 +1672,7 @@ export default function LeavesPage() {
       try {
         const res = await api.getLeaveApplyPeriodContext({
           fromDate: formData.fromDate,
+          leaveType: 'CL',
           ...(hasValidEmployeeId ? { employeeId: String(targetEmployeeId) } : {}),
         });
         if (cancelled) return;
@@ -1694,12 +1695,22 @@ export default function LeavesPage() {
           setIsELIncluded(false);
           return;
         }
-        const ceiling = d.monthlyApplyCeiling != null ? Number(d.monthlyApplyCeiling) : null;
-        const remaining =
-          d.monthlyApplyRemaining != null ? Number(d.monthlyApplyRemaining) : null;
-        setClMonthlyCap(ceiling);
-        setPooledLimit(ceiling);
-        setClBalanceForMonth(remaining);
+        const typeRem =
+          d.selectedType?.remaining != null ? Number(d.selectedType.remaining) : null;
+        let effectiveRemaining: number | null = null;
+        if (typeRem != null) effectiveRemaining = typeRem;
+        const fyCl = d.balances?.cl != null ? Number(d.balances.cl) : null;
+        if (fyCl != null && Number.isFinite(fyCl)) {
+          effectiveRemaining =
+            effectiveRemaining != null ? Math.min(effectiveRemaining, fyCl) : fyCl;
+        }
+        const typeCapUi =
+          d.selectedType?.cap != null && Number(d.selectedType.cap) > 0
+            ? Number(d.selectedType.cap)
+            : null;
+        setClMonthlyCap(typeCapUi);
+        setPooledLimit(d.monthlyApplyCeiling != null ? Number(d.monthlyApplyCeiling) : null);
+        setClBalanceForMonth(effectiveRemaining);
         setPendingDaysInCycle(
           d.monthlyApplyLocked != null ? Number(d.monthlyApplyLocked) : null
         );
@@ -1760,6 +1771,7 @@ export default function LeavesPage() {
         const res = await api.getLeaveApplyPeriodContext({
           fromDate: editFormData.fromDate,
           employeeId: String(empId),
+          leaveType: 'CL',
         });
         if (cancelled) return;
         setEditClApplyContext(res?.success && res.data ? res.data : null);
@@ -3978,7 +3990,8 @@ export default function LeavesPage() {
                           Monthly apply limit
                         </h3>
                         <p className="mt-0.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400 max-w-xl">
-                          Days you can still book in this payroll period toward CL (and pooled cap). Pending and approved requests count.
+                          Days you can still book as CL this payroll period (per-type monthly cap and FY balance). Pending and approved
+                          count toward the cap.
                         </p>
                       </div>
                       {clBalanceLoading && <Loader2 className="w-4 h-4 shrink-0 animate-spin text-blue-500 mt-0.5" />}
@@ -4004,15 +4017,14 @@ export default function LeavesPage() {
                         <>
                           {(() => {
                             const remaining = Number(clBalanceForMonth);
-                            const ceiling = Number(
-                              clMonthlyCap ?? applyPeriodContext?.monthlyApplyCeiling ?? 0
-                            );
-                            const locked = Number(applyPeriodContext?.monthlyApplyLocked ?? 0);
-                            const approved = Number(applyPeriodContext?.monthlyApplyApproved ?? 0);
+                            const st = applyPeriodContext?.selectedType;
+                            const capForBar =
+                              st?.cap != null && Number(st.cap) > 0 ? Number(st.cap) : Number(clMonthlyCap ?? 0);
+                            const ceiling = capForBar;
+                            const locked = Number(st?.locked ?? 0);
+                            const approved = Number(st?.approved ?? 0);
                             const consumed =
-                              applyPeriodContext?.monthlyApplyConsumed != null
-                                ? Number(applyPeriodContext.monthlyApplyConsumed)
-                                : locked + approved;
+                              st?.consumed != null ? Number(st.consumed) : locked + approved;
                             const pct =
                               ceiling > 0 ? Math.min(100, Math.round((consumed / ceiling) * 100)) : 0;
                             const depleted = remaining <= 0;
@@ -4055,7 +4067,7 @@ export default function LeavesPage() {
                                       aria-valuenow={pct}
                                       aria-valuemin={0}
                                       aria-valuemax={100}
-                                      aria-label="Share of monthly apply cap used"
+                                      aria-label="Share of CL per-type monthly cap used"
                                     >
                                       <div
                                         className={`h-full rounded-full transition-all ${depleted ? 'bg-rose-500' : 'bg-blue-500'} dark:bg-blue-400`}
@@ -4107,9 +4119,9 @@ export default function LeavesPage() {
                                   </div>
                                 )}
                                 <div className="flex justify-between gap-2 pt-1 border-t border-slate-200/80 dark:border-slate-700">
-                                  <dt className="text-slate-600 dark:text-slate-300 font-semibold">Apply ceiling</dt>
+                                  <dt className="text-slate-600 dark:text-slate-300 font-semibold">Pool total (credits)</dt>
                                   <dd className="font-black tabular-nums text-slate-900 dark:text-white">
-                                    {clMonthlyCap ?? applyPeriodContext?.monthlyApplyCeiling ?? 0}
+                                    {pooledLimit ?? applyPeriodContext?.monthlyApplyCeiling ?? '—'}
                                   </dd>
                                 </div>
                               </dl>
@@ -4139,7 +4151,7 @@ export default function LeavesPage() {
                                 </div>
                               )}
                               <div className="flex justify-between gap-2 text-xs pt-1 border-t border-slate-100 dark:border-slate-800">
-                                <span className="text-slate-600 dark:text-slate-300 font-medium">Combined (UI)</span>
+                                <span className="text-slate-600 dark:text-slate-300 font-medium">Scheduled pool total</span>
                                 <span className="font-bold tabular-nums">{pooledLimit ?? 0}</span>
                               </div>
                             </div>

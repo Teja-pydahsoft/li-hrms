@@ -25,6 +25,24 @@ type MonthLeaveBucket = {
   used?: number;
   locked?: number | null;
   transfer?: number | null;
+  /** Per-type monthly apply cap (days) when policy sets maxDaysByType > 0 for this leave type. */
+  typeApplyCap?: number | null;
+  /** Days toward that cap (locked + approved native applications) in the payroll period. */
+  typeApplyConsumed?: number | null;
+  typeApplyRemaining?: number | null;
+  usedAudit?: MonthContributionAudit[];
+  lockedAudit?: MonthContributionAudit[];
+};
+
+type MonthContributionAudit = {
+  leaveId?: string;
+  leaveType?: string;
+  status?: string;
+  appliedFrom?: string | Date | null;
+  appliedTo?: string | Date | null;
+  requestDays?: number;
+  contributedDays?: number;
+  source?: string;
 };
 
 type RegisterMonthLite = {
@@ -44,11 +62,11 @@ type RegisterMonthLite = {
   elBalance?: number | null;
   cclBalance?: number | null;
   transactionCount?: number;
-  /** min(scheduled CL+CCL[+EL per policy], monthly application cap when enabled) */
+  /** Scheduled pool size (CL+CCL[+EL when in register pool]) for consumption tracking. */
   monthlyApplyLimit?: number | null;
-  /** max(0, monthlyApplyLimit − days already counting toward cap incl. in-flight & approved). */
+  /** max(0, pool − days counting toward pooled consumption: in-flight + approved per policy). */
   monthlyApplyRemaining?: number | null;
-  /** Days counting toward the period cap (approved + in-flight), per policy rules. */
+  /** Days counting toward pooled consumption (approved + in-flight), per policy rules. */
   capConsumedDays?: number | null;
   /** Subtotal: in-flight (locked) days toward the period cap. */
   capLockedDays?: number | null;
@@ -61,6 +79,7 @@ type RegisterMonthLite = {
 };
 
 type MonthSlotEditPolicy = {
+  allowEditMonth: boolean;
   allowEditClCredits: boolean;
   allowEditCclCredits: boolean;
   allowEditElCredits: boolean;
@@ -76,25 +95,33 @@ type MonthSlotEditPolicyConfig = {
   byPayrollMonthIndex?: Record<string, Partial<MonthSlotEditPolicy>>;
 } | null;
 
+function gateMonthSlotEditPolicy(flags: MonthSlotEditPolicy): MonthSlotEditPolicy {
+  if (flags.allowEditMonth === false) {
+    return {
+      allowEditMonth: false,
+      allowEditClCredits: false,
+      allowEditCclCredits: false,
+      allowEditElCredits: false,
+      allowEditPolicyLock: false,
+      allowEditUsedCl: false,
+      allowEditUsedCcl: false,
+      allowEditUsedEl: false,
+      allowCarryUnusedToNextMonth: false,
+    };
+  }
+  return { ...flags, allowEditMonth: true };
+}
+
 function resolveMonthSlotEditPolicy(
   cfg: MonthSlotEditPolicyConfig,
   payrollMonthIndex?: number | null
 ): MonthSlotEditPolicy {
   const allow = (v: unknown) => v !== false;
   const flat = (cfg || {}) as Partial<MonthSlotEditPolicy>;
-  const base: MonthSlotEditPolicy = {
-    allowEditClCredits: true,
-    allowEditCclCredits: true,
-    allowEditElCredits: true,
-    allowEditPolicyLock: true,
-    allowEditUsedCl: true,
-    allowEditUsedCcl: true,
-    allowEditUsedEl: true,
-    allowCarryUnusedToNextMonth: true,
-  };
   const d = cfg?.defaults || {};
   const merged: MonthSlotEditPolicy = {
     // Backward-compatible: read new `defaults` shape first, then legacy flat flags.
+    allowEditMonth: allow(d.allowEditMonth ?? flat.allowEditMonth),
     allowEditClCredits: allow(d.allowEditClCredits ?? flat.allowEditClCredits),
     allowEditCclCredits: allow(d.allowEditCclCredits ?? flat.allowEditCclCredits),
     allowEditElCredits: allow(d.allowEditElCredits ?? flat.allowEditElCredits),
@@ -106,12 +133,14 @@ function resolveMonthSlotEditPolicy(
       d.allowCarryUnusedToNextMonth ?? flat.allowCarryUnusedToNextMonth
     ),
   };
-  if (!Number.isFinite(Number(payrollMonthIndex))) return merged;
+  if (!Number.isFinite(Number(payrollMonthIndex))) return gateMonthSlotEditPolicy(merged);
   const k = String(Number(payrollMonthIndex));
   const ov = cfg?.byPayrollMonthIndex?.[k];
-  if (!ov || typeof ov !== 'object') return merged;
-  return {
+  if (!ov || typeof ov !== 'object') return gateMonthSlotEditPolicy(merged);
+  const withOv: MonthSlotEditPolicy = {
     ...merged,
+    allowEditMonth:
+      ov.allowEditMonth == null ? merged.allowEditMonth : allow(ov.allowEditMonth),
     allowEditClCredits:
       ov.allowEditClCredits == null ? merged.allowEditClCredits : allow(ov.allowEditClCredits),
     allowEditCclCredits:
@@ -131,6 +160,7 @@ function resolveMonthSlotEditPolicy(
         ? merged.allowCarryUnusedToNextMonth
         : allow(ov.allowCarryUnusedToNextMonth),
   };
+  return gateMonthSlotEditPolicy(withOv);
 }
 
 type ListRow = {
@@ -174,6 +204,34 @@ function formatNum(n: unknown): string {
 function formatNullableNum(n: unknown): string {
   if (n == null) return '—';
   return formatNum(n);
+}
+
+/** Net for this payroll month only: bucket credits minus used (approved debits). */
+function formatMonthNetBalance(credited: unknown, used: unknown): string {
+  if (credited == null && used == null) return '—';
+  const c = credited != null && Number.isFinite(Number(credited)) ? Number(credited) : 0;
+  const u = used != null && Number.isFinite(Number(used)) ? Number(used) : 0;
+  return formatNum(c - u);
+}
+
+function TypeApplyCapHint({ bucket }: { bucket?: MonthLeaveBucket | null }) {
+  if (bucket?.typeApplyCap == null || bucket.typeApplyRemaining == null) return null;
+  const consumed = bucket.typeApplyConsumed ?? 0;
+  return (
+    <div
+      className="text-[9px] text-slate-400 dark:text-slate-500 font-normal mt-0.5 leading-tight"
+      title="Policy apply limit for this leave type in this payroll period (pending + approved days for that type only)."
+    >
+      Limit {formatNum(consumed)}/{formatNum(bucket.typeApplyCap)} · left {formatNum(bucket.typeApplyRemaining)}
+    </div>
+  );
+}
+
+function formatDateShort(v: unknown): string {
+  if (!v) return '—';
+  const d = new Date(v as any);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN');
 }
 
 function computeFinancialYearNameFromPolicy(settings: any, date: Date): string {
@@ -288,6 +346,9 @@ export default function LeaveRegisterPage({
     year: number;
     label: string;
     transactions: any[];
+    clUsedAudit: MonthContributionAudit[];
+    clLockedAudit: MonthContributionAudit[];
+    auditView: 'none' | 'used' | 'locked';
     loading: boolean;
   } | null>(null);
 
@@ -482,6 +543,9 @@ export default function LeaveRegisterPage({
       year: m.year,
       label,
       transactions: [],
+      clUsedAudit: [],
+      clLockedAudit: [],
+      auditView: 'none',
       loading: true,
     });
     await prefetchRowDetail(employeeId);
@@ -503,11 +567,24 @@ export default function LeaveRegisterPage({
         : Array.isArray(sub?.transactions)
           ? sub.transactions
           : [];
+    const usedAudit = Array.isArray(canonical?.audit?.clUsed)
+      ? canonical.audit.clUsed
+      : Array.isArray(m?.cl?.usedAudit)
+        ? m.cl.usedAudit
+        : [];
+    const lockedAudit = Array.isArray(canonical?.audit?.clLocked)
+      ? canonical.audit.clLocked
+      : Array.isArray(m?.cl?.lockedAudit)
+        ? m.cl.lockedAudit
+        : [];
     setMonthModal((prev) =>
       prev
         ? {
             ...prev,
             transactions: txs,
+            clUsedAudit: usedAudit,
+            clLockedAudit: lockedAudit,
+            auditView: 'none',
             loading: false,
           }
         : null
@@ -516,6 +593,10 @@ export default function LeaveRegisterPage({
 
   const saveSlotEdit = async () => {
     if (!slotEditModal) return;
+    if (!effectiveMonthSlotEditPolicy.allowEditMonth) {
+      toast.error('Month slot editing is disabled for this payroll period (leave policy).');
+      return;
+    }
     const fy = slotEditModal.financialYearForApi.trim();
     if (!fy) {
       toast.error('Could not resolve financial year. Enter it in filters (e.g. 2025-2026).');
@@ -704,8 +785,8 @@ export default function LeaveRegisterPage({
                 <p className="text-xs text-slate-600 dark:text-slate-400 max-w-2xl leading-normal">
                   {isSuperadmin ? (
                     <>
-                      FY balances, payroll-month credits (CL / CCL / EL), and monthly apply limits. Expand a row for
-                      month detail; click a month for transactions.
+                      FY balances, payroll-month credits (CL / CCL / EL), and per–leave-type apply limits when set in
+                      policy. Expand a row for month detail; click a month for transactions.
                     </>
                   ) : (
                     <>Per-employee ledger (CL, EL, CCL) for the selected financial year and payroll context.</>
@@ -908,7 +989,9 @@ export default function LeaveRegisterPage({
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">Employee register</p>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 max-w-xl leading-snug">
-                  Balances use the year snapshot when FY is set. Expand a row for monthly credits and apply ceiling.
+                  Balances use the year snapshot when FY is set. Expand a row for monthly Cr / Used / Bal (credits minus
+                  used for that payroll month only) and per-type apply
+                  limits (under each type).
                 </p>
               </div>
               {!loading && (
@@ -1115,20 +1198,20 @@ export default function LeaveRegisterPage({
                                   <div className="flex gap-2 rounded-lg border border-blue-200/70 dark:border-blue-900/50 bg-blue-50/90 dark:bg-blue-950/25 px-2.5 py-2 text-[10px] leading-snug text-blue-950 dark:text-blue-100">
                                     <Info className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400 mt-0.5" />
                                     <p>
-                                      <span className="font-medium">Apply ceiling</span> = min(scheduled CL+CCL[+EL per
-                                      policy], policy cap). Locked and approved days both count toward it.
+                                      <span className="font-medium">Per-type apply limits</span> (under CL / CCL / EL → Lk)
+                                      come from leave policy maxDaysByType for that type.
+                                      Pending and approved days for <em>that type only</em> count toward each limit.
                                     </p>
                                   </div>
                                 ) : (
                                   <p className="text-[10px] text-slate-400">
-                                    The period <strong>ceiling</strong> is min(scheduled CL+CCL[+EL per policy], policy cap).{' '}
-                                    Both <strong>locked</strong> (pending / in-approval) and <strong>approved</strong> days{' '}
-                                    deduct from that ceiling — apply is blocked once locked + approved reaches the ceiling.
+                                    When the policy sets a per-type cap, <strong>Limit used/total · left</strong> appears under
+                                    each type’s Lk column. Pending and approved days count only toward that leave type’s cap.
                                   </p>
                                 )}
                                 <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/60">
                                   <table
-                                    className={`w-full min-w-[720px] border-collapse ${isSuperadmin ? 'text-[10px]' : 'text-[11px]'}`}
+                                    className={`w-full min-w-[760px] border-collapse ${isSuperadmin ? 'text-[10px]' : 'text-[11px]'}`}
                                   >
                                     <thead>
                                       <tr className="bg-slate-100/90 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300">
@@ -1138,21 +1221,14 @@ export default function LeaveRegisterPage({
                                         >
                                           Month
                                         </th>
-                                        <th colSpan={4} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
+                                        <th colSpan={5} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
                                           CL
                                         </th>
-                                        <th colSpan={3} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
+                                        <th colSpan={4} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
                                           CCL
                                         </th>
-                                        <th colSpan={3} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
+                                        <th colSpan={4} className="text-center font-semibold px-1 py-1 border-l border-slate-200 dark:border-slate-600">
                                           EL
-                                        </th>
-                                        <th
-                                          rowSpan={2}
-                                          className="text-right font-semibold px-2 py-2 align-bottom border-l border-slate-200 dark:border-slate-600 whitespace-nowrap max-w-[8rem]"
-                                          title="Ceiling min(pool, policy cap). ‘Left’ = ceiling minus counted days (in-flight + approved)."
-                                        >
-                                          Apply limit / left
                                         </th>
                                       </tr>
                                       <tr className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-600">
@@ -1162,7 +1238,13 @@ export default function LeaveRegisterPage({
                                         <th className="text-right font-medium px-1 py-1">Used</th>
                                         <th
                                           className="text-right font-medium px-1 py-1"
-                                          title="Locked: pending / in-flight (not yet final approved)"
+                                          title="This month: credits minus used (approved debits) for CL in this payroll period."
+                                        >
+                                          Bal
+                                        </th>
+                                        <th
+                                          className="text-right font-medium px-1 py-1"
+                                          title="Locked (pending). Subtext: per-type apply limit when configured in policy."
                                         >
                                           Lk
                                         </th>
@@ -1178,7 +1260,13 @@ export default function LeaveRegisterPage({
                                         <th className="text-right font-medium px-1 py-1">Used</th>
                                         <th
                                           className="text-right font-medium px-1 py-1"
-                                          title="Locked: pending / in-flight (not yet final approved)"
+                                          title="This month: credits minus used (approved debits) for CCL in this payroll period."
+                                        >
+                                          Bal
+                                        </th>
+                                        <th
+                                          className="text-right font-medium px-1 py-1"
+                                          title="Locked (pending). Subtext: per-type apply limit when configured."
                                         >
                                           Lk
                                         </th>
@@ -1188,7 +1276,13 @@ export default function LeaveRegisterPage({
                                         <th className="text-right font-medium px-1 py-1">Used</th>
                                         <th
                                           className="text-right font-medium px-1 py-1"
-                                          title="Locked: pending / in-flight (not yet final approved)"
+                                          title="This month: credits minus used (approved debits) for EL in this payroll period."
+                                        >
+                                          Bal
+                                        </th>
+                                        <th
+                                          className="text-right font-medium px-1 py-1"
+                                          title="Locked (pending). Subtext: per-type apply limit when configured."
                                         >
                                           Lk
                                         </th>
@@ -1239,7 +1333,7 @@ export default function LeaveRegisterPage({
                                                 · Txns {m.transactionCount ?? 0}
                                               </div>
                                             </div>
-                                            {canEditMonths ? (
+                                            {canEditMonths && m.monthEditPolicy?.allowEditMonth ? (
                                               <button
                                                 type="button"
                                                 onClick={(e) => {
@@ -1286,13 +1380,23 @@ export default function LeaveRegisterPage({
                                               >
                                                 Edit scheduled pool (admin)…
                                               </button>
+                                            ) : canEditMonths ? (
+                                              <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">
+                                                Slot edit off for this period (policy).
+                                              </p>
                                             ) : null}
                                           </td>
                                           <td className="text-right px-1 py-1.5 border-l border-slate-200 dark:border-slate-600">
                                             {formatNullableNum(m.cl?.credited)}
                                           </td>
                                           <td className="text-right px-1 py-1.5">{formatNullableNum(m.cl?.used)}</td>
-                                          <td className="text-right px-1 py-1.5">{formatNullableNum(m.cl?.locked)}</td>
+                                          <td className="text-right px-1 py-1.5 text-slate-800 dark:text-slate-100 font-semibold">
+                                            {formatMonthNetBalance(m.cl?.credited, m.cl?.used)}
+                                          </td>
+                                          <td className="text-right px-1 py-1.5 align-top">
+                                            <div>{formatNullableNum(m.cl?.locked)}</div>
+                                            <TypeApplyCapHint bucket={m.cl} />
+                                          </td>
                                           <td className="text-right px-1 py-1.5 border-l border-slate-200 dark:border-slate-600">
                                             {formatNullableNum(m.cl?.transfer)}
                                           </td>
@@ -1300,29 +1404,23 @@ export default function LeaveRegisterPage({
                                             {formatNullableNum(m.ccl?.credited)}
                                           </td>
                                           <td className="text-right px-1 py-1.5">{formatNullableNum(m.ccl?.used)}</td>
-                                          <td className="text-right px-1 py-1.5">{formatNullableNum(m.ccl?.locked)}</td>
+                                          <td className="text-right px-1 py-1.5 text-slate-800 dark:text-slate-100 font-semibold">
+                                            {formatMonthNetBalance(m.ccl?.credited, m.ccl?.used)}
+                                          </td>
+                                          <td className="text-right px-1 py-1.5 align-top">
+                                            <div>{formatNullableNum(m.ccl?.locked)}</div>
+                                            <TypeApplyCapHint bucket={m.ccl} />
+                                          </td>
                                           <td className="text-right px-1 py-1.5 border-l border-slate-200 dark:border-slate-600">
                                             {formatNullableNum(m.el?.credited)}
                                           </td>
                                           <td className="text-right px-1 py-1.5">{formatNullableNum(m.el?.used)}</td>
-                                          <td className="text-right px-1 py-1.5">{formatNullableNum(m.el?.locked)}</td>
-                                          <td className="text-right px-2 py-1.5 border-l border-slate-200 dark:border-slate-600 font-medium text-slate-800 dark:text-slate-100 align-top">
-                                            <div>{formatNullableNum(m.monthlyApplyLimit)}</div>
-                                            {m.monthlyApplyRemaining != null &&
-                                              m.monthlyApplyLimit != null && (
-                                                <div
-                                                  className={`font-normal text-slate-500 dark:text-slate-400 mt-0.5 space-y-0.5 ${isSuperadmin ? 'text-[9px]' : 'text-[10px]'}`}
-                                                >
-                                                  <div>Left {formatNum(m.monthlyApplyRemaining)}</div>
-                                                  {m.capConsumedDays != null && (
-                                                    <div className="text-slate-400">
-                                                      − locked {formatNullableNum(m.capLockedDays)} · approved{' '}
-                                                      {formatNullableNum(m.capApprovedDays)} · total{' '}
-                                                      {formatNum(m.capConsumedDays)}
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              )}
+                                          <td className="text-right px-1 py-1.5 text-slate-800 dark:text-slate-100 font-semibold">
+                                            {formatMonthNetBalance(m.el?.credited, m.el?.used)}
+                                          </td>
+                                          <td className="text-right px-1 py-1.5 align-top">
+                                            <div>{formatNullableNum(m.el?.locked)}</div>
+                                            <TypeApplyCapHint bucket={m.el} />
                                           </td>
                                         </tr>
                                       ))}
@@ -1438,15 +1536,93 @@ export default function LeaveRegisterPage({
                 <div className="py-10 flex justify-center">
                   <Loader2 className={`animate-spin ${isSuperadmin ? 'h-8 w-8 text-blue-600' : 'h-10 w-10 text-indigo-500'}`} />
                 </div>
-              ) : monthModal.transactions.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-6">No transactions for this month.</p>
               ) : (
-                <div
-                  className={
-                    isSuperadmin ? 'rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden' : ''
-                  }
-                >
-                  <table className={`w-full ${isSuperadmin ? 'text-xs' : 'text-sm'}`}>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMonthModal((prev) =>
+                          prev ? { ...prev, auditView: prev.auditView === 'used' ? 'none' : 'used' } : null
+                        )
+                      }
+                      className={`text-left rounded-lg border px-3 py-2 ${
+                        monthModal.auditView === 'used'
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
+                          : 'border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <p className="text-[11px] text-slate-500">Used (approved) audit</p>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {formatNum(monthModal.clUsedAudit.reduce((s, a) => s + (Number(a?.contributedDays) || 0), 0))}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMonthModal((prev) =>
+                          prev ? { ...prev, auditView: prev.auditView === 'locked' ? 'none' : 'locked' } : null
+                        )
+                      }
+                      className={`text-left rounded-lg border px-3 py-2 ${
+                        monthModal.auditView === 'locked'
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+                          : 'border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <p className="text-[11px] text-slate-500">Locked (in-flight) audit</p>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {formatNum(monthModal.clLockedAudit.reduce((s, a) => s + (Number(a?.contributedDays) || 0), 0))}
+                      </p>
+                    </button>
+                  </div>
+
+                  {monthModal.auditView !== 'none' && (
+                    <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                      <table className={`w-full ${isSuperadmin ? 'text-xs' : 'text-sm'}`}>
+                        <thead>
+                          <tr className="text-left bg-slate-50 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                            <th className={`font-medium ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3 font-semibold'}`}>Leave</th>
+                            <th className={`font-medium ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3 font-semibold'}`}>Applied</th>
+                            <th className={`font-medium text-right ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3 font-semibold'}`}>Req</th>
+                            <th className={`font-medium text-right ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3 font-semibold'}`}>Contrib</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(monthModal.auditView === 'used' ? monthModal.clUsedAudit : monthModal.clLockedAudit).map((a, idx) => (
+                            <tr key={`${a.leaveId || 'leave'}-${idx}`} className="border-b border-slate-100 dark:border-slate-800/80">
+                              <td className={isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3'}>
+                                <div className="font-medium">{a.leaveType || 'CL'}</div>
+                                <div className="text-[10px] text-slate-500">{a.leaveId || '—'}</div>
+                              </td>
+                              <td className={isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3'}>
+                                {formatDateShort(a.appliedFrom)} - {formatDateShort(a.appliedTo)}
+                              </td>
+                              <td className={`text-right font-mono tabular-nums ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3'}`}>{formatNum(a.requestDays)}</td>
+                              <td className={`text-right font-mono tabular-nums font-semibold ${isSuperadmin ? 'py-1.5 px-2' : 'py-2.5 px-3'}`}>{formatNum(a.contributedDays)}</td>
+                            </tr>
+                          ))}
+                          {(monthModal.auditView === 'used' ? monthModal.clUsedAudit.length === 0 : monthModal.clLockedAudit.length === 0) && (
+                            <tr>
+                              <td colSpan={4} className="py-4 text-center text-xs text-slate-500">
+                                No leave requests contributed in this bucket.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {monthModal.transactions.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-3">No transactions for this month.</p>
+                  ) : (
+                    <div
+                      className={
+                        isSuperadmin ? 'rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden' : ''
+                      }
+                    >
+                      <table className={`w-full ${isSuperadmin ? 'text-xs' : 'text-sm'}`}>
                     <thead>
                       <tr
                         className={
@@ -1501,6 +1677,8 @@ export default function LeaveRegisterPage({
                       ))}
                     </tbody>
                   </table>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1541,6 +1719,11 @@ export default function LeaveRegisterPage({
               </button>
             </div>
             <div className="p-4 space-y-3 text-sm">
+              {!effectiveMonthSlotEditPolicy.allowEditMonth ? (
+                <div className="rounded-lg border border-amber-200/80 bg-amber-50/90 dark:border-amber-900/40 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-100">
+                  Editing is turned off for this payroll period in leave policy (master “Edit month”).
+                </div>
+              ) : null}
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
                 Updates <strong>scheduled</strong> credits on the FY month slot (initial sync / corrections).
                 Apply-cap consumption (locked/approved) is refreshed from leave rows after save; use{' '}
@@ -1643,11 +1826,12 @@ export default function LeaveRegisterPage({
                 Reason (audit) *
                 <textarea
                   value={slotEditModal.reason}
+                  disabled={!effectiveMonthSlotEditPolicy.allowEditMonth}
                   onChange={(e) =>
                     setSlotEditModal((m) => (m ? { ...m, reason: e.target.value } : null))
                   }
                   rows={2}
-                  className="mt-0.5 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+                  className="mt-0.5 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   placeholder="Why are you changing this month?"
                 />
               </label>
@@ -1657,6 +1841,7 @@ export default function LeaveRegisterPage({
                     type="checkbox"
                     className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300"
                     checked={slotEditModal.validateWithRecords}
+                    disabled={!effectiveMonthSlotEditPolicy.allowEditMonth}
                     onChange={(e) =>
                       setSlotEditModal((m) =>
                         m ? { ...m, validateWithRecords: e.target.checked } : null
@@ -1693,7 +1878,9 @@ export default function LeaveRegisterPage({
               <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   type="button"
-                  disabled={slotEditModal.saving}
+                  disabled={
+                    slotEditModal.saving || !effectiveMonthSlotEditPolicy.allowEditMonth
+                  }
                   onClick={() => void saveSlotEdit()}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 text-white px-3 py-2 text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
                 >
@@ -1702,7 +1889,9 @@ export default function LeaveRegisterPage({
                 </button>
                 <button
                   type="button"
-                  disabled={slotEditModal.saving}
+                  disabled={
+                    slotEditModal.saving || !effectiveMonthSlotEditPolicy.allowEditMonth
+                  }
                   onClick={() => void syncSlotApplyOnly()}
                   className="inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
                 >

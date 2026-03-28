@@ -563,14 +563,18 @@ exports.exportAttendanceReport = async (req, res) => {
             return acc;
         }, {});
 
-        // ── 2. Fetch raw logs from Atlas (expand range by 36h for cross-midnight OUTs) ──
+        // ── 2. Fetch raw logs from Atlas (expand range for cross-midnight OUTs) ──
         const start = new Date(startDate);
         const end = new Date(endDate);
+        const hoursRaw = Number(process.env.ATTENDANCE_PUNCH_WINDOW_HOURS);
+        const punchWindowHours = Number.isFinite(hoursRaw) && hoursRaw > 0 ? hoursRaw : 24; // default 24h
+        const punchWindowMs = Math.max(6, Math.min(48, punchWindowHours)) * 60 * 60 * 1000;
+
         // Extend the fetch window: start one day before so we don't miss late INs,
-        // and end 36 hours after the end date to capture cross-midnight OUTs.
+        // and end after the end date to capture cross-midnight OUTs.
         const fetchStart = new Date(start); fetchStart.setHours(0, 0, 0, 0);
         const fetchEnd = new Date(end); fetchEnd.setHours(23, 59, 59, 999);
-        fetchEnd.setTime(fetchEnd.getTime() + 36 * 60 * 60 * 1000); // +36h
+        fetchEnd.setTime(fetchEnd.getTime() + punchWindowMs);
 
         const thumbFilters = {
             startDate: fetchStart.toISOString(),

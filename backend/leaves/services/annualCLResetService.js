@@ -6,6 +6,7 @@
 
 const Employee = require('../../employees/model/Employee');
 const Leave = require('../model/Leave');
+const LeaveSplit = require('../model/LeaveSplit');
 const OD = require('../model/OD');
 const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const leaveRegisterService = require('./leaveRegisterService');
@@ -594,6 +595,10 @@ function round2(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+function round1(n) {
+    return Math.round((Number(n) || 0) * 10) / 10;
+}
+
 function toDateOnlyKey(d) {
     const x = new Date(d);
     return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-${String(x.getUTCDate()).padStart(2, '0')}`;
@@ -609,6 +614,118 @@ function overlapDaysInclusiveUTC(aStart, aEnd, bStart, bEnd) {
     const e = Math.min(dayStartUTC(aEnd).getTime(), dayStartUTC(bEnd).getTime());
     if (e < s) return 0;
     return Math.floor((e - s) / 86400000) + 1;
+}
+
+function istDateKey(d) {
+    return extractISTComponents(d).dateStr;
+}
+
+function overlapDaysInclusiveIST(aStart, aEnd, bStart, bEnd) {
+    const aS = istDateKey(aStart);
+    const aE = istDateKey(aEnd);
+    const bS = istDateKey(bStart);
+    const bE = istDateKey(bEnd);
+    const s = aS > bS ? aS : bS;
+    const e = aE < bE ? aE : bE;
+    if (e < s) return 0;
+    const sd = createISTDate(s);
+    const ed = createISTDate(e);
+    return Math.floor((ed.getTime() - sd.getTime()) / 86400000) + 1;
+}
+
+function normalizedDays(n, isHalfDay = false) {
+    const v = Number(n);
+    if (Number.isFinite(v) && v > 0) return v;
+    return isHalfDay ? 0.5 : 1;
+}
+
+async function buildLeaveTypeDaysBySlot({ employeeId, monthsPayload, leaveType, statuses }) {
+    const lt = String(leaveType || '').toUpperCase();
+    if (!employeeId || !Array.isArray(monthsPayload) || monthsPayload.length === 0) return new Map();
+
+    const out = new Map();
+    for (let i = 0; i < monthsPayload.length; i++) {
+        const slot = monthsPayload[i];
+        const slotStart = slot?.payPeriodStart ? new Date(slot.payPeriodStart) : null;
+        const slotEnd = slot?.payPeriodEnd ? new Date(slot.payPeriodEnd) : null;
+        if (!slotStart || !slotEnd) continue;
+
+        // Keep initial-sync fetch pattern aligned with attendance summary:
+        // query leaves by resolved pay-period window for each slot.
+        const leaves = await Leave.find({
+            employeeId,
+            isActive: { $ne: false },
+            status: statuses,
+            leaveType: new RegExp(`^${lt}$`, 'i'),
+            fromDate: { $lte: slotEnd },
+            toDate: { $gte: slotStart },
+        })
+            .select('_id fromDate toDate numberOfDays leaveType status splitStatus')
+            .lean();
+
+        const splitLeaveIds = leaves
+            .filter((lv) => String(lv?.splitStatus || '').toLowerCase() === 'split_approved' && lv?._id)
+            .map((lv) => lv._id);
+        const splits = splitLeaveIds.length
+            ? await LeaveSplit.find({
+                  leaveId: { $in: splitLeaveIds },
+                  status: 'approved',
+                  leaveType: new RegExp(`^${lt}$`, 'i'),
+                  date: { $gte: slotStart, $lte: slotEnd },
+              })
+                  .select('leaveId date numberOfDays isHalfDay')
+                  .lean()
+            : [];
+        const splitsByLeave = new Map();
+        for (const s of splits) {
+            const key = String(s.leaveId);
+            const arr = splitsByLeave.get(key) || [];
+            arr.push(s);
+            splitsByLeave.set(key, arr);
+        }
+
+        let days = 0;
+        const perDayContrib = new Map();
+        const slotStartKey = istDateKey(slotStart);
+        const slotEndKey = istDateKey(slotEnd);
+        for (const lv of leaves) {
+            const splitRows = splitsByLeave.get(String(lv?._id)) || [];
+            const isSplitApproved = String(lv?.splitStatus || '').toLowerCase() === 'split_approved';
+            if (splitRows.length > 0) {
+                for (const sp of splitRows) {
+                    const dk = istDateKey(sp.date);
+                    if (dk < slotStartKey || dk > slotEndKey) continue;
+                    const prev = Number(perDayContrib.get(dk) || 0);
+                    const next = Math.min(1, round2(prev + normalizedDays(sp.numberOfDays, !!sp.isHalfDay)));
+                    perDayContrib.set(dk, next);
+                }
+                continue;
+            }
+            if (isSplitApproved) {
+                // For split-approved leave, split rows are source of truth.
+                // If no matching split rows for this leave-type in this slot, do not fallback to parent leave row.
+                continue;
+            }
+
+            const from = new Date(lv.fromDate);
+            const to = new Date(lv.toDate);
+            const overlapDays = overlapDaysInclusiveIST(from, to, slotStart, slotEnd);
+            if (overlapDays <= 0) continue;
+            const leaveSpanDays = Math.max(1, overlapDaysInclusiveIST(from, to, from, to));
+            const leaveDays = Number(lv.numberOfDays) || 0;
+            if (leaveDays <= 0) continue;
+            days += round2((leaveDays * overlapDays) / leaveSpanDays);
+        }
+        if (perDayContrib.size > 0) {
+            for (const v of perDayContrib.values()) days += Number(v) || 0;
+        }
+
+        if (days > 0) {
+            // Keep same unit feel as attendance summary aggregates (0.1 precision).
+            out.set(i, round1(days));
+        }
+    }
+    return out;
 }
 
 function sumClDebitsExcludingCarry(slot) {
@@ -701,58 +818,40 @@ async function appendApprovedUsageDebitsForType({ employeeId, monthsPayload, lea
     const lt = String(leaveType || '').toUpperCase();
     if (!employeeId || !Array.isArray(monthsPayload) || monthsPayload.length === 0) return 0;
     if (!['CL', 'CCL', 'EL'].includes(lt)) return 0;
-    const fyStart = monthsPayload[0]?.payPeriodStart || monthsPayload[0]?.payPeriodEnd;
-    const fyEnd = monthsPayload[monthsPayload.length - 1]?.payPeriodEnd || monthsPayload[monthsPayload.length - 1]?.payPeriodStart;
-    if (!fyStart || !fyEnd) return 0;
-
-    const approvedLeaves = await Leave.find({
+    const daysBySlot = await buildLeaveTypeDaysBySlot({
         employeeId,
-        isActive: { $ne: false },
-        status: 'approved',
-        leaveType: new RegExp(`^${lt}$`, 'i'),
-        splitStatus: { $nin: ['pending_split'] },
-        fromDate: { $lte: fyEnd },
-        toDate: { $gte: fyStart },
-    })
-        .select('fromDate toDate numberOfDays leaveType status splitStatus')
-        .lean();
+        monthsPayload,
+        leaveType: lt,
+        statuses: 'approved',
+    });
 
     let inserted = 0;
-    for (const slot of monthsPayload) {
+    for (let i = 0; i < monthsPayload.length; i++) {
+        const slot = monthsPayload[i];
         if (!Array.isArray(slot.transactions)) slot.transactions = [];
         const slotStart = slot.payPeriodStart ? new Date(slot.payPeriodStart) : null;
         const slotEnd = slot.payPeriodEnd ? new Date(slot.payPeriodEnd) : null;
         if (!slotStart || !slotEnd) continue;
+        const debitDays = round1(Number(daysBySlot.get(i) || 0));
+        if (debitDays <= 0) continue;
 
-        for (const lv of approvedLeaves) {
-            const from = new Date(lv.fromDate);
-            const to = new Date(lv.toDate);
-            const overlapDays = overlapDaysInclusiveUTC(from, to, slotStart, slotEnd);
-            if (overlapDays <= 0) continue;
-            const leaveSpanDays = Math.max(1, overlapDaysInclusiveUTC(from, to, from, to));
-            const leaveDays = Number(lv.numberOfDays) || 0;
-            if (leaveDays <= 0) continue;
-            const debitDays = round2((leaveDays * overlapDays) / leaveSpanDays);
-            if (debitDays <= 0) continue;
-
-            const debitStart = new Date(Math.max(dayStartUTC(from).getTime(), dayStartUTC(slotStart).getTime()));
-            const debitEnd = new Date(Math.min(dayStartUTC(to).getTime(), dayStartUTC(slotEnd).getTime()));
-            slot.transactions.push({
-                at: new Date(),
-                leaveType: lt,
-                transactionType: 'DEBIT',
-                days: debitDays,
-                openingBalance: 0,
-                closingBalance: 0,
-                startDate: debitStart,
-                endDate: debitEnd,
-                reason: `Initial sync: approved ${lt} leave used (${debitDays} day(s)) for ${toDateOnlyKey(debitStart)} to ${toDateOnlyKey(debitEnd)}`,
-                status: 'APPROVED',
-                autoGenerated: true,
-                autoGeneratedType: `INITIAL_SYNC_APPROVED_${lt}_USED`,
-            });
-            inserted++;
-        }
+        const debitStart = createISTDate(istDateKey(slotStart), '00:00');
+        const debitEnd = createISTDate(istDateKey(slotEnd), '00:00');
+        slot.transactions.push({
+            at: new Date(),
+            leaveType: lt,
+            transactionType: 'DEBIT',
+            days: debitDays,
+            openingBalance: 0,
+            closingBalance: 0,
+            startDate: debitStart,
+            endDate: debitEnd,
+            reason: `Initial sync: approved ${lt} leave used (${debitDays} day(s)) for ${toDateOnlyKey(debitStart)} to ${toDateOnlyKey(debitEnd)}`,
+            status: 'APPROVED',
+            autoGenerated: true,
+            autoGeneratedType: `INITIAL_SYNC_APPROVED_${lt}_USED`,
+        });
+        inserted++;
     }
     return inserted;
 }
@@ -763,39 +862,17 @@ async function applyLockedClCreditsFromInFlightLeaves({ employeeId, monthsPayloa
     const fyEnd = monthsPayload[monthsPayload.length - 1]?.payPeriodEnd || monthsPayload[monthsPayload.length - 1]?.payPeriodStart;
     if (!fyStart || !fyEnd) return 0;
 
-    const inFlightStatuses = Array.from(new Set([...(PENDING_PIPELINE_STATUSES || []), 'approved']));
-    const leaves = await Leave.find({
+    const lockedBySlot = await buildLeaveTypeDaysBySlot({
         employeeId,
-        isActive: { $ne: false },
-        status: { $in: inFlightStatuses },
-        leaveType: /^CL$/i,
-        fromDate: { $lte: fyEnd },
-        toDate: { $gte: fyStart },
-    })
-        .select('fromDate toDate numberOfDays status splitStatus')
-        .lean();
+        monthsPayload,
+        leaveType: 'CL',
+        statuses: { $in: PENDING_PIPELINE_STATUSES || [] },
+    });
 
     let updatedSlots = 0;
-    for (const slot of monthsPayload) {
-        const slotStart = slot.payPeriodStart ? new Date(slot.payPeriodStart) : null;
-        const slotEnd = slot.payPeriodEnd ? new Date(slot.payPeriodEnd) : null;
-        if (!slotStart || !slotEnd) continue;
-
-        let locked = 0;
-        for (const lv of leaves) {
-            const isFullyApproved = String(lv?.status || '').toLowerCase() === 'approved' && String(lv?.splitStatus || '') !== 'pending_split';
-            if (isFullyApproved) continue;
-            const from = new Date(lv.fromDate);
-            const to = new Date(lv.toDate);
-            const overlapDays = overlapDaysInclusiveUTC(from, to, slotStart, slotEnd);
-            if (overlapDays <= 0) continue;
-            const leaveSpanDays = Math.max(1, overlapDaysInclusiveUTC(from, to, from, to));
-            const leaveDays = Number(lv.numberOfDays) || 0;
-            if (leaveDays <= 0) continue;
-            locked += round2((leaveDays * overlapDays) / leaveSpanDays);
-        }
-
-        const lockedRounded = round2(locked);
+    for (let i = 0; i < monthsPayload.length; i++) {
+        const slot = monthsPayload[i];
+        const lockedRounded = round1(Number(lockedBySlot.get(i) || 0));
         if (lockedRounded > 0) updatedSlots++;
         slot.lockedCredits = lockedRounded;
     }
@@ -880,7 +957,9 @@ function applyCarryForwardAcrossMonths(monthsPayload, effectiveDate) {
         }
         if (!Array.isArray(cur.transactions)) cur.transactions = [];
         if (!Array.isArray(next.transactions)) next.transactions = [];
-        const clCarry = Math.max(0, round2((Number(cur.clCredits) || 0) - sumDebitsExcludingCarry(cur, 'CL')));
+        const clUsed = sumDebitsExcludingCarry(cur, 'CL');
+        const clLocked = round2(Number(cur.lockedCredits) || 0);
+        const clCarry = Math.max(0, round2((Number(cur.clCredits) || 0) - clUsed - clLocked));
         const cclCarry = Math.max(0, round2((Number(cur.compensatoryOffs) || 0) - sumDebitsExcludingCarry(cur, 'CCL')));
         const elCarry = Math.max(0, round2((Number(cur.elCredits) || 0) - sumDebitsExcludingCarry(cur, 'EL')));
         if (clCarry <= 0 && cclCarry <= 0 && elCarry <= 0) continue;
@@ -952,6 +1031,7 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
         const creditAllPayrollMonths = options.creditAllPayrollMonths === true;
         const includeApprovedClUsageDebits = options.includeApprovedClUsageDebits === true;
         const carryUnusedClToNextMonth = options.carryUnusedClToNextMonth === true;
+        const disableInitialLedgerCarryForward = options.disableInitialLedgerCarryForward === true;
         const empNo = employee?.emp_no || employee?._id || 'unknown';
         console.log(
             `[LeaveSync] Start syncEmployeeCLFromPolicy emp=${empNo} effectiveDate=${new Date(effectiveDate).toISOString()}`
@@ -971,6 +1051,7 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
             firstOpenIndex,
             monthlyBreakdown,
         } = built;
+        const effectiveCarryForwardAllowed = disableInitialLedgerCarryForward ? 0 : carryForwardAllowed;
         const monthsPayload = (builtMonthsPayload || []).map((m) => ({ ...m, transactions: [...(m.transactions || [])] }));
 
         // Settings apply mode: credit all payroll months, do not zero past periods.
@@ -979,9 +1060,9 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
                 const orig = Number(monthlyBreakdown[i]?.policyCellOriginal || 0);
                 if (Number.isFinite(orig)) monthsPayload[i].clCredits = round2(orig);
             }
-            if (carryForwardAllowed > 0 && monthsPayload.length > 0) {
+            if (effectiveCarryForwardAllowed > 0 && monthsPayload.length > 0) {
                 const base = round2(Number(monthsPayload[0].clCredits) || 0);
-                monthsPayload[0].clCredits = round2(base + carryForwardAllowed);
+                monthsPayload[0].clCredits = round2(base + effectiveCarryForwardAllowed);
             }
         }
 
@@ -993,13 +1074,13 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
                 : defaultPoolBalance;
 
         const yearlyTransactions = [];
-        if (carryForwardAllowed > 0 && monthsPayload.length > 0) {
+        if (effectiveCarryForwardAllowed > 0 && monthsPayload.length > 0) {
             const fold = monthsPayload[firstOpenIndex] || monthsPayload[0];
             yearlyTransactions.push({
                 at: effectiveDate,
                 transactionKind: 'CARRY_FORWARD',
                 leaveType: 'CL',
-                days: carryForwardAllowed,
+                days: effectiveCarryForwardAllowed,
                 reason: `Initial sync: carry folded into first open payroll month (${fold?.label || 'period'})`,
                 payrollMonthIndex: fold?.payrollMonthIndex,
                 payPeriodStart: fold?.payPeriodStart,
@@ -1012,12 +1093,12 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
             transactionKind: 'ADJUSTMENT',
             leaveType: 'CL',
             days: newBalance,
-            reason: `Initial policy sync: pool ${newBalance} (remaining FY grid ${policyRemainingGridOnly} + carry ${carryForwardAllowed}; full grid before past-zero ${fullYearGridSum}; past slots cleared ${pastClearedCreditsTotal})${targetCLOverride != null ? '; review override' : ''}`,
+            reason: `Initial policy sync: pool ${newBalance} (remaining FY grid ${policyRemainingGridOnly} + carry ${effectiveCarryForwardAllowed}; full grid before past-zero ${fullYearGridSum}; past slots cleared ${pastClearedCreditsTotal})${targetCLOverride != null ? '; review override' : ''}`,
             meta: {
                 fullYearGridSum,
                 policyRemainingGridOnly,
                 pastClearedCreditsTotal,
-                carryForwardAllowed,
+                carryForwardAllowed: effectiveCarryForwardAllowed,
             },
         });
 
@@ -1108,7 +1189,7 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
             previousBalance: ledgerCLBalance,
             entitlement,
             proration,
-            carryForwarded: carryForwardAllowed,
+            carryForwarded: effectiveCarryForwardAllowed,
             newBalance,
             fullYearGridSum,
             policyRemainingGridOnly,

@@ -14,16 +14,28 @@ const axios = require('axios');
  */
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.BACKEND_URL;
 const SYNC_ENDPOINT = `${BACKEND_URL}/api/internal/attendance/sync`;
-const SYSTEM_KEY = process.env.HRMS_MICROSERVICE_SECRET_KEY || "hrms-secret-key-2026-abc123xyz789";
+const SYSTEM_KEY = process.env.HRMS_MICROSERVICE_SECRET_KEY;
+if (!BACKEND_URL) {
+    console.error('ERROR: BACKEND_URL not configured in biometric service .env');
+    process.exit(1);
+}
 if (!SYSTEM_KEY) {
-    console.error('ERROR: HRMS_MICROSERVICE_SECRET_KEY not configured in biometric service');
+    console.error('ERROR: HRMS_MICROSERVICE_SECRET_KEY not configured in biometric service .env');
     process.exit(1);
 }
 const BATCH_SIZE = 200; // Optimal batch size with delays
 const RETRY_ATTEMPTS = 3;
 const DELAY_BETWEEN_BATCHES = 1000; // 1s delay to prevent backend overload
+
+function parseMonth(monthStr) {
+    const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(monthStr || '').trim());
+    if (!m) return null;
+    const year = Number(m[1]);
+    const month = Number(m[2]); // 1-12
+    return { year, month };
+}
 
 // ─── Biometric AttendanceLog model ───────────────────────────────────────────
 const attendanceLogSchema = new mongoose.Schema({
@@ -43,26 +55,36 @@ const AttendanceLog =
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-    const mongoURI =  'mongodb+srv://teampydah:TeamPydah@teampydah.y4zj6wh.mongodb.net/biometric_logs';
+    const mongoURI = process.env.BIOMETRIC_MONGODB_URI || process.env.MONGODB_URI || process.env.MONGO_URI;
+    if (!mongoURI) {
+        throw new Error('Missing BIOMETRIC_MONGODB_URI/MONGODB_URI/MONGO_URI in biometric .env');
+    }
 
     console.log('\n🚀 Starting Biometric Log Resync...\n');
     console.log('🔌 Connecting to MongoDB...');
     await mongoose.connect(mongoURI);
     console.log(`✅ Connected to: ${mongoURI}\n`);
 
-    // ── STEP 2: Resend logs to backend (Filtered by date) ────────────────────
-    // Jan 20 00:00 — till date (today end of day)
-    const START_DATE = new Date('2026-01-10T00:00:00.000Z');
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
+    // ── STEP 2: Resend logs to backend (Filtered by month) ───────────────────
+    // Default month: March 2026 (override with SYNC_MONTH=YYYY-MM)
+    const monthCfg = parseMonth(process.env.SYNC_MONTH || '2026-03');
+    if (!monthCfg) {
+        throw new Error('Invalid SYNC_MONTH. Use YYYY-MM (example: 2026-03)');
+    }
+    const { year, month } = monthCfg;
+    const startDateStr = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
+    const endDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59.999Z`;
+    const START_DATE = new Date(startDateStr);
+    const END_DATE = new Date(endDateStr);
 
     const query = {
-        timestamp: { $gte: START_DATE, $lte: endOfToday },
+        timestamp: { $gte: START_DATE, $lte: END_DATE },
     };
 
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('STEP: Resend AttendanceLog records to backend');
-    console.log(`   Filter   : Jan 20, 2026 — till date (${endOfToday.toISOString().slice(0, 10)})`);
+    console.log(`   Filter   : ${START_DATE.toISOString().slice(0, 10)} — ${END_DATE.toISOString().slice(0, 10)}`);
     console.log(`   Endpoint : ${SYNC_ENDPOINT}`);
     console.log(`   Batch    : ${BATCH_SIZE} logs per request`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

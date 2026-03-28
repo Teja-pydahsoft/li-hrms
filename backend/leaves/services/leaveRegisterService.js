@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const leaveRegisterYearLedgerService = require('./leaveRegisterYearLedgerService');
 const Employee = require('../../employees/model/Employee');
 const Leave = require('../model/Leave');
+const LeaveSplit = require('../model/LeaveSplit');
 const LeaveSettings = require('../model/LeaveSettings');
 const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const { extractISTComponents, createISTDate } = require('../../shared/utils/dateUtils');
@@ -11,6 +12,7 @@ const {
     computeScheduledPoolApplyCeiling,
     addLeaveCapToMonthlyBuckets,
     finalizePendingLockedDisplayByPool,
+    getConfiguredMonthlyTypeCap,
 } = require('./monthlyApplicationCapService');
 
 /**
@@ -66,12 +68,30 @@ function isPayrollPeriodStrictlyAfter(month, year, cap) {
     return comparePayrollCyclePeriod(year, month, cap.year, cap.month) > 0;
 }
 
+function gateMonthSlotEditFlags(flags) {
+    if (flags.allowEditMonth === false) {
+        return {
+            allowEditMonth: false,
+            allowEditClCredits: false,
+            allowEditCclCredits: false,
+            allowEditElCredits: false,
+            allowEditPolicyLock: false,
+            allowEditUsedCl: false,
+            allowEditUsedCcl: false,
+            allowEditUsedEl: false,
+            allowCarryUnusedToNextMonth: false,
+        };
+    }
+    return { ...flags, allowEditMonth: flags.allowEditMonth !== false };
+}
+
 function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
     const allow = (v) => v !== false;
     const cfg = policyDoc?.leaveRegisterMonthSlotEdit || {};
     const flat = cfg || {};
     const defaults = cfg?.defaults || {};
     const base = {
+        allowEditMonth: allow(defaults.allowEditMonth ?? flat.allowEditMonth),
         allowEditClCredits: allow(defaults.allowEditClCredits ?? flat.allowEditClCredits),
         allowEditCclCredits: allow(defaults.allowEditCclCredits ?? flat.allowEditCclCredits),
         allowEditElCredits: allow(defaults.allowEditElCredits ?? flat.allowEditElCredits),
@@ -90,9 +110,12 @@ function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
         typeof cfg.byPayrollMonthIndex === 'object'
             ? cfg.byPayrollMonthIndex[key]
             : null;
-    if (!override || typeof override !== 'object') return base;
-    return {
+    if (!override || typeof override !== 'object') return gateMonthSlotEditFlags(base);
+    const merged = {
         ...base,
+        allowEditMonth: allow(
+            override.allowEditMonth != null ? override.allowEditMonth : base.allowEditMonth
+        ),
         allowEditClCredits: allow(
             override.allowEditClCredits != null ? override.allowEditClCredits : base.allowEditClCredits
         ),
@@ -120,15 +143,141 @@ function resolveMonthSlotEditFlags(policyDoc, payrollMonthIndex) {
                 : base.allowCarryUnusedToNextMonth
         ),
     };
+    return gateMonthSlotEditFlags(merged);
+}
+
+/** First calendar month (1–12) of FY period 1 — must match DateCycleService FY + settings grid order. */
+function effectiveFyStartMonthForPayrollIndex(policyDoc) {
+    const fy = policyDoc?.financialYear;
+    if (fy && fy.useCalendarYear === true) return 1;
+    const m = Number(fy?.startMonth);
+    if (Number.isFinite(m) && m >= 1 && m <= 12) return m;
+    return 4;
 }
 
 function derivePolicyMonthIndexFromCycleMonth(slot, policyDoc) {
-    const startMonth = Number(policyDoc?.financialYear?.startMonth) || 4; // default Apr
+    const startMonth = effectiveFyStartMonthForPayrollIndex(policyDoc);
     const pcm = Number(slot?.payrollCycleMonth);
     if (!Number.isFinite(pcm) || pcm < 1 || pcm > 12) {
         return Number(slot?.payrollMonthIndex) || 1;
     }
     return ((pcm - startMonth + 12) % 12) + 1;
+}
+
+function round2(n) {
+    return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function istDateKey(d) {
+    return extractISTComponents(d).dateStr;
+}
+
+function overlapDaysInclusiveIST(aStart, aEnd, bStart, bEnd) {
+    const aS = istDateKey(aStart);
+    const aE = istDateKey(aEnd);
+    const bS = istDateKey(bStart);
+    const bE = istDateKey(bEnd);
+    const s = aS > bS ? aS : bS;
+    const e = aE < bE ? aE : bE;
+    if (e < s) return 0;
+    const sd = createISTDate(s);
+    const ed = createISTDate(e);
+    return Math.floor((ed.getTime() - sd.getTime()) / 86400000) + 1;
+}
+
+function normalizedDays(n, isHalfDay = false) {
+    const v = Number(n);
+    if (Number.isFinite(v) && v > 0) return v;
+    return isHalfDay ? 0.5 : 1;
+}
+
+async function buildClUsedLockedAuditForSlot(employeeId, slotStart, slotEnd) {
+    if (!employeeId || !slotStart || !slotEnd) {
+        return { used: [], locked: [] };
+    }
+    const intermediateStatuses = (CAP_COUNT_STATUSES || []).filter((s) => s !== 'approved');
+    const leaves = await Leave.find({
+        employeeId,
+        isActive: { $ne: false },
+        leaveType: /^CL$/i,
+        status: { $in: CAP_COUNT_STATUSES || [] },
+        fromDate: { $lte: slotEnd },
+        toDate: { $gte: slotStart },
+    })
+        .select('_id leaveType status splitStatus fromDate toDate numberOfDays')
+        .lean();
+    if (!leaves.length) return { used: [], locked: [] };
+
+    const splitLeaveIds = leaves
+        .filter((lv) => String(lv?.splitStatus || '').toLowerCase() === 'split_approved' && lv?._id)
+        .map((lv) => lv._id);
+    const splits = splitLeaveIds.length
+        ? await LeaveSplit.find({
+              leaveId: { $in: splitLeaveIds },
+              status: 'approved',
+              leaveType: /^CL$/i,
+              date: { $gte: slotStart, $lte: slotEnd },
+          })
+              .select('leaveId date numberOfDays isHalfDay')
+              .lean()
+        : [];
+    const splitsByLeave = new Map();
+    for (const s of splits) {
+        const k = String(s.leaveId);
+        const arr = splitsByLeave.get(k) || [];
+        arr.push(s);
+        splitsByLeave.set(k, arr);
+    }
+
+    const used = [];
+    const locked = [];
+    for (const lv of leaves) {
+        const st = String(lv?.status || '').toLowerCase();
+        const isUsed = st === 'approved';
+        const isLocked = intermediateStatuses.includes(st);
+        if (!isUsed && !isLocked) continue;
+
+        let contributed = 0;
+        let source = 'leave';
+        const splitRows = splitsByLeave.get(String(lv?._id)) || [];
+        const isSplitApproved = String(lv?.splitStatus || '').toLowerCase() === 'split_approved';
+        if (splitRows.length > 0) {
+            source = 'split';
+            for (const sp of splitRows) {
+                contributed += normalizedDays(sp.numberOfDays, !!sp.isHalfDay);
+            }
+        } else if (!isSplitApproved) {
+            const from = new Date(lv.fromDate);
+            const to = new Date(lv.toDate);
+            const overlapDays = overlapDaysInclusiveIST(from, to, slotStart, slotEnd);
+            if (overlapDays > 0) {
+                const leaveSpanDays = Math.max(1, overlapDaysInclusiveIST(from, to, from, to));
+                const leaveDays = Number(lv.numberOfDays) || 0;
+                if (leaveDays > 0) contributed += round2((leaveDays * overlapDays) / leaveSpanDays);
+            }
+        }
+        contributed = round2(contributed);
+        if (contributed <= 0) continue;
+
+        const item = {
+            leaveId: String(lv._id),
+            leaveType: String(lv.leaveType || 'CL').toUpperCase(),
+            status: st,
+            appliedFrom: lv.fromDate,
+            appliedTo: lv.toDate,
+            requestDays: Number(lv.numberOfDays) || 0,
+            contributedDays: contributed,
+            source,
+        };
+        if (isUsed) used.push(item);
+        else locked.push(item);
+    }
+
+    const sortByFrom = (a, b) =>
+        new Date(a?.appliedFrom || 0).getTime() - new Date(b?.appliedFrom || 0).getTime();
+    used.sort(sortByFrom);
+    locked.sort(sortByFrom);
+    return { used, locked };
 }
 
 /**
@@ -359,10 +508,28 @@ class LeaveRegisterService {
             const designation = (employee.designation_id && employee.designation_id.name) || employee.designation?.name || 'N/A';
             const department = (employee.department_id && employee.department_id.name) || employee.department?.name || 'N/A';
 
-            const leaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
             const statusUpper = String(leaveRecord.status || 'cancelled').toUpperCase();
-            
-            const transactionData = {
+            const dateCycleService = require('./dateCycleService');
+            const fy = await dateCycleService.getFinancialYearForDate(leaveRecord.fromDate);
+            const yearDoc = await LeaveRegisterYear.findOne({
+                employeeId: leaveRecord.employeeId,
+                financialYear: fy.name,
+            }).lean();
+
+            /** One approved CL app can post multiple DEBIT rows (CL+CCL+EL substitution); reverse every matching row. */
+            const matchingDebits = [];
+            if (leaveRecord._id && yearDoc?.months?.length) {
+                const appId = String(leaveRecord._id);
+                for (const slot of yearDoc.months) {
+                    for (const tx of slot.transactions || []) {
+                        if (!tx?.applicationId || String(tx.applicationId) !== appId) continue;
+                        if (String(tx.transactionType || '').toUpperCase() !== 'DEBIT') continue;
+                        matchingDebits.push(tx);
+                    }
+                }
+            }
+
+            const base = {
                 employeeId: leaveRecord.employeeId,
                 empNo: employee.emp_no,
                 employeeName,
@@ -372,21 +539,40 @@ class LeaveRegisterService {
                 departmentId: employee.department_id,
                 dateOfJoining: employee.doj,
                 employmentStatus: employee.is_active ? 'active' : 'inactive',
-
-                leaveType,
-                transactionType: 'CREDIT', // Reversing a debit is a credit
-                startDate: leaveRecord.fromDate,
-                endDate: leaveRecord.toDate,
-                days: leaveRecord.numberOfDays,
                 applicationId: leaveRecord._id,
                 applicationDate: leaveRecord.createdAt,
                 approvalDate: new Date(),
                 approvedBy: cancelledByUserId,
                 status: statusUpper,
-                reason: 'Leave Application Cancelled/Reversed'
+                reason: 'Leave Application Cancelled/Reversed',
             };
 
-            return await this.addTransaction(transactionData);
+            if (matchingDebits.length > 0) {
+                let lastResult = null;
+                const ordered = [...matchingDebits].reverse();
+                for (const tx of ordered) {
+                    const lt = String(tx.leaveType || '').toUpperCase() === 'LOP' ? 'LOP' : String(tx.leaveType || 'CL');
+                    lastResult = await this.addTransaction({
+                        ...base,
+                        leaveType: lt,
+                        transactionType: 'CREDIT',
+                        startDate: tx.startDate || leaveRecord.fromDate,
+                        endDate: tx.endDate || leaveRecord.toDate,
+                        days: Number(tx.days) || 0,
+                    });
+                }
+                return lastResult;
+            }
+
+            const leaveType = leaveRecord.leaveType === 'LOP' ? 'LOP' : (leaveRecord.leaveType || 'CL');
+            return await this.addTransaction({
+                ...base,
+                leaveType,
+                transactionType: 'CREDIT',
+                startDate: leaveRecord.fromDate,
+                endDate: leaveRecord.toDate,
+                days: leaveRecord.numberOfDays,
+            });
         } catch (error) {
             console.error('Error reversing leave debit:', error);
             throw error;
@@ -736,6 +922,10 @@ class LeaveRegisterService {
                 capConsumedDays: 0,
                 capApprovedDays: 0,
                 capLockedDays: 0,
+                /** Approved days toward per-type monthly caps (native application type). */
+                approvedClCapDays: 0,
+                approvedCclCapDays: 0,
+                approvedElCapDays: 0,
                 /** In-flight days by application leave type (before pool hierarchy → Lk columns). */
                 lockedClAppDays: 0,
                 lockedCclAppDays: 0,
@@ -851,6 +1041,9 @@ class LeaveRegisterService {
                     sub.capConsumedDays = bucket.capConsumedDays;
                     sub.capApprovedDays = bucket.capApprovedDays;
                     sub.capLockedDays = bucket.capLockedDays;
+                    sub.approvedClCapDays = Number(bucket.approvedClCapDays) || 0;
+                    sub.approvedCclCapDays = Number(bucket.approvedCclCapDays) || 0;
+                    sub.approvedElCapDays = Number(bucket.approvedElCapDays) || 0;
                     const clBal = Number(sub.casualLeave?.balance) || 0;
                     const cclBal = Number(sub.compensatoryOff?.balance) || 0;
                     const elBal = Number(sub.earnedLeave?.balance) || 0;
@@ -930,6 +1123,9 @@ class LeaveRegisterService {
             capConsumedDays: sub?.capConsumedDays,
             capApprovedDays: sub?.capApprovedDays,
             capLockedDays: sub?.capLockedDays,
+            approvedClCapDays: sub?.approvedClCapDays,
+            approvedCclCapDays: sub?.approvedCclCapDays,
+            approvedElCapDays: sub?.approvedElCapDays,
         });
 
         for (const entry of groupedData) {
@@ -1000,6 +1196,12 @@ class LeaveRegisterService {
                     const txs = !lite && sub?.transactions?.length ? [...sub.transactions] : [];
                     const txCount = sub?.transactions?.length ?? 0;
 
+                    const slotStart = slot.payPeriodStart ? new Date(slot.payPeriodStart) : null;
+                    const slotEnd = slot.payPeriodEnd ? new Date(slot.payPeriodEnd) : null;
+                    const clAudit =
+                        !lite && eid && slotStart && slotEnd
+                            ? await buildClUsedLockedAuditForSlot(eid, slotStart, slotEnd)
+                            : { used: [], locked: [] };
                     monthsOut.push({
                         payrollMonthIndex: policyMonthIndex,
                         label: slot.label || `Period ${policyMonthIndex}`,
@@ -1032,6 +1234,10 @@ class LeaveRegisterService {
                         transactions: txs,
                         transactionCount: txCount,
                         hasLedgerSlot: !!sub,
+                        audit: {
+                            clUsed: clAudit.used,
+                            clLocked: clAudit.locked,
+                        },
                     });
                 }
 
@@ -1075,6 +1281,10 @@ class LeaveRegisterService {
                         transactions: txs,
                         transactionCount: txCount,
                         hasLedgerSlot: true,
+                        audit: {
+                            clUsed: [],
+                            clLocked: [],
+                        },
                     };
                 });
             }
@@ -1111,7 +1321,7 @@ class LeaveRegisterService {
                         : hasStored && st.consumed != null && Number.isFinite(Number(st.consumed))
                           ? Number(st.consumed)
                           : 0;
-                const effectiveConsumed = Math.max(0, consumed + policyLock);
+                const effectiveConsumed = Math.max(0, consumed);
                 const capLockedDays =
                     sub != null && Number.isFinite(Number(sub?.capLockedDays))
                         ? Number(sub.capLockedDays)
@@ -1119,7 +1329,7 @@ class LeaveRegisterService {
                           ? Number(st.locked)
                           : null;
                 const capLockedWithPolicy =
-                    capLockedDays == null ? policyLock : Math.max(0, Number(capLockedDays) + policyLock);
+                    capLockedDays == null ? null : Math.max(0, Number(capLockedDays));
                 const capApprovedDays =
                     sub != null && Number.isFinite(Number(sub?.capApprovedDays))
                         ? Number(sub.capApprovedDays)
@@ -1128,7 +1338,27 @@ class LeaveRegisterService {
                           : null;
                 const monthlyApplyRemaining =
                     applyLimit != null ? Math.max(0, applyLimit - effectiveConsumed) : null;
-                const clLockedDisplay = (sub != null ? Number(sub.pendingLockedCL) || 0 : 0) + policyLock;
+                const clLockedDisplay = sub != null ? Number(sub.pendingLockedCL) || 0 : 0;
+
+                const clTypeCap = getConfiguredMonthlyTypeCap(policy, 'CL');
+                const cclTypeCap = getConfiguredMonthlyTypeCap(policy, 'CCL');
+                const elTypeCap = getConfiguredMonthlyTypeCap(policy, 'EL');
+                const clTypeOn = Number.isFinite(clTypeCap) && clTypeCap > 0;
+                const cclTypeOn = Number.isFinite(cclTypeCap) && cclTypeCap > 0;
+                const elTypeOn = Number.isFinite(elTypeCap) && elTypeCap > 0;
+                const clNativeApp =
+                    sub != null
+                        ? (Number(sub.approvedClCapDays) || 0) + (Number(sub.lockedClAppDays) || 0)
+                        : 0;
+                const cclNativeApp =
+                    sub != null
+                        ? (Number(sub.approvedCclCapDays) || 0) + (Number(sub.lockedCclAppDays) || 0)
+                        : 0;
+                const elNativeApp =
+                    sub != null
+                        ? (Number(sub.approvedElCapDays) || 0) + (Number(sub.lockedElAppDays) || 0)
+                        : 0;
+
                 return {
                     payrollMonthIndex: m.payrollMonthIndex,
                     label: m.label,
@@ -1158,16 +1388,27 @@ class LeaveRegisterService {
                         used: Number(clL.usedThisMonth) || 0,
                         locked: sub != null ? clLockedDisplay : policyLock,
                         transfer: Number(m.scheduled?.poolCarryForwardOut?.cl) || 0,
+                        typeApplyCap: clTypeOn ? clTypeCap : null,
+                        typeApplyConsumed: clTypeOn ? clNativeApp : null,
+                        typeApplyRemaining: clTypeOn ? Math.max(0, clTypeCap - clNativeApp) : null,
+                        usedAudit: Array.isArray(m.audit?.clUsed) ? m.audit.clUsed : [],
+                        lockedAudit: Array.isArray(m.audit?.clLocked) ? m.audit.clLocked : [],
                     },
                     ccl: {
                         credited: Math.max(0, (Number(cclL.earned) || 0) - (Number(cclL.reversalCreditThisMonth) || 0)),
                         used: Number(cclL.used) || 0,
                         locked: sub != null ? Number(sub.pendingLockedCCL) || 0 : null,
+                        typeApplyCap: cclTypeOn ? cclTypeCap : null,
+                        typeApplyConsumed: cclTypeOn ? cclNativeApp : null,
+                        typeApplyRemaining: cclTypeOn ? Math.max(0, cclTypeCap - cclNativeApp) : null,
                     },
                     el: {
                         credited: Math.max(0, (Number(elL.accruedThisMonth) || 0) - (Number(elL.reversalCreditThisMonth) || 0)),
                         used: Number(elL.usedThisMonth) || 0,
                         locked: sub != null ? Number(sub.pendingLockedEL) || 0 : null,
+                        typeApplyCap: elTypeOn ? elTypeCap : null,
+                        typeApplyConsumed: elTypeOn ? elNativeApp : null,
+                        typeApplyRemaining: elTypeOn ? Math.max(0, elTypeCap - elNativeApp) : null,
                     },
                 };
             });

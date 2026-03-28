@@ -1,6 +1,7 @@
 /**
- * Persists monthly apply ceiling & consumption on LeaveRegisterYear.months[] so UIs read stored values.
- * Ceiling = min(scheduled pool, policy cap); consumption = cap-counting leaves (pending + approved).
+ * Persists monthly pool ceiling & pooled consumption on LeaveRegisterYear.months[] (register UI).
+ * Ceiling = scheduled CL+CCL[+EL when includeEL]; consumption = policy-weighted cap days (pending + approved).
+ * Per-type apply limits are enforced separately (maxDaysByType).
  */
 
 const LeaveRegisterYear = require('../model/LeaveRegisterYear');
@@ -13,6 +14,7 @@ const {
   sumCountedCapDaysForLeaveInPeriod,
   sumLeaveTypeDaysForLeaveInPeriod,
   getConfiguredMonthlyTypeCap,
+  isPerTypeMonthlyCapActive,
 } = require('./monthlyApplicationCapService');
 
 function findSlotIndex(months, pcMonth, pcYear) {
@@ -59,9 +61,10 @@ async function syncStoredMonthApplyFieldsForEmployeeDate(employeeId, fromDate) {
     employeeId,
     isActive: true,
     status: { $in: CAP_COUNT_STATUSES },
-    fromDate: { $gte: start, $lte: end },
+    fromDate: { $lte: end },
+    toDate: { $gte: start },
   })
-    .select('leaveType numberOfDays status splitStatus')
+    .select('leaveType numberOfDays status splitStatus fromDate toDate')
     .lean();
 
   let consumed = 0;
@@ -208,9 +211,10 @@ async function getApplyPeriodContextForEmployee(employeeId, fromDate, options = 
     employeeId,
     isActive: true,
     status: { $in: CAP_COUNT_STATUSES },
-    fromDate: { $gte: start, $lte: end },
+    fromDate: { $lte: end },
+    toDate: { $gte: start },
   })
-    .select('_id leaveType numberOfDays status splitStatus')
+    .select('_id leaveType numberOfDays status splitStatus fromDate toDate')
     .lean();
   let typeApproved = 0;
   let typeLocked = 0;
@@ -222,9 +226,10 @@ async function getApplyPeriodContextForEmployee(employeeId, fromDate, options = 
   }
   const typeConsumed = typeApproved + typeLocked;
   const typeCap = getConfiguredMonthlyTypeCap(policy, requestedType);
-  const typeCapEnabled = !!policy?.monthlyLeaveApplicationCap?.enabled;
+  const perTypeOn = isPerTypeMonthlyCapActive(policy, requestedType);
+  const typeCapEnabled = perTypeOn;
   const typeCapValue = Number.isFinite(typeCap) && Number(typeCap) >= 0 ? Number(typeCap) : 0;
-  const typeRemaining = typeCapEnabled ? Math.max(0, typeCapValue - typeConsumed) : null;
+  const typeRemaining = perTypeOn ? Math.max(0, typeCapValue - typeConsumed) : null;
 
   return {
     ok: true,

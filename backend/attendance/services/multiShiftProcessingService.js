@@ -20,6 +20,15 @@ const formatDate = (date) => {
     return extractISTComponents(date).dateStr;
 };
 
+function getMaxPunchWindowMs() {
+    // Reduce the punch pairing window (previously hardcoded 36h).
+    // Configurable via env so environments can tune without code changes.
+    const hoursRaw = Number(process.env.ATTENDANCE_PUNCH_WINDOW_HOURS);
+    const hours = Number.isFinite(hoursRaw) && hoursRaw > 0 ? hoursRaw : 24; // default 24h
+    const clamped = Math.max(6, Math.min(48, hours)); // safety bounds
+    return clamped * 60 * 60 * 1000;
+}
+
 /**
  * Calculate overlap between two time ranges in minutes
  */
@@ -288,7 +297,7 @@ async function processMultiShiftAttendance(employeeNumber, date, rawLogs, genera
             // 2. Initial Pair Detection (Closest next punch)
             // 36h window covers: 24hr shifts (9AM Day1→9AM Day2 = 24h), 9AM-9PM/9PM-9AM split
             // spans up to 36h from first IN. This must match the spec requirement.
-            const MAX_WINDOW_MS = 36 * 60 * 60 * 1000;
+            const MAX_WINDOW_MS = getMaxPunchWindowMs();
             let nextOut = effectiveOutOverride && i === 0
                 ? effectiveOutOverride
                 : allOutsFull.find(p => {
@@ -903,7 +912,7 @@ async function processMultiShiftBatch(logsByEmployee, generalConfig) {
                         const earliestIn = currentIns.length > 0
                             ? new Date(Math.min(...currentIns.map(l => new Date(l.timestamp).getTime())))
                             : null;
-                        const MAX_CROSS_DAY_MS = 36 * 60 * 60 * 1000;
+                        const MAX_CROSS_DAY_MS = getMaxPunchWindowMs();
                         const eligibleOuts = earliestIn
                             ? nextDayOuts.filter(l => {
                                 const diff = new Date(l.timestamp).getTime() - earliestIn.getTime();
