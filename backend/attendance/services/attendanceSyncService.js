@@ -352,10 +352,65 @@ const filterRedundantLogs = (logs, windowMinutes = 30) => {
   return filteredLogs;
 };
 
+/**
+ * Reprocess attendance for a single employee and date (useful for roster updates)
+ * @param {string} employeeNumber - Employee number
+ * @param {string} date - Date in YYYY-MM-DD
+ * @returns {Promise<Object>} Result of processing
+ */
+const reprocessAttendanceForEmployeeDate = async (employeeNumber, date) => {
+  try {
+    const empNo = String(employeeNumber || '').toUpperCase();
+    if (!empNo || !date) throw new Error('Employee number and date are required');
+
+    console.log(`[SyncService] Reprocessing attendance for ${empNo} on ${date}...`);
+
+    // Fetch global general settings
+    const Settings = require('../../settings/model/Settings');
+    const generalConfig = await Settings.getSettingsByCategory('general');
+
+    // Fetch raw logs for the employee for a 3-day window centered on the date (to handle overnight shifts)
+    const AttendanceRawLog = require('../model/AttendanceRawLog');
+    const targetDate = new Date(date);
+    const minDateObj = new Date(targetDate);
+    const maxDateObj = new Date(targetDate);
+    minDateObj.setDate(minDateObj.getDate() - 1);
+    maxDateObj.setDate(maxDateObj.getDate() + 1);
+
+    const logs = await AttendanceRawLog.find({
+      employeeNumber: empNo,
+      date: {
+        $gte: formatDate(minDateObj),
+        $lte: formatDate(maxDateObj),
+      },
+      timestamp: { $gte: new Date('2020-01-01') },
+      type: { $in: ['IN', 'OUT', null] },
+    }).sort({ timestamp: 1 });
+
+    const { processMultiShiftAttendance } = require('./multiShiftProcessingService');
+    const result = await processMultiShiftAttendance(
+      empNo,
+      date,
+      logs.map(log => ({
+        timestamp: new Date(log.timestamp),
+        type: log.type,
+        _id: log._id,
+      })),
+      generalConfig
+    );
+
+    return result;
+  } catch (error) {
+    console.error(`[SyncService] Error reprocessing attendance for ${employeeNumber} on ${date}:`, error.message);
+    throw error;
+  }
+};
+
 module.exports = {
   syncAttendanceFromMSSQL,
   processAndAggregateLogs,
   formatDate,
-  filterRedundantLogs
+  filterRedundantLogs,
+  reprocessAttendanceForEmployeeDate
 };
 
