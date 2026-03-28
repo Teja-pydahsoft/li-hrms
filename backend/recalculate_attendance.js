@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const AttendanceSettings = require('./attendance/model/AttendanceSettings');
 const singleShiftService = require('./attendance/services/singleShiftProcessingService');
 const multiShiftService = require('./attendance/services/multiShiftProcessingService');
+const summaryCalculationService = require('./attendance/services/summaryCalculationService');
 
 async function run() {
   const args = process.argv.slice(2);
@@ -163,6 +164,14 @@ async function run() {
           console.log(`   Failed: ${result?.message || 'Unknown error'}`);
         }
       }
+    }
+    
+    // Trigger Monthly Summary Recalculation after daily updates
+    if (!dryRun) {
+      const monthToTrigger = dateStr.substring(0, 7); // Extract YYYY-MM
+      console.log(`\nTriggering Monthly Summary Refresh for ${empNo} in ${monthToTrigger}...`);
+      await summaryCalculationService.calculateMonthlySummaryByEmpNo(empNo, monthToTrigger);
+      console.log('Summary Refresh Complete.');
     }
 
   } catch (error) {
