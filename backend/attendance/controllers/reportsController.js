@@ -7,6 +7,10 @@ const PreScheduledShift = require('../../shifts/model/PreScheduledShift');
 const dateCycleService = require('../../leaves/services/dateCycleService');
 const biometricReportService = require('../services/biometricReportService');
 const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
 const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
 const { calculateMonthlySummary } = require('../services/summaryCalculationService');
@@ -66,7 +70,7 @@ exports.getAttendanceReport = async (req, res) => {
         // Apply filters by fetching relevant employee IDs first if department/division/designation is set
         if ((departmentId && departmentId !== 'all') || (divisionId && divisionId !== 'all') || (designationId && designationId !== 'all')) {
             const empFilter = { is_active: { $ne: false } };
-            
+
             if (designationId && designationId !== 'all') {
                 const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
                 empFilter.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
@@ -78,14 +82,14 @@ exports.getAttendanceReport = async (req, res) => {
             } else if (divisionId && divisionId !== 'all') {
                 const divIds = String(divisionId).split(',').filter(id => id && id !== 'all');
                 const divIdsCount = divIds.length;
-                
+
                 // If only division is set, find all departments linked to these divisions
                 const divisions = await Division.find({ _id: { $in: divIds } }).select('departments').lean();
                 let divisionLinkedDeptIds = [];
                 divisions.forEach(div => {
                     if (div.departments) divisionLinkedDeptIds = [...divisionLinkedDeptIds, ...div.departments];
                 });
-                
+
                 const depts = await Department.find({
                     $or: [
                         { divisions: { $in: divIds } },
@@ -93,7 +97,7 @@ exports.getAttendanceReport = async (req, res) => {
                     ]
                 }).select('_id');
                 const deptIds = depts.map(d => d._id);
-                
+
                 empFilter.$or = [
                     { division_id: { $in: divIds } },
                     { department_id: { $in: deptIds } }
@@ -102,7 +106,7 @@ exports.getAttendanceReport = async (req, res) => {
 
             const employees = await Employee.find(empFilter).select('emp_no');
             const empNos = employees.map(e => e.emp_no);
-            
+
             if (query.employeeNumber) {
                 // If specific employees were already selected, intersect them
                 const existingEmpNos = query.employeeNumber.$in || [query.employeeNumber];
@@ -157,12 +161,12 @@ exports.getAttendanceReport = async (req, res) => {
             })
         ]);
 
-        const sDate = dayjs(startDate || new Date());
-        const eDate = dayjs(endDate || new Date());
+        const sDate = dayjs.tz(startDate || dayjs().tz('Asia/Kolkata'), 'Asia/Kolkata').startOf('day');
+        const eDate = dayjs.tz(endDate || dayjs().tz('Asia/Kolkata'), 'Asia/Kolkata').endOf('day');
         const daysInRange = Math.max(1, eDate.diff(sDate, 'day') + 1);
 
         const statsRaw = statsData[0] || { present: 0, absent: 0, late: 0, od: 0 };
-        
+
         // Calculate total employees for overall stats
         let overallEmpFilter = { is_active: { $ne: false } };
         if (designationId && designationId !== 'all') {
@@ -201,7 +205,7 @@ exports.getAttendanceReport = async (req, res) => {
         const avgWO_all = totalEmployeesCard > 0 ? totalWO_all / totalEmployeesCard : 0;
         const avgHOL_all = totalEmployeesCard > 0 ? totalHOL_all / totalEmployeesCard : 0;
         const expectedWorkingDaysOverall = Math.max(0, daysInRange - avgWO_all - avgHOL_all);
-        
+
         const trueOverallAbsent = Math.max(0, (expectedWorkingDaysOverall * totalEmployeesCard) - (statsRaw.present || 0) - (statsRaw.od || 0) - (onLeaveCount || 0));
 
         const stats = {
@@ -216,7 +220,7 @@ exports.getAttendanceReport = async (req, res) => {
         let summaries = [];
         if (groupBy === 'division' || groupBy === 'department' || groupBy === 'employee') {
             const groupField = groupBy === 'division' ? 'division_id' : (groupBy === 'department' ? 'department_id' : '_id');
-            
+
             // Fetch all relevant children (Divisions or Departments)
             let children = [];
             if (groupBy === 'division') {
@@ -225,12 +229,12 @@ exports.getAttendanceReport = async (req, res) => {
                 // Normalize divisionId to a single ID for child filtering
                 const activeDivId = Array.isArray(divisionId) ? divisionId[0] : (String(divisionId).split(',').filter(id => id && id !== 'all')[0]);
                 if (!activeDivId) return res.status(400).json({ success: false, message: 'Division ID is required for department grouping' });
-                
+
                 // Get departments linked in both directions (Department.divisions AND Division.departments)
                 const division = await Division.findById(activeDivId).select('departments').lean();
                 const divisionLinkedDeptIds = (division && division.departments) ? division.departments : [];
 
-                children = await Department.find({ 
+                children = await Department.find({
                     isActive: { $ne: false },
                     $or: [
                         { divisions: activeDivId },
@@ -240,14 +244,14 @@ exports.getAttendanceReport = async (req, res) => {
             } else if (groupBy === 'employee') {
                 const activeDivId = Array.isArray(divisionId) ? divisionId[0] : (String(divisionId).split(',').filter(id => id && id !== 'all')[0]);
                 const activeDeptId = Array.isArray(departmentId) ? departmentId[0] : (String(departmentId).split(',').filter(id => id && id !== 'all')[0]);
-                
+
                 if (!activeDeptId) {
                     return res.status(400).json({ success: false, message: 'Department ID is required for employee grouping' });
                 }
-                
+
                 // Prioritize department_id for employee grouping
                 const empFilter = { is_active: { $ne: false }, department_id: activeDeptId };
-                
+
                 if (designationId && designationId !== 'all') {
                     const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
                     empFilter.designation_id = desigIds.length > 1 ? { $in: desigIds } : desigIds[0];
@@ -256,13 +260,13 @@ exports.getAttendanceReport = async (req, res) => {
                 if (activeDivId) {
                     // Division is already implicitly handled by depts, but we can add it for strictness if needed
                 }
-                
+
                 const emps = await Employee.find(empFilter).select('employee_name emp_no').lean();
-                children = emps.map(e => ({ 
-                    _id: e._id, 
-                    name: `${e.employee_name} (${e.emp_no})`, 
-                    employee_name: e.employee_name, 
-                    emp_no: e.emp_no 
+                children = emps.map(e => ({
+                    _id: e._id,
+                    name: `${e.employee_name} (${e.emp_no})`,
+                    employee_name: e.employee_name,
+                    emp_no: e.emp_no
                 }));
             }
 
@@ -276,7 +280,7 @@ exports.getAttendanceReport = async (req, res) => {
                     total = 1;
                 } else {
                     const childEmpFilter = { is_active: { $ne: false } };
-                    
+
                     if (groupBy === 'division') {
                         // Get departments linked to this division
                         const division = await Division.findById(child._id).select('departments').lean();
@@ -288,7 +292,7 @@ exports.getAttendanceReport = async (req, res) => {
                             ]
                         }).select('_id');
                         const deptIds = depts.map(d => d._id);
-                        
+
                         childEmpFilter.$or = [
                             { division_id: child._id },
                             { department_id: { $in: deptIds } }
@@ -301,14 +305,14 @@ exports.getAttendanceReport = async (req, res) => {
                             childEmpFilter.division_id = divisionId;
                         }
                     }
-                    
+
                     const childEmployees = await Employee.find(childEmpFilter).select('emp_no');
                     childEmpNos = childEmployees.map(e => e.emp_no);
                     total = childEmployees.length;
                 }
-                
+
                 const childQuery = { ...query, employeeNumber: { $in: childEmpNos } };
-                
+
                 const [childStatsData, childLeaveCount] = await Promise.all([
                     AttendanceDaily.aggregate([
                         { $match: childQuery },
@@ -333,7 +337,7 @@ exports.getAttendanceReport = async (req, res) => {
                 ]);
 
                 const cStats = childStatsData[0] || { present: 0, absent: 0, holiday: 0, late: 0, od: 0 };
-                
+
                 // Calculate expected working days for this child group
                 let totalWO = 0, totalHOL = 0;
                 childEmpNos.forEach(eno => {
@@ -343,7 +347,7 @@ exports.getAttendanceReport = async (req, res) => {
                 });
                 const avgWO = total > 0 ? totalWO / total : 0;
                 const avgHOL = total > 0 ? totalHOL / total : 0;
-                
+
                 const expectedWorkingDays = Math.max(0, daysInRange - avgWO - avgHOL);
                 const trueAbsent = Math.max(0, expectedWorkingDays - (cStats.present || 0) - (cStats.od || 0) - (childLeaveCount || 0));
 
@@ -359,7 +363,7 @@ exports.getAttendanceReport = async (req, res) => {
                     lateMinutes: cStats.lateMinutes || 0,
                     onDuty: cStats.onDuty || 0,
                     onLeave: childLeaveCount,
-                    presentPercent: expectedWorkingDays > 0 ? 
+                    presentPercent: expectedWorkingDays > 0 ?
                         Math.min(100, (((cStats.present || 0) + (cStats.od || 0)) / (expectedWorkingDays * total) * 100)).toFixed(1) : "0.0",
                     lates: cStats.late,
                     leave: childLeaveCount,
@@ -426,6 +430,9 @@ exports.getThumbReports = async (req, res) => {
             page: parseInt(page) || 1
         };
 
+        const filterStartDate = dayjs.tz(startDate, 'Asia/Kolkata').startOf('day').toISOString();
+        const filterEndDate = dayjs.tz(endDate, 'Asia/Kolkata').endOf('day').toISOString();
+
         const PRE = await PreScheduledShift.find({
             date: { $gte: startDate, $lte: endDate },
             status: { $in: ['WO', 'HOL'] }
@@ -453,7 +460,11 @@ exports.getThumbReports = async (req, res) => {
             filters.employeeIds = employees.map(e => e.emp_no);
         }
 
-        const result = await biometricReportService.getThumbReports(filters);
+        const result = await biometricReportService.getThumbReports({
+            ...filters,
+            startDate: filterStartDate,
+            endDate: filterEndDate
+        });
         const { logs, total, totalPages } = result;
 
         // Map employee names for the logs
@@ -568,9 +579,8 @@ exports.exportAttendanceReport = async (req, res) => {
         const end = new Date(endDate);
         // Extend the fetch window: start one day before so we don't miss late INs,
         // and end 36 hours after the end date to capture cross-midnight OUTs.
-        const fetchStart = new Date(start); fetchStart.setHours(0, 0, 0, 0);
-        const fetchEnd = new Date(end); fetchEnd.setHours(23, 59, 59, 999);
-        fetchEnd.setTime(fetchEnd.getTime() + 36 * 60 * 60 * 1000); // +36h
+        const fetchStart = dayjs.tz(startDate, 'Asia/Kolkata').startOf('day').toDate();
+        const fetchEnd = dayjs.tz(endDate, 'Asia/Kolkata').endOf('day').add(36, 'hour').toDate();
 
         const thumbFilters = {
             startDate: fetchStart.toISOString(),
@@ -606,7 +616,7 @@ exports.exportAttendanceReport = async (req, res) => {
         // ── 3. Group raw logs by empId → dateKey (use timestamp's local date) ───
         const rawLogsByEmpDate = {}; // empId → dateKey → [{ time, type }]
 
-        const getDateKey = (date) => new Date(date).toISOString().slice(0, 10);
+        const getDateKey = (date) => dayjs(date).tz('Asia/Kolkata').format('YYYY-MM-DD');
 
         logs.forEach(log => {
             const empId = String(log.employeeId).toUpperCase();
@@ -831,7 +841,7 @@ exports.exportAttendanceReport = async (req, res) => {
                 status: { $in: ['WO', 'HOL'] }
             }).select('employeeNumber status');
 
-            const nonWorkingMap = {}; 
+            const nonWorkingMap = {};
             PRE.forEach(p => {
                 if (!nonWorkingMap[p.employeeNumber]) nonWorkingMap[p.employeeNumber] = { wo: 0, hol: 0 };
                 if (p.status === 'WO') nonWorkingMap[p.employeeNumber].wo++;
@@ -848,7 +858,7 @@ exports.exportAttendanceReport = async (req, res) => {
 
             for (const child of children) {
                 const childEmpFilter = { is_active: { $ne: false } };
-                
+
                 if (groupBy === 'division') {
                     const division = await Division.findById(child._id).select('departments').lean();
                     const divisionLinkedDeptIds = (division && division.departments) ? division.departments : [];
@@ -879,27 +889,27 @@ exports.exportAttendanceReport = async (req, res) => {
                 const [childStatsData, childLeaveCount] = await Promise.all([
                     AttendanceDaily.aggregate([
                         { $match: childQuery },
-                        { 
-                            $group: { 
-                                _id: null, 
-                                present: { $sum: "$payableShifts" }, 
-                                absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } }, 
+                        {
+                            $group: {
+                                _id: null,
+                                present: { $sum: "$payableShifts" },
+                                absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
                                 late: { $sum: { $cond: [{ $gt: ["$totalLateInMinutes", 0] }, 1, 0] } },
                                 od: { $sum: { $cond: [{ $gt: ["$odHours", 0] }, 1, 0] } }
-                            } 
+                            }
                         }
                     ]),
-                    Leave.countDocuments({ 
-                        status: 'approved', 
-                        isActive: true, 
-                        $or: [{ fromDate: { $lte: endDate }, toDate: { $gte: startDate } }], 
-                        emp_no: { $in: childEmpNos } 
+                    Leave.countDocuments({
+                        status: 'approved',
+                        isActive: true,
+                        $or: [{ fromDate: { $lte: endDate }, toDate: { $gte: startDate } }],
+                        emp_no: { $in: childEmpNos }
                     })
                 ]);
 
                 const cStats = childStatsData[0] || { present: 0, absent: 0, late: 0, od: 0 };
                 const total = childEmployees.length;
-                
+
                 let totalWO = 0, totalHOL = 0;
                 childEmpNos.forEach(eno => {
                     const nw = nonWorkingMap[eno] || { wo: 0, hol: 0 };
@@ -908,7 +918,7 @@ exports.exportAttendanceReport = async (req, res) => {
                 });
                 const avgWO = total > 0 ? totalWO / total : 0;
                 const avgHOL = total > 0 ? totalHOL / total : 0;
-                
+
                 const expectedWorkingDays = Math.max(0, daysInRange - avgWO - avgHOL);
                 const trueAbsent = Math.max(0, expectedWorkingDays - (cStats.present || 0) - (cStats.od || 0) - (childLeaveCount || 0));
 
@@ -934,21 +944,21 @@ exports.exportAttendanceReport = async (req, res) => {
             const [statsData, onLeaveCount] = await Promise.all([
                 AttendanceDaily.aggregate([
                     { $match: query },
-                    { 
-                        $group: { 
-                            _id: null, 
-                            present: { $sum: "$payableShifts" }, 
-                            absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } }, 
+                    {
+                        $group: {
+                            _id: null,
+                            present: { $sum: "$payableShifts" },
+                            absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
                             late: { $sum: { $cond: [{ $gt: ["$totalLateInMinutes", 0] }, 1, 0] } },
                             od: { $sum: { $cond: [{ $gt: ["$odHours", 0] }, 1, 0] } }
-                        } 
+                        }
                     }
                 ]),
                 Leave.countDocuments({ status: 'approved', isActive: true, $or: [{ fromDate: { $lte: endDate }, toDate: { $gte: startDate } }], ...(query.employeeNumber ? { emp_no: query.employeeNumber } : {}) })
             ]);
 
             const statsRaw = statsData[0] || { present: 0, absent: 0, late: 0, od: 0 };
-            
+
             const totalEmpQuery = { is_active: { $ne: false } };
             if (designationId && designationId !== 'all') {
                 const desigIds = String(designationId).split(',').filter(id => id && id !== 'all');
@@ -979,19 +989,19 @@ exports.exportAttendanceReport = async (req, res) => {
             const trueOverallAbsent_sel = Math.max(0, (expectedWorkingDays_sel * totalEmployees) - (statsRaw.present || 0) - (statsRaw.od || 0) - (onLeaveCount || 0));
 
             const abstractData = [
-                ['GENERAL ATTENDANCE SUMMARY'], 
-                ['Period', `${startDate} to ${endDate}`], 
-                ['Filter', `${divisionId !== 'all' ? 'Division: ' + divisionId : 'All Divisions'} | ${departmentId !== 'all' ? 'Dept: ' + departmentId : 'All Depts'}`], 
-                [''], 
-                ['Metric', 'Count'], 
-                ['Present (P)', Number((statsRaw.present || 0).toFixed(1))], 
-                ['Absent (A)', Number(trueOverallAbsent_sel.toFixed(1))], 
-                ['Late (L)', statsRaw.late], 
+                ['GENERAL ATTENDANCE SUMMARY'],
+                ['Period', `${startDate} to ${endDate}`],
+                ['Filter', `${divisionId !== 'all' ? 'Division: ' + divisionId : 'All Divisions'} | ${departmentId !== 'all' ? 'Dept: ' + departmentId : 'All Depts'}`],
+                [''],
+                ['Metric', 'Count'],
+                ['Present (P)', Number((statsRaw.present || 0).toFixed(1))],
+                ['Absent (A)', Number(trueOverallAbsent_sel.toFixed(1))],
+                ['Late (L)', statsRaw.late],
                 ['On Duty (OD)', statsRaw.od],
-                ['On Leave', onLeaveCount], 
+                ['On Leave', onLeaveCount],
                 ['Week Off (WO)', Number(avgWO_sel.toFixed(1))],
                 ['Holiday (HOL)', Number(avgHOL_sel.toFixed(1))],
-                [''], 
+                [''],
                 ['Total Headcount', totalEmployees],
                 ['Expected Working Days (Avg)', expectedWorkingDays_sel.toFixed(1)]
             ];
@@ -1004,7 +1014,7 @@ exports.exportAttendanceReport = async (req, res) => {
 
         const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
         const fname = `attendance_report_${startDate}_${endDate}.xlsx`;
-        
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
         res.send(buffer);
@@ -1040,13 +1050,13 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
     // Draw Header
     doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
     doc.fillColor('#FFFFFF').fontSize(fontSize).font('Helvetica-Bold');
-    
+
     let x = startX;
     headers.forEach((h, i) => {
         doc.text(h, x + 5, y + 8, { width: colWidths[i] - 10, align: 'left' });
         x += colWidths[i];
     });
-    
+
     y += 24;
     doc.font('Helvetica').fontSize(fontSize).fillColor('#33414d');
 
@@ -1064,8 +1074,8 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
         if (y > threshold) {
             doc.addPage({ size: 'A4', layout: layout, margin: 25 });
             if (onPageAdd) onPageAdd();
-            y = onPageAdd ? 65 : 50; 
-            
+            y = onPageAdd ? 65 : 50;
+
             // Re-draw header
             doc.fillColor(headerFill).rect(startX, y, tableWidth, 24).fill();
             doc.fillColor('#FFFFFF').fontSize(fontSize).font('Helvetica-Bold');
@@ -1085,9 +1095,9 @@ const drawPDFTableModern = (doc, headers, data, startX, startY, colWidths, optio
         doc.fillColor('#33414d');
         let xRow = startX;
         row.forEach((cell, i) => {
-            doc.text(String(cell || ''), xRow + 5, y + 6, { 
-                width: colWidths[i] - 10, 
-                align: 'left', 
+            doc.text(String(cell || ''), xRow + 5, y + 6, {
+                width: colWidths[i] - 10,
+                align: 'left',
                 lineBreak: false,
                 ellipsis: true
             });
@@ -1156,7 +1166,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 status: { $in: ['WO', 'HOL'] }
             }).select('employeeNumber status');
 
-            const nonWorkingMap = {}; 
+            const nonWorkingMap = {};
             PRE.forEach(p => {
                 if (!nonWorkingMap[p.employeeNumber]) nonWorkingMap[p.employeeNumber] = { wo: 0, hol: 0 };
                 if (p.status === 'WO') nonWorkingMap[p.employeeNumber].wo++;
@@ -1235,15 +1245,17 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     // Fallback to legacy aggregate if no month provided (rare for PDF)
                     const stats = await AttendanceDaily.aggregate([
                         { $match: { date: { $gte: startDate, $lte: endDate }, employeeNumber: { $in: childEmpNos } } },
-                        { $group: {
-                            _id: null,
-                            present: { $sum: "$payableShifts" },
-                            lateEarly: { $sum: { $cond: [{ $or: [{ $gt: ["$totalLateInMinutes", 0] }, { $gt: ["$totalEarlyOutMinutes", 0] }] }, 1, 0] } },
-                            ot: { $sum: "$totalOTHours" },
-                            extra: { $sum: "$extraHours" },
-                            perm: { $sum: "$permissionHours" },
-                            ded: { $sum: "$attendanceDeductionDays" }
-                        }}
+                        {
+                            $group: {
+                                _id: null,
+                                present: { $sum: "$payableShifts" },
+                                lateEarly: { $sum: { $cond: [{ $or: [{ $gt: ["$totalLateInMinutes", 0] }, { $gt: ["$totalEarlyOutMinutes", 0] }] }, 1, 0] } },
+                                ot: { $sum: "$totalOTHours" },
+                                extra: { $sum: "$extraHours" },
+                                perm: { $sum: "$permissionHours" },
+                                ded: { $sum: "$attendanceDeductionDays" }
+                            }
+                        }
                     ]);
                     const s = stats[0] || {};
                     entityStats.present = s.present || 0;
@@ -1255,7 +1267,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     entityStats.payable = s.present || 0;
                     // Leaves/ODs would still be missing in this fallback case
                 }
-                
+
                 tableData.push([
                     child.employee_name || child.name,
                     child.emp_no || '-',
@@ -1277,14 +1289,14 @@ exports.exportAttendanceReportPDF = async (req, res) => {
             const pages = doc.bufferedPageRange();
             for (let i = 0; i < pages.count; i++) {
                 doc.switchToPage(i);
-                doc.fontSize(8).fillColor('#94a3b8').text(`Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`, 30, doc.page.height - 30, { align: 'center' });
+                doc.fontSize(8).fillColor('#94a3b8').text(`Generated by HRMS | Page ${i + 1} of ${pages.count}`, 30, doc.page.height - 30, { align: 'center' });
             }
             doc.end();
             return;
         }
 
         // --- BRANCH: Detailed Tabular Report (Two-Section: Logs + Summary) ---
-        
+
         // 1. Fetch employees
         const empQuery = { is_active: { $ne: false }, ...(req.scopeFilter || {}) };
         if (designationId && designationId !== 'all') {
@@ -1323,9 +1335,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         let pairedData = {};
         if (process.env.MONGODB_BIOMETRIC_URI) {
             try {
-                const fetchStart = new Date(startDate); fetchStart.setHours(0,0,0,0);
-                const fetchEnd = new Date(endDate); fetchEnd.setHours(23,59,59,999);
-                fetchEnd.setTime(fetchEnd.getTime() + 36 * 60 * 60 * 1000); // +36h window
+                const fetchStart = dayjs.tz(startDate, 'Asia/Kolkata').startOf('day').toDate();
+                const fetchEnd = dayjs.tz(endDate, 'Asia/Kolkata').endOf('day').add(36, 'hour').toDate();
 
                 const logsResult = await biometricReportService.getThumbReports({
                     startDate: fetchStart.toISOString(),
@@ -1338,9 +1349,9 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 // Pairing logic (Mirroring reportsController.js)
                 const byEmpDate = {};
                 logs.forEach(log => {
-                    const eid =String(log.employeeId).toUpperCase();
+                    const eid = String(log.employeeId).toUpperCase();
                     const time = new Date(log.timestamp);
-                    const dk = time.toISOString().slice(0, 10);
+                    const dk = dayjs(log.timestamp).tz('Asia/Kolkata').format('YYYY-MM-DD');
                     if (!byEmpDate[eid]) byEmpDate[eid] = {};
                     if (!byEmpDate[eid][dk]) byEmpDate[eid][dk] = [];
                     let type = 'IN';
@@ -1351,13 +1362,13 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 for (const eid of Object.keys(byEmpDate)) {
                     const allLogs = [];
                     for (const dk in byEmpDate[eid]) byEmpDate[eid][dk].forEach(l => allLogs.push(l));
-                    allLogs.sort((a,b) => a.time - b.time);
-                    
+                    allLogs.sort((a, b) => a.time - b.time);
+
                     const uniqueLogs = [];
                     if (allLogs.length > 0) {
                         uniqueLogs.push(allLogs[0]);
-                        for(let i=1; i<allLogs.length; i++) {
-                            if (allLogs[i].type === allLogs[i-1].type && (allLogs[i].time - allLogs[i-1].time) < 120000) continue;
+                        for (let i = 1; i < allLogs.length; i++) {
+                            if (allLogs[i].type === allLogs[i - 1].type && (allLogs[i].time - allLogs[i - 1].time) < 120000) continue;
                             uniqueLogs.push(allLogs[i]);
                         }
                     }
@@ -1367,8 +1378,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     for (const log of uniqueLogs) {
                         if (log.type === 'IN') {
                             if (pendingIn && (log.time - pendingIn.time) > 3600000) {
-                                const dk = pendingIn.time.toISOString().slice(0, 10);
-                                if(!pairsByDate[dk]) pairsByDate[dk] = [];
+                                const dk = dayjs(pendingIn.time).tz('Asia/Kolkata').format('YYYY-MM-DD');
+                                if (!pairsByDate[dk]) pairsByDate[dk] = [];
                                 pairsByDate[dk].push({ in: pendingIn.time, out: null });
                             }
                             if (!pendingIn || (log.time - pendingIn.time) > 3600000) pendingIn = { time: log.time };
@@ -1376,17 +1387,17 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                             if (pendingIn) {
                                 const gap = log.time - pendingIn.time;
                                 if (gap <= 36 * 3600000 && gap > 0) {
-                                   const dk = pendingIn.time.toISOString().slice(0, 10);
-                                   if(!pairsByDate[dk]) pairsByDate[dk] = [];
-                                   pairsByDate[dk].push({ in: pendingIn.time, out: log.time });
-                                   pendingIn = null;
+                                    const dk = dayjs(pendingIn.time).tz('Asia/Kolkata').format('YYYY-MM-DD');
+                                    if (!pairsByDate[dk]) pairsByDate[dk] = [];
+                                    pairsByDate[dk].push({ in: pendingIn.time, out: log.time });
+                                    pendingIn = null;
                                 }
                             }
                         }
                     }
                     if (pendingIn) {
-                        const dk = pendingIn.time.toISOString().slice(0,10);
-                        if(!pairsByDate[dk]) pairsByDate[dk] = [];
+                        const dk = dayjs(pendingIn.time).tz('Asia/Kolkata').format('YYYY-MM-DD');
+                        if (!pairsByDate[dk]) pairsByDate[dk] = [];
                         pairsByDate[dk].push({ in: pendingIn.time, out: null });
                     }
                     pairedData[eid] = pairsByDate;
@@ -1401,7 +1412,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
             date: { $gte: startDate, $lte: endDate },
             employeeNumber: { $in: empNos }
         }).lean();
-        
+
         const dailyMap = {};
         dailyRecords.forEach(r => {
             const key = `${String(r.employeeNumber).toUpperCase()}_${r.date}`;
@@ -1448,7 +1459,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         const sumWidths = [185, 55, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
         const gridHeaders = ['Employee Name', 'Emp ID', ...daysArray.map(d => dayjs(d).date().toString())];
         const gridWidthSum = daysArray.length * 19.5;
-        const gridWidths = [150, 55, ...daysArray.map(() => 19.5)]; 
+        const gridWidths = [150, 55, ...daysArray.map(() => 19.5)];
 
         const sortedDivisions = Object.keys(grouped).sort();
         let firstPageProcessed = false;
@@ -1460,8 +1471,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 firstPageProcessed = true;
 
                 let currentY = drawMainHeader(`ATTENDANCE REPORT - DIV: ${divName.toUpperCase()}`, `Department: ${deptName.toUpperCase()} | Period: ${startDate} to ${endDate}`);
-                
-                const deptEmps = grouped[divName][deptName].sort((a,b) => (a.employee_name || '').localeCompare(b.employee_name || ''));
+
+                const deptEmps = grouped[divName][deptName].sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''));
                 const deptSumData = [], deptGridData = [];
 
                 const monthStr = (year && month) ? `${year}-${String(month).padStart(2, '0')}` : null;
@@ -1474,7 +1485,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     const eid = String(emp.emp_no).toUpperCase();
                     const eName = emp.employee_name || '-';
                     const empDaily = dailyRecords.filter(r => String(r.employeeNumber).toUpperCase() === eid);
-                    
+
                     let summary = summaries.find(s => String(s.employeeId) === String(emp._id));
                     if (!summary && monthStr) {
                         try {
@@ -1502,7 +1513,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                             const isHOL = summary?.contributingDates?.holidays?.some(cd => cd.date === dStr);
                             const isLve = summary?.contributingDates?.leaves?.some(cd => cd.date === dStr);
                             const isOD = summary?.contributingDates?.ods?.some(cd => cd.date === dStr);
-                            
+
                             if (isLve) gridRow.push('L');
                             else if (isOD) gridRow.push('OD');
                             else if (isWO) gridRow.push('WO');
@@ -1512,8 +1523,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                     });
 
                     deptSumData.push([
-                        eName, 
-                        emp.emp_no, 
+                        eName,
+                        emp.emp_no,
                         (summary?.totalPresentDays || 0).toFixed(1),
                         (summary?.totalLeaves || 0).toFixed(1),
                         (summary?.totalODs || 0).toFixed(1),
@@ -1522,8 +1533,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                         (summary?.totalOTHours || 0).toFixed(2),
                         (summary?.totalExtraHours || 0).toFixed(2),
                         (summary?.totalPermissionHours || 0).toFixed(2),
-                        summary?.lateOrEarlyCount || 0, 
-                        (summary?.totalAttendanceDeductionDays || 0).toFixed(1), 
+                        summary?.lateOrEarlyCount || 0,
+                        (summary?.totalAttendanceDeductionDays || 0).toFixed(1),
                         (summary?.totalPayableShifts || 0).toFixed(1)
                     ]);
                     deptGridData.push(gridRow);
@@ -1534,12 +1545,12 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 doc.fillColor('#4f46e5').fontSize(9).font('Helvetica-Bold').text(`SUMMARY: ${deptName.toUpperCase()}`, m + 10, currentY + 6);
                 currentY += 25;
 
-                currentY = drawPDFTableModern(doc, sumHeaders, deptSumData, m, currentY, sumWidths, { 
-                    fontSize: 7, 
+                currentY = drawPDFTableModern(doc, sumHeaders, deptSumData, m, currentY, sumWidths, {
+                    fontSize: 7,
                     headerFill: '#4f46e5',
                     onPageAdd: () => drawMainHeader(`ATTENDANCE SUMMARY (CONT) - ${divName.toUpperCase()}`, `Dept: ${deptName.toUpperCase()}`)
                 });
-                
+
                 currentY += 20;
                 if (currentY > 450) {
                     doc.addPage({ size: 'A4', layout: 'landscape', margin: 25 });
@@ -1551,8 +1562,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
                 }
 
                 // 2. Dept Grid Section
-                currentY = drawPDFTableModern(doc, gridHeaders, deptGridData, m, currentY, gridWidths, { 
-                    fontSize: 6, 
+                currentY = drawPDFTableModern(doc, gridHeaders, deptGridData, m, currentY, gridWidths, {
+                    fontSize: 6,
                     rowHeight: 15,
                     onPageAdd: () => drawMainHeader(`ATTENDANCE GRID (CONT) - ${divName.toUpperCase()}`, `Dept: ${deptName.toUpperCase()}`)
                 });
@@ -1564,7 +1575,7 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         for (let i = 0; i < pages.count; i++) {
             doc.switchToPage(i);
             const footerY = doc.page.height - 35;
-            doc.fontSize(7).fillColor('#94a3b8').text(`Generated by Antigravity HRMS | Page ${i + 1} of ${pages.count}`, 0, footerY, { align: 'center', width: doc.page.width });
+            doc.fontSize(7).fillColor('#94a3b8').text(`Generated by HRMS | Page ${i + 1} of ${pages.count}`, 0, footerY, { align: 'center', width: doc.page.width });
         }
 
         doc.end();
