@@ -8,6 +8,7 @@ const {
     performInitialCLSync,
     syncEmployeeCLFromPolicy,
     buildInitialSyncMonthsPayload,
+    getOrgFirstLeavePeriodIndexForFY,
     getCLResetStatus,
     getNextResetDate,
     getMaxAnnualCarryForwardCl,
@@ -225,15 +226,20 @@ exports.applyInitialCLSync = async (req, res) => {
             });
         }
 
+        const settings = await LeavePolicySettings.getSettings();
+        const effectiveDate = createISTDate(getTodayISTDateString());
+        const orgFirstLeavePeriodIndex = await getOrgFirstLeavePeriodIndexForFY(effectiveDate);
+
         const clSyncOptions = {
             creditAllPayrollMonths: true,
             includeApprovedClUsageDebits: true,
             carryUnusedClToNextMonth: false,
             disableInitialLedgerCarryForward: true,
+            /** Org-wide gate: no i→i+1 pool carry from FY periods before the first period with any org leave. */
+            orgGatedMonthlyPoolCarryForward: true,
+            orgFirstLeavePeriodIndex,
         };
 
-        const settings = await LeavePolicySettings.getSettings();
-        const effectiveDate = createISTDate(getTodayISTDateString());
         const employeesAll = await Employee.find({ is_active: true })
             .select('_id emp_no employee_name department_id division_id doj is_active compensatoryOffs')
             .populate('department_id', 'name')
@@ -270,8 +276,12 @@ exports.applyInitialCLSync = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: `Initial sync (all active): ${results.successCount}/${results.processed} employees processed`,
-            data: results,
+            message: `Initial sync (all active): ${results.successCount}/${results.processed} employees processed${
+                orgFirstLeavePeriodIndex >= 0
+                    ? `; org-gated pool carry from FY period index ${orgFirstLeavePeriodIndex} (0=first)`
+                    : '; no org leave in FY — monthly pool carry skipped'
+            }`,
+            data: { ...results, orgFirstLeavePeriodIndex },
         });
     } catch (error) {
         console.error('Error applying initial CL sync:', error);

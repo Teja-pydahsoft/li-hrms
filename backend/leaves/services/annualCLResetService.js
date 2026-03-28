@@ -13,7 +13,7 @@ const leaveRegisterService = require('./leaveRegisterService');
 const dateCycleService = require('./dateCycleService');
 const leaveRegisterYearService = require('./leaveRegisterYearService');
 const leaveRegisterYearLedgerService = require('./leaveRegisterYearLedgerService');
-const { PENDING_PIPELINE_STATUSES } = require('./monthlyApplicationCapService');
+const { PENDING_PIPELINE_STATUSES, CAP_COUNT_STATUSES } = require('./monthlyApplicationCapService');
 const { createISTDate, getTodayISTDateString, extractISTComponents } = require('../../shared/utils/dateUtils');
 
 /**
@@ -591,6 +591,30 @@ async function buildInitialSyncMonthsPayload(employee, settings, effectiveDate) 
     };
 }
 
+/**
+ * First payroll slot index (0–11, FY order) where **any** active employee has a leave overlapping
+ * that period (CAP_COUNT_STATUSES). Used to skip pool carry Jan→Feb when the org had no leave in Jan.
+ */
+async function getOrgFirstLeavePeriodIndexForFY(effectiveDate) {
+    const fy = await dateCycleService.getFinancialYearForDate(effectiveDate);
+    const cycles = await leaveRegisterYearService.getTwelvePayrollCyclesForFY(fy.startDate, fy.endDate);
+    if (!Array.isArray(cycles) || cycles.length === 0) return -1;
+    for (let i = 0; i < cycles.length; i++) {
+        const c = cycles[i];
+        if (!c?.startDate || !c?.endDate) continue;
+        const start = new Date(c.startDate);
+        const end = new Date(c.endDate);
+        const exists = await Leave.exists({
+            isActive: { $ne: false },
+            status: { $in: CAP_COUNT_STATUSES },
+            fromDate: { $lte: end },
+            toDate: { $gte: start },
+        });
+        if (exists) return i;
+    }
+    return -1;
+}
+
 function round2(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
 }
@@ -943,12 +967,31 @@ async function applyCclCreditsFromApprovedOd({ employeeId, monthsPayload }) {
  * **ended on or before asOf** (IST). Future months would otherwise show the whole cell as "unused"
  * and cascade carry + MONTHLY_POOL_TRANSFER_IN credits into every later month after policy apply.
  * @param {Date|string} effectiveDate — same as policy sync effective date (typically today IST).
+ * @param {object} [options]
+ * @param {object} [options.policy] — leave policy (carryForward.* roll flags; EL pool only when includeEL + !useAsPaidInPayroll).
+ * @param {number} [options.minSourcePeriodIndex=0] — only transfer **from** slot index i when i >= this (org gate: first FY period with any org-wide leave).
  */
-function applyCarryForwardAcrossMonths(monthsPayload, effectiveDate) {
+function applyCarryForwardAcrossMonths(monthsPayload, effectiveDate, options = {}) {
     if (!Array.isArray(monthsPayload) || monthsPayload.length < 2) return 0;
+    const policy = options.policy || {};
+    const minSourcePeriodIndex =
+        options.minSourcePeriodIndex != null && Number.isFinite(Number(options.minSourcePeriodIndex))
+            ? Math.max(0, Number(options.minSourcePeriodIndex))
+            : 0;
+
+    const clRoll = policy?.carryForward?.casualLeave?.carryMonthlyClCreditToNextPayrollMonth !== false;
+    const cclRoll = policy?.carryForward?.compensatoryOff?.carryMonthlyPoolToNextPayrollMonth !== false;
+    const capCfg = policy?.monthlyLeaveApplicationCap;
+    const includeEL = !!capCfg?.includeEL;
+    const elPaidInPayroll = policy?.earnedLeave?.useAsPaidInPayroll !== false;
+    const elInPool = !!policy?.earnedLeave?.enabled && includeEL && !elPaidInPayroll;
+    const elRoll =
+        elInPool && policy?.carryForward?.earnedLeave?.carryMonthlyPoolToNextPayrollMonth !== false;
+
     const asOf = effectiveDate != null ? new Date(effectiveDate) : new Date();
     let transferCount = 0;
     for (let i = 0; i < monthsPayload.length - 1; i++) {
+        if (i < minSourcePeriodIndex) continue;
         const cur = monthsPayload[i];
         const next = monthsPayload[i + 1];
         if (!cur.payPeriodEnd) continue;
@@ -959,9 +1002,12 @@ function applyCarryForwardAcrossMonths(monthsPayload, effectiveDate) {
         if (!Array.isArray(next.transactions)) next.transactions = [];
         const clUsed = sumDebitsExcludingCarry(cur, 'CL');
         const clLocked = round2(Number(cur.lockedCredits) || 0);
-        const clCarry = Math.max(0, round2((Number(cur.clCredits) || 0) - clUsed - clLocked));
-        const cclCarry = Math.max(0, round2((Number(cur.compensatoryOffs) || 0) - sumDebitsExcludingCarry(cur, 'CCL')));
-        const elCarry = Math.max(0, round2((Number(cur.elCredits) || 0) - sumDebitsExcludingCarry(cur, 'EL')));
+        let clCarry = Math.max(0, round2((Number(cur.clCredits) || 0) - clUsed - clLocked));
+        if (!clRoll) clCarry = 0;
+        let cclCarry = Math.max(0, round2((Number(cur.compensatoryOffs) || 0) - sumDebitsExcludingCarry(cur, 'CCL')));
+        if (!cclRoll) cclCarry = 0;
+        let elCarry = Math.max(0, round2((Number(cur.elCredits) || 0) - sumDebitsExcludingCarry(cur, 'EL')));
+        if (!elRoll) elCarry = 0;
         if (clCarry <= 0 && cclCarry <= 0 && elCarry <= 0) continue;
 
         cur.poolCarryForwardOut = { ...(cur.poolCarryForwardOut || {}), cl: clCarry, ccl: cclCarry, el: elCarry };
@@ -1031,7 +1077,13 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
         const creditAllPayrollMonths = options.creditAllPayrollMonths === true;
         const includeApprovedClUsageDebits = options.includeApprovedClUsageDebits === true;
         const carryUnusedClToNextMonth = options.carryUnusedClToNextMonth === true;
+        const orgGatedMonthlyPoolCarryForward = options.orgGatedMonthlyPoolCarryForward === true;
+        const orgFirstLeavePeriodIndex =
+            options.orgFirstLeavePeriodIndex != null && Number.isFinite(Number(options.orgFirstLeavePeriodIndex))
+                ? Number(options.orgFirstLeavePeriodIndex)
+                : -1;
         const disableInitialLedgerCarryForward = options.disableInitialLedgerCarryForward === true;
+        const dryRunSkipPersist = options.dryRunSkipPersist === true;
         const empNo = employee?.emp_no || employee?._id || 'unknown';
         console.log(
             `[LeaveSync] Start syncEmployeeCLFromPolicy emp=${empNo} effectiveDate=${new Date(effectiveDate).toISOString()}`
@@ -1117,7 +1169,15 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
         });
         let carryTransfersCreated = 0;
         if (carryUnusedClToNextMonth) {
-            carryTransfersCreated = applyCarryForwardAcrossMonths(monthsPayload, effectiveDate);
+            carryTransfersCreated = applyCarryForwardAcrossMonths(monthsPayload, effectiveDate, {
+                policy: settings,
+                minSourcePeriodIndex: 0,
+            });
+        } else if (orgGatedMonthlyPoolCarryForward && orgFirstLeavePeriodIndex >= 0) {
+            carryTransfersCreated = applyCarryForwardAcrossMonths(monthsPayload, effectiveDate, {
+                policy: settings,
+                minSourcePeriodIndex: orgFirstLeavePeriodIndex,
+            });
         }
 
         const syncSlot =
@@ -1166,23 +1226,56 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
         }
 
         const ccoBal = typeof employee.compensatoryOffs === 'number' ? employee.compensatoryOffs : 0;
-        await leaveRegisterYearService.upsertLeaveRegisterYear({
-            employeeId: employee._id,
-            empNo: employee.emp_no,
-            employeeName: employee.employee_name,
-            resetDate: effectiveDate,
-            casualBalance: newBalance,
-            compensatoryOffBalance: ccoBal,
-            months: monthsPayload,
-            yearlyTransactions,
-            yearlyPolicyClScheduledTotal: defaultPoolBalance,
-            source: 'INITIAL_POLICY_SYNC',
-        });
+        if (!dryRunSkipPersist) {
+            await leaveRegisterYearService.upsertLeaveRegisterYear({
+                employeeId: employee._id,
+                empNo: employee.emp_no,
+                employeeName: employee.employee_name,
+                resetDate: effectiveDate,
+                casualBalance: newBalance,
+                compensatoryOffBalance: ccoBal,
+                months: monthsPayload,
+                yearlyTransactions,
+                yearlyPolicyClScheduledTotal: defaultPoolBalance,
+                source: 'INITIAL_POLICY_SYNC',
+            });
 
-        await leaveRegisterYearLedgerService.recalculateRegisterBalances(employee._id, 'CL', null);
+            await leaveRegisterYearLedgerService.recalculateRegisterBalances(employee._id, 'CL', null);
+        }
         console.log(
-            `[LeaveSync] Completed emp=${empNo} pool=${newBalance} defaultPool=${defaultPoolBalance} pastCleared=${pastClearedCreditsTotal} zeroedPeriods=${zeroedPastPeriods} syncPeriod=${syncSlot?.label || 'n/a'} approvedUsageDebits=${approvedUsageDebitCount} cclCreditsFromOD=${cclCreditsFromOD} lockedSlots=${lockedSlotsUpdated} carryTransfers=${carryTransfersCreated}`
+            `[LeaveSync] ${dryRunSkipPersist ? 'DRY RUN (no persist) ' : ''}Completed emp=${empNo} pool=${newBalance} defaultPool=${defaultPoolBalance} pastCleared=${pastClearedCreditsTotal} zeroedPeriods=${zeroedPastPeriods} syncPeriod=${syncSlot?.label || 'n/a'} approvedUsageDebits=${approvedUsageDebitCount} cclCreditsFromOD=${cclCreditsFromOD} lockedSlots=${lockedSlotsUpdated} carryTransfers=${carryTransfersCreated}`
         );
+
+        const poolTransferOuts = [];
+        for (let si = 0; si < (monthsPayload || []).length; si++) {
+            const m = monthsPayload[si];
+            for (const t of m.transactions || []) {
+                const ag = String(t?.autoGeneratedType || '');
+                if (ag.startsWith('MONTHLY_POOL_TRANSFER_OUT_')) {
+                    poolTransferOuts.push({
+                        fromLabel: m.label || `${m.payrollCycleMonth}/${m.payrollCycleYear}`,
+                        slotIndex: si,
+                        leaveType: t.leaveType,
+                        days: t.days,
+                        autoGeneratedType: ag,
+                    });
+                }
+            }
+        }
+
+        const monthSlotSummary = (monthsPayload || []).map((m, i) => ({
+            i,
+            label: m.label || `${m.payrollCycleMonth}/${m.payrollCycleYear}`,
+            payrollCycleMonth: m.payrollCycleMonth,
+            payrollCycleYear: m.payrollCycleYear,
+            clCredits: m.clCredits,
+            compensatoryOffs: m.compensatoryOffs,
+            elCredits: m.elCredits,
+            lockedCredits: m.lockedCredits,
+            endedOnOrBeforeAsOf: m.payPeriodEnd
+                ? leaveRegisterYearService.isPayrollPeriodEndedOnOrBeforeAsOf(m.payPeriodEnd, effectiveDate)
+                : null,
+        }));
 
         return {
             success: true,
@@ -1203,6 +1296,11 @@ async function syncEmployeeCLFromPolicy(employee, settings, effectiveDate, optio
             defaultPoolBalance,
             /** @deprecated use defaultPoolBalance */
             policyOpening: defaultPoolBalance,
+            dryRunSkipPersist,
+            orgGatedMonthlyPoolCarryForward,
+            orgFirstLeavePeriodIndex: orgGatedMonthlyPoolCarryForward ? orgFirstLeavePeriodIndex : undefined,
+            poolTransferOuts,
+            monthSlotSummary,
         };
     } catch (error) {
         console.error('[LeaveSync] syncEmployeeCLFromPolicy failed:', error.message);
@@ -1301,6 +1399,7 @@ module.exports = {
     syncEmployeeCLFromPolicy,
     buildInitialSyncMonthsPayload,
     getInitialSyncEntitlement,
+    getOrgFirstLeavePeriodIndexForFY,
     getCLResetStatus,
     getNextResetDate,
     getResetDate,

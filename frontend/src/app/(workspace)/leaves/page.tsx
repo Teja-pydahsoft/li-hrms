@@ -5,6 +5,10 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import dynamic from 'next/dynamic';
 import { api } from '@/lib/api';
+import {
+  buildLeaveODPayPeriodOptions,
+  matchLeaveODPayPeriodSelectValue,
+} from '@/lib/payPeriodRange';
 import { MultiSelect } from '@/components/MultiSelect';
 import { auth } from '@/lib/auth';
 import {
@@ -533,8 +537,9 @@ export default function LeavesPage() {
   const [exportPDFOptions, setExportPDFOptions] = useState({ includeLeaves: true, includeODs: true });
   const [showFilters, setShowFilters] = useState(false);
 
-  // Pay cycle start day from settings (default 1)
+  // Pay cycle start / end day from settings (aligned with attendance payroll month)
   const [payCycleStartDay, setPayCycleStartDay] = useState(1);
+  const [payCycleEndDay, setPayCycleEndDay] = useState<number | null>(null);
 
   // Date range filter — defaults to current pay-cycle (startDay of month/prev month → today)
   const getDefaultDateRange = (startDay: number = 1) => {
@@ -584,6 +589,26 @@ export default function LeavesPage() {
 
   const [dateRange, setDateRange] = useState(() => getDefaultDateRange(1));
   const [error, setError] = useState<string | null>(null);
+
+  const payPeriodOptions = useMemo(
+    () =>
+      buildLeaveODPayPeriodOptions({
+        payrollCycleStartDay: payCycleStartDay,
+        payrollCycleEndDay: payCycleEndDay,
+        monthsBack: 18,
+        getDefaultRange: () => getDefaultDateRange(payCycleStartDay),
+        defaultLabel: 'This period (default)',
+      }),
+    [payCycleStartDay, payCycleEndDay]
+  );
+
+  const payPeriodSelectValue = useMemo(
+    () =>
+      matchLeaveODPayPeriodSelectValue(dateRange, payPeriodOptions, () =>
+        getDefaultDateRange(payCycleStartDay)
+      ),
+    [dateRange.from, dateRange.to, payPeriodOptions, payCycleStartDay]
+  );
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
 
@@ -790,21 +815,29 @@ export default function LeavesPage() {
     loadTypes();
   }, []);
 
-  // Fetch pay cycle start day setting on mount
+  // Fetch pay cycle start / end day settings on mount (same source as attendance payroll month)
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const res = await api.getSetting('payroll_cycle_start_day');
-        if (res?.data?.value) {
-          const startDay = parseInt(res.data.value, 10);
+        const [startRes, endRes] = await Promise.all([
+          api.getSetting('payroll_cycle_start_day'),
+          api.getSetting('payroll_cycle_end_day'),
+        ]);
+        if (startRes?.data?.value) {
+          const startDay = parseInt(startRes.data.value, 10);
           if (!isNaN(startDay) && startDay >= 1 && startDay <= 31) {
             setPayCycleStartDay(startDay);
-            // Update the default date range now that we have the actual start day
             setDateRange(getDefaultDateRange(startDay));
           }
         }
+        if (endRes?.data?.value) {
+          const endDay = parseInt(endRes.data.value, 10);
+          if (!isNaN(endDay) && endDay >= 1 && endDay <= 31) {
+            setPayCycleEndDay(endDay);
+          }
+        }
       } catch (err) {
-        console.error('Failed to fetch payroll_cycle_start_day:', err);
+        console.error('Failed to fetch payroll cycle settings:', err);
       }
     };
     fetchSettings();
@@ -2410,34 +2443,28 @@ export default function LeavesPage() {
           <div className="flex items-center gap-2 sm:gap-4 w-auto overflow-x-auto hide-scrollbar">
             {/* Pay Period / Date Range — Desktop Only */}
             <div className="hidden md:flex items-center gap-3 border-r border-slate-200 dark:border-slate-800 pr-4 mr-2 shrink-0">
-              {/* Quick Presets */}
-              <div className="flex items-center gap-1.5 shrink-0">
-                {[
-                  {
-                    label: 'This Month',
-                    get: () => getDefaultDateRange(payCycleStartDay)
-                  },
-                  {
-                    label: 'Last Month',
-                    get: () => getPreviousPayCycle(payCycleStartDay)
+              <select
+                aria-label="Pay period"
+                value={payPeriodSelectValue}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === '__custom__') return;
+                  if (v === '__default__') {
+                    setDateRange(getDefaultDateRange(payCycleStartDay));
+                    return;
                   }
-                ].map(preset => {
-                  const r = preset.get();
-                  const isActive = dateRange.from === r.from && dateRange.to === r.to;
-                  return (
-                    <button
-                      key={preset.label}
-                      onClick={() => setDateRange(r)}
-                      className={`h-7 px-2.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all border ${isActive
-                        ? 'bg-blue-500 text-white border-blue-500 shadow-md shadow-blue-500/20'
-                        : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-300 hover:text-blue-600'}`}
-                    >
-                      {preset.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {/* Custom range inputs */}
+                  const opt = payPeriodOptions.find((o) => o.value === v);
+                  if (opt) setDateRange({ from: opt.range.from, to: opt.range.to });
+                }}
+                className="h-7 min-w-[10rem] max-w-[15rem] rounded-lg border border-slate-200 bg-white py-0 pl-2 pr-6 text-[9px] font-black uppercase tracking-wider text-slate-800 shadow-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 cursor-pointer"
+              >
+                <option value="__custom__">Custom range…</option>
+                {payPeriodOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-inner shrink-0">
                 <Calendar className="w-3 h-3 text-slate-400 shrink-0" />
                 <input
@@ -2492,26 +2519,28 @@ export default function LeavesPage() {
         <div className="flex flex-col gap-3 p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Pay Period</span>
-            <div className="flex gap-1.5">
-              {[
-                { label: 'This Month', get: () => getDefaultDateRange(payCycleStartDay) },
-                { label: 'Last Month', get: () => getPreviousPayCycle(payCycleStartDay) }
-              ].map(preset => {
-                const r = preset.get();
-                const isActive = dateRange.from === r.from && dateRange.to === r.to;
-                return (
-                  <button
-                    key={preset.label}
-                    onClick={() => setDateRange(r)}
-                    className={`h-7 px-2.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all border ${isActive
-                      ? 'bg-blue-500 text-white border-blue-500'
-                      : 'bg-slate-50 dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800'}`}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
+            <select
+              aria-label="Pay period"
+              value={payPeriodSelectValue}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === '__custom__') return;
+                if (v === '__default__') {
+                  setDateRange(getDefaultDateRange(payCycleStartDay));
+                  return;
+                }
+                const opt = payPeriodOptions.find((o) => o.value === v);
+                if (opt) setDateRange({ from: opt.range.from, to: opt.range.to });
+              }}
+              className="h-8 min-w-0 flex-1 max-w-[16rem] rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900 px-2 text-[9px] font-black uppercase tracking-wider text-slate-800 dark:text-slate-100"
+            >
+              <option value="__custom__">Custom range…</option>
+              {payPeriodOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800">
             <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
