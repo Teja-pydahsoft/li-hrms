@@ -15,6 +15,20 @@ import {
   type WorkspaceCompleteAggregateKey,
 } from '@/lib/attendanceCompleteAggregateColumns';
 
+import dynamic from 'next/dynamic';
+const LocationMap = dynamic(() => import('@/components/LocationMap'), { ssr: false });
+
+import { 
+  Briefcase, 
+  MapPin, 
+  Camera, 
+  ExternalLink,
+  Calendar,
+  Clock,
+  Info,
+  Star
+} from 'lucide-react';
+
 import { toast } from 'react-toastify';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -95,6 +109,7 @@ interface AttendanceRecord {
     halfDayType?: string;
 
     purpose?: string;
+    reason?: string;
 
     placeVisited?: string;
 
@@ -111,6 +126,19 @@ interface AttendanceRecord {
     odEndTime?: string; // NEW: End time for hour-based OD
 
     dayInOD?: number;
+    photo?: string;
+    photoEvidence?: {
+      url: string;
+      exifLocation?: {
+        latitude: number;
+        longitude: number;
+      };
+    };
+    geoLocation?: {
+      latitude: number;
+      longitude: number;
+      address?: string;
+    };
 
     appliedAt?: string;
 
@@ -482,6 +510,18 @@ export default function AttendancePage() {
     }
 
     return { top, bottom };
+  };
+
+  const getSplitHalfClass = (value: string) => {
+    const v = (value || '').toUpperCase();
+    if (v.includes('OD')) return 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200';
+    if (v.includes('LL')) return 'bg-amber-200 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200';
+    if (v.includes('/L') || v === 'L') return 'bg-orange-100 text-orange-800 dark:bg-orange-900/45 dark:text-orange-200';
+    if (v.includes('PT')) return 'bg-purple-100 text-purple-800 dark:bg-purple-900/45 dark:text-purple-200';
+    if (v.includes('HD')) return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/45 dark:text-emerald-200';
+    if (v === 'P') return 'bg-green-100 text-green-800 dark:bg-green-900/45 dark:text-green-200';
+    if (v === 'A') return 'bg-slate-100 text-slate-700 dark:bg-slate-800/80 dark:text-slate-300';
+    return 'bg-slate-100 text-slate-800 dark:bg-slate-800/70 dark:text-slate-200';
   };
 
   const formatHalfTag = (halfDayType?: string | null) => {
@@ -2745,6 +2785,8 @@ export default function AttendancePage() {
 
     if (record.status === 'WEEK_OFF') return 'bg-orange-50 border-orange-200 text-orange-800 dark:bg-orange-900/10 dark:border-orange-800 dark:text-orange-400';
 
+    if (record.status === 'OD') return 'bg-indigo-50 border-indigo-200 text-indigo-800 dark:bg-indigo-900/10 dark:border-indigo-800 dark:text-indigo-400';
+
     return '';
 
   };
@@ -2782,6 +2824,12 @@ export default function AttendancePage() {
     }
 
     if (record.hasOD && !record.hasLeave) {
+
+      if (record.status === 'OD') {
+
+        return 'bg-indigo-100 border-indigo-300 dark:bg-indigo-900/40 dark:border-indigo-700';
+
+      }
 
       return 'bg-blue-100 border-blue-300 dark:bg-blue-900/30 dark:border-blue-700';
 
@@ -3973,8 +4021,8 @@ export default function AttendancePage() {
                                           <>
                                             {splitStatus ? (
                                               <div className="mx-auto w-fit overflow-hidden rounded border border-slate-300/80 dark:border-slate-600/80 bg-white/70 dark:bg-slate-900/50 leading-none">
-                                                <div className="px-1 py-[1px] text-[8px] font-bold uppercase">{splitStatus.top}</div>
-                                                <div className="border-t border-slate-300/80 dark:border-slate-600/80 px-1 py-[1px] text-[8px] font-bold uppercase">{splitStatus.bottom}</div>
+                                                <div className={`px-1 py-[1px] text-[8px] font-bold uppercase ${getSplitHalfClass(splitStatus.top)}`}>{splitStatus.top}</div>
+                                                <div className={`border-t border-slate-300/80 dark:border-slate-600/80 px-1 py-[1px] text-[8px] font-bold uppercase ${getSplitHalfClass(splitStatus.bottom)}`}>{splitStatus.bottom}</div>
                                               </div>
                                             ) : (
                                               <div className="font-semibold text-[9px]">{displayStatus}</div>
@@ -5091,24 +5139,99 @@ export default function AttendancePage() {
                       )}
 
                       {/* Purpose/Reason */}
-                      {attendanceDetail.odInfo.purpose && (
+                      {(attendanceDetail.odInfo.reason || attendanceDetail.odInfo.purpose) && (
                         <div className="mb-3">
                           <label className="text-xs font-medium text-blue-700 dark:text-blue-300">Purpose/Reason</label>
                           <div className="mt-1 text-sm text-blue-900 dark:text-blue-100">
-                            {attendanceDetail.odInfo.purpose}
+                            {attendanceDetail.odInfo.reason || attendanceDetail.odInfo.purpose}
                           </div>
                         </div>
                       )}
 
-                      {/* Place Visited */}
-                      {attendanceDetail.odInfo.placeVisited && (
-                        <div className="mb-3">
-                          <label className="text-xs font-medium text-blue-700 dark:text-blue-300">Place Visited</label>
-                          <div className="mt-1 text-sm text-blue-900 dark:text-blue-100">
-                            {attendanceDetail.odInfo.placeVisited}
+                      {/* Photo Evidence & Location (Modern Card) */}
+                      {(attendanceDetail.odInfo.photoEvidence || attendanceDetail.odInfo.geoLocation) && (
+                        <div className="mt-4 rounded-xl bg-white dark:bg-slate-800/50 p-4 border border-blue-100 dark:border-blue-900/30">
+                          <p className="text-xs uppercase font-black text-blue-500 mb-3 tracking-widest flex items-center gap-2">
+                            <Camera className="w-4 h-4" />
+                            Evidence & Location
+                          </p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Photo Card */}
+                            {attendanceDetail.odInfo.photoEvidence && (
+                              <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 shadow-sm">
+                                <a
+                                  href={attendanceDetail.odInfo.photoEvidence.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="relative group block shrink-0"
+                                >
+                                  <img
+                                    src={attendanceDetail.odInfo.photoEvidence.url}
+                                    alt="Evidence"
+                                    className="w-20 h-20 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shadow-sm"
+                                  />
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors rounded-lg">
+                                    <ExternalLink className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  </div>
+                                </a>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-tight truncate">Photo Evidence</p>
+                                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 uppercase font-black">Captured via App</p>
+                                  {attendanceDetail.odInfo.placeVisited && (
+                                    <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-2 font-bold flex items-center gap-1">
+                                      <MapPin className="w-3 h-3" />
+                                      {attendanceDetail.odInfo.placeVisited}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Location Details & Map Preview */}
+                            <div className="space-y-3">
+                              {attendanceDetail.odInfo.geoLocation && (
+                                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 shadow-sm">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <MapPin className="w-3 h-3 text-red-500" />
+                                    <span className="text-[10px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-widest">Live Location</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                                    <div>
+                                      <span className="text-slate-400 font-bold uppercase">Lat:</span>
+                                      <span className="ml-1 font-mono text-slate-700 dark:text-slate-300">{attendanceDetail.odInfo.geoLocation.latitude?.toFixed(6)}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-400 font-bold uppercase">Lon:</span>
+                                      <span className="ml-1 font-mono text-slate-700 dark:text-slate-300">{attendanceDetail.odInfo.geoLocation.longitude?.toFixed(6)}</span>
+                                    </div>
+                                  </div>
+                                  {attendanceDetail.odInfo.geoLocation.address && (
+                                    <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 pt-2 line-clamp-2">
+                                      {attendanceDetail.odInfo.geoLocation.address}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Dynamic Leaflet Map */}
+                              {(() => {
+                                const geo = attendanceDetail.odInfo.geoLocation;
+                                const exif = attendanceDetail.odInfo.photoEvidence?.exifLocation;
+                                const lat = geo?.latitude ?? exif?.latitude;
+                                const lng = geo?.longitude ?? exif?.longitude;
+                                const address = geo?.address ?? null;
+                                if (lat == null || lng == null) return null;
+                                return (
+                                  <div className="p-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden">
+                                    <LocationMap latitude={lat} longitude={lng} address={address} height="120px" className="rounded-lg" />
+                                  </div>
+                                );
+                              })()}
+                            </div>
                           </div>
                         </div>
                       )}
+
 
                       <div className="grid grid-cols-2 gap-3 text-sm mb-3">
 
@@ -5505,7 +5628,7 @@ export default function AttendancePage() {
                             if (typeSummaryData.type === 'present') return record.status === 'PRESENT' || record.status === 'PARTIAL';
                             if (typeSummaryData.type === 'absent') return record.status === 'ABSENT' || (!record.status && !record.hasLeave && !record.hasOD);
                             if (typeSummaryData.type === 'leaves') return record.hasLeave || record.status === 'LEAVE';
-                            if (typeSummaryData.type === 'od') return record.hasOD;
+                            if (typeSummaryData.type === 'od') return record.hasOD || record.status === 'OD';
                             if (typeSummaryData.type === 'ot') return (record.otHours || 0) > 0;
                             if (typeSummaryData.type === 'extra') return (record.extraHours || 0) > 0;
                             if (typeSummaryData.type === 'permission') return (record.permissionCount || 0) > 0;
@@ -5557,8 +5680,8 @@ export default function AttendancePage() {
                               ) : typeSummaryData.type === 'od' ? (
                                 <>
                                   <td className="px-4 py-3 font-semibold text-indigo-600">{record?.odInfo?.odType || 'OD'}</td>
-                                  <td className="px-4 py-3 text-slate-500 truncate max-w-[200px]" title={`${record?.odInfo?.placeVisited || ''} ${record?.odInfo?.purpose || ''}`}>
-                                    {record?.odInfo?.placeVisited || record?.odInfo?.purpose || '-'}
+                                  <td className="px-4 py-3 text-slate-500 truncate max-w-[200px]" title={`${record?.odInfo?.placeVisited || ''} ${record?.odInfo?.reason || record?.odInfo?.purpose || ''}`}>
+                                    {record?.odInfo?.placeVisited || record?.odInfo?.reason || record?.odInfo?.purpose || '-'}
                                   </td>
                                 </>
                               ) : (

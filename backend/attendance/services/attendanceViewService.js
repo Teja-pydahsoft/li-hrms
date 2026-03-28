@@ -145,6 +145,11 @@ exports.getCalendarViewData = async (employee, year, month) => {
           durationHours: od.durationHours,
           odStartTime: od.odStartTime,
           odEndTime: od.odEndTime,
+          reason: od.purpose,
+          purpose: od.purpose,
+          photo: od.photoEvidence?.url,
+          photoEvidence: od.photoEvidence,
+          geoLocation: od.geoLocation,
           dayInOD: dayCounter,
           appliedAt: od.appliedAt || od.createdAt,
           approvedBy: approvedBy ? {
@@ -317,7 +322,7 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
     ],
     isActive: true,
   })
-    .select('employeeId fromDate toDate odType odType_extended isHalfDay halfDayType odStartTime odEndTime')
+    .select('employeeId fromDate toDate odType odType_extended isHalfDay halfDayType odStartTime odEndTime purpose placeVisited photoEvidence geoLocation')
     .populate('employeeId', 'emp_no')
     .lean();
 
@@ -373,6 +378,12 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
           halfDayType: od.halfDayType,
           odStartTime: od.odStartTime,
           odEndTime: od.odEndTime,
+          placeVisited: od.placeVisited,
+          reason: od.purpose,
+          purpose: od.purpose,
+          photo: od.photoEvidence?.url,
+          photoEvidence: od.photoEvidence,
+          geoLocation: od.geoLocation,
         };
       }
       currentDate.setDate(currentDate.getDate() + 1);

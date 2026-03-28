@@ -407,7 +407,7 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       }
 
       // 3. Lates & Early Outs (only on PRESENT days)
-      if (day.attendance && day.attendance.status === 'PRESENT' && !day.isWO && !day.isHOL) {
+      if (day.attendance && (day.attendance.status === 'PRESENT' || day.attendance.status === 'OD') && !day.isWO && !day.isHOL) {
         const shifts = Array.isArray(day.attendance.shifts) ? day.attendance.shifts : [];
 
         // Late In
