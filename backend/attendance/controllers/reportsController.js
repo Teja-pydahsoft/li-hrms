@@ -46,8 +46,8 @@ exports.getAttendanceReport = async (req, res) => {
         // --- NEW: Payroll Month Logic ---
         if (month && year) {
             const period = await dateCycleService.getPayrollCycleForMonth(parseInt(year), parseInt(month));
-            startDate = dayjs(period.startDate).format('YYYY-MM-DD');
-            endDate = dayjs(period.endDate).format('YYYY-MM-DD');
+            startDate = dayjs(period.startDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
+            endDate = dayjs(period.endDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
         }
 
         const query = {};
@@ -509,8 +509,8 @@ exports.exportAttendanceReport = async (req, res) => {
         // --- NEW: Payroll Month Logic ---
         if (month && year) {
             const period = await dateCycleService.getPayrollCycleForMonth(parseInt(year), parseInt(month));
-            startDate = dayjs(period.startDate).format('YYYY-MM-DD');
-            endDate = dayjs(period.endDate).format('YYYY-MM-DD');
+            startDate = dayjs(period.startDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
+            endDate = dayjs(period.endDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
         }
 
         if (!startDate || !endDate) {
@@ -1130,8 +1130,8 @@ exports.exportAttendanceReportPDF = async (req, res) => {
         // Sync dates for payroll months
         if (month && year) {
             const period = await dateCycleService.getPayrollCycleForMonth(parseInt(year), parseInt(month));
-            startDate = dayjs(period.startDate).format('YYYY-MM-DD');
-            endDate = dayjs(period.endDate).format('YYYY-MM-DD');
+            startDate = dayjs(period.startDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
+            endDate = dayjs(period.endDate).tz('Asia/Kolkata').format('YYYY-MM-DD');
         }
 
         if (!startDate || !endDate) {
