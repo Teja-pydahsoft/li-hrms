@@ -473,6 +473,7 @@ export default function LeaveRegisterPage({
     employeeName: string;
     financialYearForApi: string;
     rows: BulkSlotRow[];
+    rowsInitial: BulkSlotRow[] | null;
     validateWithRecords: boolean;
     carryForwardUnused: boolean;
     reason: string;
