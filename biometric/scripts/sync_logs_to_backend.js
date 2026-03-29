@@ -9,7 +9,13 @@ const axios = require('axios');
  * This script sends ALL attendance logs from the local 
  * biometric_logs database to the main backend HRMS application.
  * 
- * Use this to verify shift detection logic on existing data.
+ * Usage (PowerShell - Windows):
+ *   Specific Employee: $env:SYNC_EMP="1832"; $env:SYNC_MONTH="2026-03"; node sync_logs_to_backend.js
+ *   All Employees:     $env:SYNC_MONTH="2026-03"; node scripts/sync_logs_to_backend.js
+ *   Date Range:        $env:SYNC_START="2026-03-01"; $env:SYNC_END="2026-03-31"; node sync_logs_to_backend.js
+ * 
+ * Usage (Bash - Linux/macOS):
+ *   Specific Employee: SYNC_EMP="1832" SYNC_MONTH="2026-03" node scripts/sync_logs_to_backend.js
  * ============================================================
  */
 

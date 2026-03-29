@@ -338,30 +338,41 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       }
 
       // Merge and Cap - this handles PARTIAL + OD correctly (0.0 + 0.5 = 0.5)
-      const dayFirst = attFirst;
-      const daySecond = attSecond;
-      const dayPresent = Math.min(dayFirst + daySecond, 1.0);
+      // dayPresent here will reflect the physical presence contribution for PRESENT category.
+      // If a half is covered by OD, we don't count it as a "Physical Present" unit in the count columns,
+      // though it still contributes to dayPayable.
+      const dayPresent = Math.min(Math.max(0, attFirst - odFirst) + Math.max(0, attSecond - odSecond), 1.0);
+      const dayOD = Math.min(odFirst + odSecond, 1.0);
+      
+      const dayFirst = Math.max(attFirst, odFirst);
+      const daySecond = Math.max(attSecond, odSecond);
+      const mergedDailyCredit = Math.min(dayFirst + daySecond, 1.0);
+      
       // Use AttendanceDaily payables as source of truth for aggregation.
-      // Prefer the higher of:
-      // - attendance.payableShifts (aggregated daily value)
-      // - sum of shift-level payableShift (multi-shift granular value)
-      // Fallback to merged half-day logic when neither is available.
-      let dayPayable = dayPresent;
+      let dayPayable = mergedDailyCredit;
       if (day.attendance && !day.isWO && !day.isHOL) {
         const attendancePayable = Number(day.attendance.payableShifts);
         const shifts = Array.isArray(day.attendance.shifts) ? day.attendance.shifts : [];
         const shiftLevelPayable = shifts.reduce((sum, s) => sum + (Number(s?.payableShift) || 0), 0);
-        const candidates = [dayPresent];
+        const candidates = [mergedDailyCredit];
         if (Number.isFinite(attendancePayable) && attendancePayable >= 0) candidates.push(attendancePayable);
         if (Number.isFinite(shiftLevelPayable) && shiftLevelPayable >= 0) candidates.push(shiftLevelPayable);
         dayPayable = Math.round(Math.max(...candidates) * 100) / 100;
       }
 
-      if (dayPresent > 0 || dayPayable > 0) {
+      // Ensure single day credit is never > 1.0 even with merged logic
+      dayPayable = Math.min(dayPayable, 1.0);
+
+      // 1. Handle Present Counts (Physical presence NOT on-duty)
+      if (dayPresent > 0) {
         totalPresentDays += dayPresent;
         if (!contributingDates.present.some(cd => cd.date === dStr)) {
           contributingDates.present.push({ date: dStr, value: dayPresent, label: 'P' });
         }
+      }
+
+      // 2. Handle Payable Shifts (Merged & Capped Credit)
+      if (dayPayable > 0) {
         if (!contributingDates.payableShifts.some(cd => cd.date === dStr)) {
           contributingDates.payableShifts.push({ date: dStr, value: dayPayable, label: 'Pay' });
         }

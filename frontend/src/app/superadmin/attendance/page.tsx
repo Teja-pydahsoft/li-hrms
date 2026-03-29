@@ -3355,7 +3355,13 @@ export default function AttendancePage() {
                             attendanceDetail.status === 'ABSENT' ? 'bg-red-50 text-red-700 ring-red-600/10' :
                               'bg-gray-50 text-gray-600 ring-gray-500/10'
                           }`}>
-                          {attendanceDetail.status || 'N/A'}
+                          {(() => {
+                            const statuses = [attendanceDetail.status || 'N/A'];
+                            if (attendanceDetail.hasOD) statuses.push('OD');
+                            if (attendanceDetail.hasLeave) statuses.push('LEAVE');
+                            // Filter and join unique statuses
+                            return Array.from(new Set(statuses)).join(' / ');
+                          })()}
                         </span>
                       </div>
                     </div>
@@ -3520,7 +3526,14 @@ export default function AttendancePage() {
                             )}
                             <div className="flex items-center gap-1.5">
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Status</span>
-                              <span className={`text-[10px] font-black uppercase ${shift.status === 'PRESENT' ? 'text-green-600' : 'text-slate-500'}`}>{shift.status || '-'}</span>
+                              <span className={`text-[10px] font-black uppercase ${shift.status === 'PRESENT' ? 'text-green-600' : 'text-slate-500'}`}>
+                                {(() => {
+                                  const statuses = [shift.status || '-'];
+                                  if (attendanceDetail.hasOD) statuses.push('OD');
+                                  if (attendanceDetail.hasLeave) statuses.push('LEAVE');
+                                  return Array.from(new Set(statuses)).join(' / ');
+                                })()}
+                              </span>
                             </div>
                           </div>
                           {selectedEmployee && selectedDate && (attendanceFeatureFlags.allowInTimeEditing || attendanceFeatureFlags.allowOutTimeEditing) && (
@@ -4018,7 +4031,7 @@ export default function AttendancePage() {
                       <div>
                         <label className="text-xs font-medium text-blue-700 dark:text-blue-300">Total Days</label>
                         <div className="mt-1 font-semibold text-blue-900 dark:text-blue-100">
-                          {attendanceDetail.odInfo.numberOfDays || 'N/A'} {attendanceDetail.odInfo.numberOfDays === 1 ? 'day' : 'days'}
+                          {attendanceDetail.odInfo.numberOfDays || (attendanceDetail.odInfo.isHalfDay ? '0.5' : '1')} {attendanceDetail.odInfo.numberOfDays === 1 ? 'day' : 'days'}
                         </div>
                       </div>
                       {attendanceDetail.odInfo.dayInOD && (
@@ -4219,7 +4232,7 @@ export default function AttendancePage() {
                             <td className="border border-slate-300 px-4 py-2 text-right text-slate-900 dark:border-slate-600 dark:text-white">{monthlySummary.totalLeaves || 0}</td>
                             <td className="border border-slate-300 px-4 py-2 text-right text-slate-900 dark:border-slate-600 dark:text-white">{monthlySummary.totalODs || 0}</td>
                             <td className="border border-slate-300 px-4 py-2 text-right text-slate-900 dark:border-slate-600 dark:text-white">
-                              {Math.max(0, (Number(monthlySummary.totalPresentDays) || 0) - (Number(monthlySummary.totalODs) || 0))}
+                              {Number(monthlySummary.totalPresentDays) || 0}
                             </td>
                             <td className="border border-slate-300 px-4 py-2 text-right text-slate-900 dark:border-slate-600 dark:text-white">{monthlySummary.totalDaysInMonth || 0}</td>
                             <td className="border border-slate-300 px-4 py-2 text-right font-semibold text-slate-900 dark:border-slate-600 dark:text-white">{monthlySummary.totalPayableShifts?.toFixed(2) || '0.00'}</td>
