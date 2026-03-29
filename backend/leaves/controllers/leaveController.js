@@ -2818,6 +2818,11 @@ exports.listLeaveRegister = async (req, res) => {
           cclBalance: summarySub?.compensatoryOff?.balance ?? 0,
           totalPaidBalance: summarySub?.totalPaidBalance ?? 0,
           monthlyAllowedLimit: summarySub?.monthlyAllowedLimit,
+          /** FY policy pool: total scheduled CL days in LeaveRegisterYear (tier annual CL, sum of monthly credits). */
+          clAnnualScheduledDays:
+            entry.fyPolicyScheduledClDays != null && Number.isFinite(Number(entry.fyPolicyScheduledClDays))
+              ? Number(entry.fyPolicyScheduledClDays)
+              : null,
         },
         yearSnapshot: entry.yearSnapshot || null,
         registerMonths: Array.isArray(entry.registerMonths) ? entry.registerMonths : [],

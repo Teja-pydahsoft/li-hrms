@@ -260,6 +260,8 @@ type ListRow = {
     cclBalance: number;
     totalPaidBalance: number;
     monthlyAllowedLimit?: number;
+    /** Sum of scheduled CL credits for the FY (experience-based annual pool in days). */
+    clAnnualScheduledDays?: number | null;
   };
   yearSnapshot?: {
     financialYear?: string;
@@ -1105,11 +1107,20 @@ export default function LeaveRegisterPage({
       Number.isFinite(Number(ys.earnedLeaveBalance))
         ? Number(ys.earnedLeaveBalance)
         : row.summary?.elBalance;
+    const nCl = Number(cl) || 0;
+    const nEl = Number(el) || 0;
+    const nCcl = Number(ccl) || 0;
     return {
       cl,
       el,
       ccl,
-      total: row.summary?.totalPaidBalance,
+      /** Must match CL + EL + CCL above (same basis). Previously used period-only totalPaidBalance, which broke when CL/EL/CCL came from FY snapshot. */
+      total: nCl + nEl + nCcl,
+      clPoolDays:
+        row.summary?.clAnnualScheduledDays != null &&
+        Number.isFinite(Number(row.summary.clAnnualScheduledDays))
+          ? Number(row.summary.clAnnualScheduledDays)
+          : null,
     };
   }
 
@@ -1313,7 +1324,7 @@ export default function LeaveRegisterPage({
                   </th>
                   <th
                     className={`text-right font-medium text-slate-600 dark:text-slate-300 ${isSuperadmin ? 'py-2 px-2' : 'py-3 px-3'}`}
-                    title="Casual leave balance (FY snapshot when set)"
+                    title="CL balance (FY register when financial year is set). Second line: FY scheduled pool (sum of policy monthly CL credits for your experience tier, e.g. 12 or 15 days/year)."
                   >
                     CL
                   </th>
@@ -1331,6 +1342,7 @@ export default function LeaveRegisterPage({
                   </th>
                   <th
                     className={`text-right font-medium text-slate-600 dark:text-slate-300 hidden sm:table-cell ${isSuperadmin ? 'py-2 px-2' : 'py-3 px-3'}`}
+                    title="CL + EL + CCL using the same balances shown in those columns (not a separate payroll-period-only sum)."
                   >
                     Total
                   </th>
@@ -1431,7 +1443,15 @@ export default function LeaveRegisterPage({
                         <td
                           className={`text-right font-mono tabular-nums ${isSuperadmin ? 'py-2 px-2' : 'py-3 px-3'}`}
                         >
-                          {formatNum(bal.cl)}
+                          <div>{formatNum(bal.cl)}</div>
+                          {bal.clPoolDays != null ? (
+                            <div
+                              className="text-[10px] font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight"
+                              title="FY scheduled CL pool: total days credited across the year from policy (experience tier monthly schedule)."
+                            >
+                              pool {formatNum(bal.clPoolDays)}
+                            </div>
+                          ) : null}
                         </td>
                         <td
                           className={`text-right font-mono tabular-nums ${isSuperadmin ? 'py-2 px-2' : 'py-3 px-3'}`}

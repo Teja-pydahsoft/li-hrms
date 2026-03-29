@@ -1214,6 +1214,14 @@ class LeaveRegisterService {
                   }
                 : null;
 
+            /** Sum of policy-scheduled CL credits for all payroll slots in this FY (experience tier monthly grid → matches annual CL e.g. 12 or 15). */
+            let fyPolicyScheduledClDays = null;
+            if (yd && Array.isArray(yd.months) && yd.months.length > 0) {
+                const sumCl = yd.months.reduce((s, m) => s + (Number(m.clCredits) || 0), 0);
+                fyPolicyScheduledClDays = Number.isFinite(sumCl) ? sumCl : null;
+            }
+            entry.fyPolicyScheduledClDays = fyPolicyScheduledClDays;
+
             const yt = yd && Array.isArray(yd.yearlyTransactions) ? yd.yearlyTransactions : [];
             entry.leaveRegisterYear = yd
                 ? {
