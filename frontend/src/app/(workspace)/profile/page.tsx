@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/auth';
 import Spinner from '@/components/Spinner';
-import { User, Mail, Phone, Briefcase, Calendar, Shield, Key, Building, MapPin, X, RefreshCw, AlertTriangle, Check, Clock } from 'lucide-react';
+import { User, Mail, Phone, Briefcase, Calendar, Shield, Key, Building, MapPin, X, RefreshCw, AlertTriangle, Check, Clock, Users } from 'lucide-react';
 
 interface UserProfile {
   _id: string;
@@ -23,15 +23,30 @@ interface UserProfile {
   profilePhoto?: string | null;
 }
 
+interface HierarchyPerson {
+  name: string;
+  email?: string;
+  role?: string;
+  _id?: string;
+}
+
 interface EmployeeProfile {
   _id: string;
   emp_no: string;
   employee_name: string;
   joining_date?: string;
-  designation?: { name: string };
-  department?: { name: string };
-  division?: { name: string };
-  reporting_manager?: { employee_name: string };
+  designation?: { name: string; _id?: string };
+  department?: { name: string; _id?: string };
+  department_id?: string | { _id?: string; name?: string };
+  division?: { name: string; _id?: string };
+  division_id?: string | { _id?: string; name?: string };
+  /** Legacy / SQL-shaped single reporting link */
+  reporting_manager?: { employee_name?: string; name?: string; email?: string };
+  /** Populated User refs from dynamicFields (leave workflow) */
+  reporting_to?: Array<{ _id?: string; name?: string; email?: string; role?: string } | string>;
+  dynamicFields?: {
+    reporting_to?: Array<{ _id?: string; name?: string; email?: string; role?: string } | string>;
+  };
   shiftId?: { name: string; startTime: string; endTime: string };
   employment_status?: string;
   blood_group?: string;
@@ -39,9 +54,105 @@ interface EmployeeProfile {
   address?: string;
 }
 
+function resolveId(val: unknown): string | undefined {
+  if (val == null) return undefined;
+  if (typeof val === 'string' && val.trim()) return val.trim();
+  if (typeof val === 'object' && val !== null && '_id' in val) {
+    const id = (val as { _id?: unknown })._id;
+    if (id != null) return String(id);
+  }
+  return undefined;
+}
+
+function collectReportingManagers(emp: EmployeeProfile | null): HierarchyPerson[] {
+  if (!emp) return [];
+  const raw =
+    (Array.isArray(emp.reporting_to) && emp.reporting_to.length > 0
+      ? emp.reporting_to
+      : Array.isArray(emp.dynamicFields?.reporting_to) && emp.dynamicFields.reporting_to.length > 0
+        ? emp.dynamicFields!.reporting_to!
+        : null);
+
+  if (raw && raw.length > 0) {
+    const out: HierarchyPerson[] = [];
+    for (const item of raw) {
+      if (item == null) continue;
+      if (typeof item === 'string') {
+        if (mongooseObjectIdShape(item)) {
+          /* still an unresolved id — skip label */
+          continue;
+        }
+        out.push({ name: item });
+        continue;
+      }
+      const name =
+        item.name ||
+        (item as { employee_name?: string }).employee_name ||
+        item.email ||
+        '';
+      if (!name) continue;
+      out.push({
+        name,
+        email: item.email,
+        role: item.role,
+        _id: item._id != null ? String(item._id) : undefined,
+      });
+    }
+    return out;
+  }
+
+  const leg = emp.reporting_manager;
+  if (leg) {
+    const name = leg.employee_name || leg.name;
+    if (name) return [{ name, email: leg.email }];
+  }
+  return [];
+}
+
+function mongooseObjectIdShape(s: string) {
+  return /^[a-f\d]{24}$/i.test(s);
+}
+
+function divisionHodForEmployee(
+  department: { divisionHODs?: Array<{ division?: unknown; hod?: unknown }>; hod?: unknown } | null,
+  divisionIdStr: string | undefined
+): HierarchyPerson | null {
+  if (!department) return null;
+  if (divisionIdStr && Array.isArray(department.divisionHODs)) {
+    const match = department.divisionHODs.find((dh) => {
+      const id = resolveId(dh.division);
+      return id && id === divisionIdStr;
+    });
+    const hod = match?.hod;
+    if (hod && typeof hod === 'object' && hod !== null && 'name' in hod && (hod as { name?: string }).name) {
+      const h = hod as { name: string; email?: string; role?: string; _id?: string };
+      return { name: h.name, email: h.email, role: h.role, _id: h._id != null ? String(h._id) : undefined };
+    }
+  }
+  const legacy = department.hod;
+  if (legacy && typeof legacy === 'object' && legacy !== null && 'name' in legacy && (legacy as { name?: string }).name) {
+    const h = legacy as { name: string; email?: string; role?: string };
+    return { name: h.name, email: h.email, role: h.role };
+  }
+  return null;
+}
+
+/** Narrow `getDivision` / `getDepartment` style responses without unsafe casts on failure unions */
+function orgRecordFromApiResponse(res: unknown): Record<string, unknown> | null {
+  if (res == null || typeof res !== 'object' || !('success' in res)) return null;
+  const r = res as { success?: boolean; data?: unknown };
+  if (!r.success || r.data == null || typeof r.data !== 'object' || Array.isArray(r.data)) return null;
+  return r.data as Record<string, unknown>;
+}
+
 export default function ProfilePage() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [employee, setEmployee] = useState<EmployeeProfile | null>(null);
+  /** Division + department with populated manager / division HODs for hierarchy display */
+  const [orgHierarchy, setOrgHierarchy] = useState<{ division: Record<string, unknown> | null; department: Record<string, unknown> | null }>({
+    division: null,
+    department: null,
+  });
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({ name: '', phone: '' });
@@ -76,12 +187,51 @@ export default function ProfilePage() {
     fetchUserProfile();
   }, []);
 
+  const loadOrgHierarchyForEmployee = async (emp: EmployeeProfile) => {
+    const divId = resolveId(emp.division_id) || resolveId(emp.division);
+    const depId = resolveId(emp.department_id) || resolveId(emp.department);
+    if (!divId && !depId) {
+      setOrgHierarchy({ division: null, department: null });
+      return;
+    }
+    try {
+      const [divRes, depRes] = await Promise.all([
+        divId ? api.getDivision(divId) : Promise.resolve({ success: false as const }),
+        depId ? api.getDepartment(depId) : Promise.resolve({ success: false as const }),
+      ]);
+      setOrgHierarchy({
+        division: orgRecordFromApiResponse(divRes),
+        department: orgRecordFromApiResponse(depRes),
+      });
+    } catch {
+      setOrgHierarchy({ division: null, department: null });
+    }
+  };
+
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 4000);
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  const hierarchyPeople = useMemo(() => {
+    if (!employee) {
+      return { reporting: [] as HierarchyPerson[], hod: null as HierarchyPerson | null, divManager: null as HierarchyPerson | null };
+    }
+    const reporting = collectReportingManagers(employee);
+    const divisionIdStr = resolveId(employee.division_id) || resolveId(employee.division);
+    const hod = divisionHodForEmployee(
+      orgHierarchy.department as Parameters<typeof divisionHodForEmployee>[0],
+      divisionIdStr
+    );
+    const mgrRaw = orgHierarchy.division?.manager as { name?: string; email?: string } | undefined;
+    const divManager =
+      mgrRaw?.name && typeof mgrRaw.name === 'string'
+        ? { name: mgrRaw.name, email: mgrRaw.email }
+        : null;
+    return { reporting, hod, divManager };
+  }, [employee, orgHierarchy]);
 
   const fetchUserProfile = async () => {
     try {
@@ -101,10 +251,16 @@ export default function ProfilePage() {
             const empRes = await api.getEmployee(empIdentifier);
             if (empRes.success && empRes.data) {
               setEmployee(empRes.data);
+              await loadOrgHierarchyForEmployee(empRes.data as EmployeeProfile);
+            } else {
+              setOrgHierarchy({ division: null, department: null });
             }
           } catch (err) {
             console.error('Error fetching linked employee profile:', err);
+            setOrgHierarchy({ division: null, department: null });
           }
+        } else {
+          setOrgHierarchy({ division: null, department: null });
         }
       }
     } catch (error) {
@@ -436,10 +592,10 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        <div className="flex flex-col items-center gap-3 text-center">
           <Spinner />
-          <p className="text-slate-500 font-medium">Loading profile...</p>
+          <p className="text-slate-500 font-medium text-sm sm:text-base">Loading profile...</p>
         </div>
       </div>
     );
@@ -447,12 +603,13 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-slate-500 text-lg">Unable to load profile</p>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        <div className="text-center max-w-sm w-full">
+          <p className="text-slate-500 text-base sm:text-lg">Unable to load profile</p>
           <button
+            type="button"
             onClick={fetchUserProfile}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="mt-4 w-full sm:w-auto px-4 py-3 sm:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 touch-manipulation min-h-[44px]"
           >
             Retry
           </button>
@@ -462,38 +619,38 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-50 py-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-3 sm:px-6 lg:px-8 overflow-x-hidden">
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-xl animate-slide-in ${toast.type === 'success'
+          className={`fixed z-50 left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] sm:left-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] px-4 py-3 sm:px-6 sm:py-4 rounded-xl shadow-xl animate-slide-in max-w-[calc(100vw-1.5rem)] sm:max-w-md ${toast.type === 'success'
             ? 'bg-emerald-600 text-white'
             : 'bg-red-600 text-white'
             }`}
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-start gap-3">
             {toast.type === 'success' ? (
-              <Shield className="w-5 h-5" />
+              <Shield className="w-5 h-5 shrink-0 mt-0.5" />
             ) : (
-              <Shield className="w-5 h-5" />
+              <Shield className="w-5 h-5 shrink-0 mt-0.5" />
             )}
-            <span className="font-medium">{toast.message}</span>
+            <span className="font-medium text-sm sm:text-base break-words">{toast.message}</span>
           </div>
         </div>
       )}
 
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto w-full min-w-0 space-y-4 sm:space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">My Profile</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">My Profile</h1>
           {/* <p className="text-slate-500 mt-1">View and manage your account and employment details</p> */}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 lg:gap-8">
 
           {/* Left Column: Profile Card */}
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden sticky top-8">
+          <div className="lg:col-span-4 space-y-4 sm:space-y-6 min-w-0">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden lg:sticky lg:top-8">
               {/* Cover Gradient - blue to teal/green */}
               <div className="h-24 bg-gradient-to-r from-blue-600 via-blue-500 to-teal-500 relative">
                 {/* Active badge - top right, light background, green dot */}
@@ -506,8 +663,8 @@ export default function ProfilePage() {
               </div>
 
               {/* Avatar & Basic Info - photo overlaps header with white border */}
-              <div className="px-6 pb-6 text-center -mt-12 relative">
-                <div className="w-24 h-24 mx-auto rounded-full bg-white border-4 border-white shadow-xl relative group ring-2 ring-slate-200/50">
+              <div className="px-4 sm:px-6 pb-5 sm:pb-6 text-center -mt-12 relative">
+                <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto rounded-full bg-white border-4 border-white shadow-xl relative group ring-2 ring-slate-200/50">
                   {user.profilePhoto ? (
                     <img src={user.profilePhoto} alt={user.name} className="w-full h-full rounded-full object-cover" />
                   ) : (
@@ -540,9 +697,9 @@ export default function ProfilePage() {
                   </label>
                 </div>
 
-                <div className="mt-4">
-                  <h2 className="text-xl font-bold text-slate-900 uppercase tracking-tight">{user.name}</h2>
-                  <p className="text-slate-500 text-sm mt-1">{user.email}</p>
+                <div className="mt-4 px-0.5">
+                  <h2 className="text-lg sm:text-xl font-bold text-slate-900 uppercase tracking-tight break-words">{user.name}</h2>
+                  <p className="text-slate-500 text-xs sm:text-sm mt-1 break-all">{user.email}</p>
                 </div>
 
                 {/* Role & Department - pill tags, light grey bg and border */}
@@ -559,45 +716,131 @@ export default function ProfilePage() {
 
                 {/* Joined & Last Login - labels uppercase light grey, values dark */}
                 <div className="mt-4 pt-4 border-t border-slate-100 space-y-2 text-left">
-                  <div className="flex justify-between items-center">
-                    <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold">Joined</p>
-                    <p className="text-xs font-medium text-slate-800">{user.createdAt ? formatDate(user.createdAt, false) : '—'}</p>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:items-center">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold shrink-0">Joined</p>
+                    <p className="text-xs font-medium text-slate-800 text-right sm:text-right break-words">{user.createdAt ? formatDate(user.createdAt, false) : '—'}</p>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold">Last Login</p>
-                    <p className="text-xs font-medium text-slate-800">{user.lastLogin ? formatDate(user.lastLogin, true) : 'Never'}</p>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:items-center">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold shrink-0">Last Login</p>
+                    <p className="text-xs font-medium text-slate-800 text-right sm:text-right break-words">{user.lastLogin ? formatDate(user.lastLogin, true) : 'Never'}</p>
                   </div>
                 </div>
               </div>
             </div>
+
+            {employee && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-4 min-w-0">
+                <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-500" />
+                  Reporting & supervisors
+                </h4>
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Reporting manager(s)</p>
+                    {hierarchyPeople.reporting.length > 0 ? (
+                      <ul className="space-y-2">
+                        {hierarchyPeople.reporting.map((p, idx) => (
+                          <li key={p._id || `r-${p.name}-${idx}`} className="flex items-start gap-2">
+                            <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700">
+                              {(p.name?.[0] || '?').toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-800 break-words">{p.name}</p>
+                              {p.email ? (
+                                <p className="text-xs text-slate-500 break-all" title={p.email}>
+                                  {p.email}
+                                </p>
+                              ) : null}
+                              {p.role ? (
+                                <span className="mt-0.5 inline-block text-[10px] font-medium text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                                  {getRoleLabel(p.role)}
+                                </span>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-slate-400">—</p>
+                    )}
+                  </div>
+                  <div className="pt-3 border-t border-slate-100">
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Division manager</p>
+                    {hierarchyPeople.divManager ? (
+                      <div className="flex items-start gap-2">
+                        <div className="w-8 h-8 shrink-0 rounded-full bg-orange-100 flex items-center justify-center text-xs font-bold text-orange-800">
+                          {(hierarchyPeople.divManager.name?.[0] || 'M').toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-800 break-words">{hierarchyPeople.divManager.name}</p>
+                          {hierarchyPeople.divManager.email ? (
+                            <p className="text-xs text-slate-500 break-all">{hierarchyPeople.divManager.email}</p>
+                          ) : null}
+                          <span className="mt-0.5 inline-block text-[10px] font-medium text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                            Manager
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400">—</p>
+                    )}
+                  </div>
+                  <div className="pt-3 border-t border-slate-100">
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Head of department</p>
+                    {hierarchyPeople.hod ? (
+                      <div className="flex items-start gap-2">
+                        <div className="w-8 h-8 shrink-0 rounded-full bg-amber-100 flex items-center justify-center text-xs font-bold text-amber-900">
+                          {(hierarchyPeople.hod.name?.[0] || 'H').toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-800 break-words">{hierarchyPeople.hod.name}</p>
+                          {hierarchyPeople.hod.email ? (
+                            <p className="text-xs text-slate-500 break-all">{hierarchyPeople.hod.email}</p>
+                          ) : null}
+                          <span className="mt-0.5 inline-block text-[10px] font-medium text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                            HOD
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400">—</p>
+                    )}
+                  </div>
+                </div>
+               
+              </div>
+            )}
           </div>
 
           {/* Right Column: Information Tabs */}
-          <div className="lg:col-span-8">
+          <div className="lg:col-span-8 min-w-0">
             {/* Tabs Header */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-1 mb-6 flex flex-col sm:flex-row">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-1 mb-4 sm:mb-6 flex flex-col sm:flex-row gap-1 sm:gap-0">
               <button
+                type="button"
                 onClick={() => setActiveTab('profile')}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap
-                  ${activeTab === 'profile' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+                className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-2 sm:px-5 py-2.5 rounded-lg text-[11px] sm:text-sm font-medium transition-all duration-200 text-center leading-snug whitespace-normal min-h-[48px] sm:min-h-0 touch-manipulation
+                  ${activeTab === 'profile' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 active:bg-slate-100'}`}
               >
-                <User className="w-4 h-4" />
+                <User className="w-4 h-4 shrink-0" />
                 Personal Profile
               </button>
               <button
+                type="button"
                 onClick={() => setActiveTab('employment')}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap
-                  ${activeTab === 'employment' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+                className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-2 sm:px-5 py-2.5 rounded-lg text-[11px] sm:text-sm font-medium transition-all duration-200 text-center leading-snug whitespace-normal min-h-[48px] sm:min-h-0 touch-manipulation
+                  ${activeTab === 'employment' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 active:bg-slate-100'}`}
               >
-                <Briefcase className="w-4 h-4" />
+                <Briefcase className="w-4 h-4 shrink-0" />
                 Employment Details
               </button>
               <button
+                type="button"
                 onClick={() => setActiveTab('security')}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap
-                  ${activeTab === 'security' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+                className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-2 sm:px-5 py-2.5 rounded-lg text-[11px] sm:text-sm font-medium transition-all duration-200 text-center leading-snug whitespace-normal min-h-[48px] sm:min-h-0 touch-manipulation
+                  ${activeTab === 'security' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 active:bg-slate-100'}`}
               >
-                <Shield className="w-4 h-4" />
+                <Shield className="w-4 h-4 shrink-0" />
                 Security
               </button>
             </div>
@@ -607,34 +850,37 @@ export default function ProfilePage() {
 
               {/* PROFILE TAB */}
               {activeTab === 'profile' && (
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 animate-in fade-in zoom-in-95 duration-300">
-                  <div className="flex items-center justify-between mb-5">
-                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 animate-in fade-in zoom-in-95 duration-300 min-w-0">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
+                    <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
                       Personal Information
                     </h3>
                     {!isEditing && user.role !== 'employee' && (
                       <button
+                        type="button"
                         onClick={() => setIsEditing(true)}
-                        className="text-sm font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-lg transition-colors"
+                        className="text-sm font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2.5 rounded-lg transition-colors w-full sm:w-auto touch-manipulation"
                       >
                         Edit Details
                       </button>
                     )}
                     {isEditing && (
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2 w-full sm:w-auto justify-stretch sm:justify-end">
                         <button
+                          type="button"
                           onClick={() => {
                             setIsEditing(false);
                             setEditData({ name: user.name, phone: user.phone || '' });
                           }}
-                          className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+                          className="flex-1 sm:flex-none px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg touch-manipulation min-h-[44px]"
                         >
                           Cancel
                         </button>
                         <button
+                          type="button"
                           onClick={handleSaveProfile}
                           disabled={saving}
-                          className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50"
+                          className="flex-1 sm:flex-none px-3 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50 touch-manipulation min-h-[44px]"
                         >
                           {saving ? 'Saving...' : 'Save'}
                         </button>
@@ -650,11 +896,11 @@ export default function ProfilePage() {
                           type="text"
                           value={editData.name}
                           onChange={(e) => setEditData({ ...editData, name: e.target.value })}
-                          className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          className="w-full px-4 py-3 sm:py-2 text-base sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
                       ) : (
-                        <div className="text-base font-medium text-slate-800 flex items-center gap-2">
-                          <User className="w-4 h-4 text-slate-400" />
+                        <div className="text-base font-medium text-slate-800 flex items-center gap-2 break-words">
+                          <User className="w-4 h-4 text-slate-400 shrink-0" />
                           {user.name}
                         </div>
                       )}
@@ -662,8 +908,8 @@ export default function ProfilePage() {
 
                     <div className="group">
                       <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Email Address</label>
-                      <div className="text-base font-medium text-slate-800 flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-transparent group-hover:border-slate-200 transition-colors">
-                        <Mail className="w-4 h-4 text-slate-400" />
+                      <div className="text-base font-medium text-slate-800 flex items-start gap-2 bg-slate-50 p-2 rounded-lg border border-transparent group-hover:border-slate-200 transition-colors break-all">
+                        <Mail className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
                         {user.email}
                       </div>
                     </div>
@@ -675,7 +921,7 @@ export default function ProfilePage() {
                           type="tel"
                           value={editData.phone}
                           onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
-                          className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          className="w-full px-4 py-3 sm:py-2 text-base sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                           placeholder="+91..."
                         />
                       ) : (
@@ -717,13 +963,14 @@ export default function ProfilePage() {
 
               {/* EMPLOYMENT TAB */}
               {activeTab === 'employment' && (
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 animate-in fade-in zoom-in-95 duration-300">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 lg:p-8 animate-in fade-in zoom-in-95 duration-300 min-w-0">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5 sm:mb-8">
+                    <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
                       Employment Records
                     </h3>
                     {user.role === 'employee' && updateConfig?.enabled && (
                       <button
+                        type="button"
                         onClick={() => {
                           // Pre-fill requestedChanges with current values
                           const initialChanges: any = {};
@@ -739,9 +986,9 @@ export default function ProfilePage() {
                           setRequestedChanges(initialChanges);
                           setShowRequestModal(true);
                         }}
-                        className="text-sm font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-4 py-2 rounded-lg transition-colors border border-emerald-100 flex items-center gap-2"
+                        className="text-sm font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-4 py-2.5 rounded-lg transition-colors border border-emerald-100 flex items-center justify-center gap-2 w-full sm:w-auto touch-manipulation min-h-[44px]"
                       >
-                        <RefreshCw className="w-4 h-4" />
+                        <RefreshCw className="w-4 h-4 shrink-0" />
                         Request Update
                       </button>
                     )}
@@ -777,26 +1024,17 @@ export default function ProfilePage() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Shift</label>
-                        <p className="text-base font-medium text-slate-800 flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-400" />
+                        <p className="text-base font-medium text-slate-800 flex flex-wrap items-center gap-2 break-words">
+                          <Clock className="w-4 h-4 text-slate-400 shrink-0" />
                           {employee.shiftId ? `${employee.shiftId.name} (${employee.shiftId.startTime} - ${employee.shiftId.endTime})` : 'General'}
                         </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Reporting Manager</label>
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-600">
-                            {employee.reporting_manager?.employee_name?.[0] || 'M'}
-                          </div>
-                          <span className="text-base font-medium text-slate-800">{employee.reporting_manager?.employee_name || '—'}</span>
-                        </div>
                       </div>
                       {/* Requestable Fields Display Area */}
                       {user.role === 'employee' && updateConfig?.enabled && (
                         <div className="md:col-span-2 pt-5 mt-4 border-t border-slate-100">
-                          <div className="flex items-center justify-between mb-3">
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-3">
                             <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.18em]">Requestable Profile Details</h4>
-                            <span className="text-[10px] text-slate-400">Scrollable panel</span>
+                            <span className="text-[10px] text-slate-400 shrink-0">Scrollable panel</span>
                           </div>
                           <div className="max-h-64 overflow-y-auto pr-1">
                           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-3">
@@ -837,13 +1075,13 @@ export default function ProfilePage() {
 
               {/* SECURITY TAB */}
               {activeTab === 'security' && (
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 animate-in fade-in zoom-in-95 duration-300">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-2">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 lg:p-8 animate-in fade-in zoom-in-95 duration-300 min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2 mb-2">
                     Security & Password
                   </h3>
-                  <p className="text-slate-500 text-sm mb-8">Manage your password and security settings periodically for safety.</p>
+                  <p className="text-slate-500 text-sm mb-6 sm:mb-8">Manage your password and security settings periodically for safety.</p>
 
-                  <form onSubmit={handlePasswordChange} className="max-w-lg space-y-5">
+                  <form onSubmit={handlePasswordChange} className="w-full max-w-lg space-y-5">
                     {passwordError && (
                       <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-sm text-red-700">
                         <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -865,7 +1103,7 @@ export default function ProfilePage() {
                           type="password"
                           value={passwordData.currentPassword}
                           onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
-                          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
+                          className="w-full pl-10 pr-4 py-3 sm:py-2.5 text-base sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
                           placeholder="••••••••"
                         />
                         <Key className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -879,7 +1117,7 @@ export default function ProfilePage() {
                           type="password"
                           value={passwordData.newPassword}
                           onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-                          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
+                          className="w-full pl-10 pr-4 py-3 sm:py-2.5 text-base sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
                           placeholder="At least 4 characters"
                         />
                         <Shield className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -893,7 +1131,7 @@ export default function ProfilePage() {
                           type="password"
                           value={passwordData.confirmPassword}
                           onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
-                          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
+                          className="w-full pl-10 pr-4 py-3 sm:py-2.5 text-base sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
                           placeholder="Re-enter new password"
                         />
                         <Shield className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -904,7 +1142,7 @@ export default function ProfilePage() {
                       <button
                         type="submit"
                         disabled={passwordLoading}
-                        className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 rounded-lg shadow-lg shadow-slate-900/10 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                        className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 sm:py-2.5 rounded-lg shadow-lg shadow-slate-900/10 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex justify-center items-center gap-2 touch-manipulation min-h-[48px] sm:min-h-0"
                       >
                         {passwordLoading ? 'Updating...' : 'Update Password'}
                       </button>
@@ -944,22 +1182,24 @@ export default function ProfilePage() {
       {/* Request Update Modal */}
       {
         showRequestModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Request Profile Update</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Your request will be sent to the administrator for approval.</p>
+          <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[min(92dvh,100vh)] sm:max-h-[90vh] min-h-0">
+              <div className="px-4 py-3 sm:px-6 sm:py-4 border-b border-slate-100 flex items-start justify-between gap-3 shrink-0">
+                <div className="min-w-0 pr-2">
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900">Request Profile Update</h3>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-snug">Your request will be sent to the administrator for approval.</p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setShowRequestModal(false)}
-                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+                  className="p-2 -mr-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors shrink-0 touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center"
+                  aria-label="Close"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-5">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-5 min-h-0">
                 {/* Requestable Fields */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {formGroups.map((group, groupIdx) => {
@@ -1068,20 +1308,22 @@ export default function ProfilePage() {
                 </div>
               </div>
 
-              <div className="px-8 py-6 bg-slate-50 flex items-center justify-between">
+              <div className="px-4 py-4 sm:px-8 sm:py-6 bg-slate-50 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t border-slate-100 shrink-0">
                 <button
+                  type="button"
                   onClick={() => setShowRequestModal(false)}
-                  className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-2 hover:bg-slate-200 rounded-lg transition-colors"
+                  className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-3 sm:py-2 hover:bg-slate-200 rounded-lg transition-colors touch-manipulation min-h-[44px] w-full sm:w-auto"
                   disabled={submittingRequest}
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={handleSubmitUpdateRequest}
                   disabled={submittingRequest || Object.keys(requestedChanges).length === 0}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-8 rounded-xl text-sm shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center gap-2"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 sm:py-2.5 px-6 sm:px-8 rounded-xl text-sm shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition-all disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation min-h-[44px] w-full sm:w-auto"
                 >
-                  {submittingRequest ? <Spinner className="w-4 h-4 !text-white" /> : <Mail className="w-4 h-4" />}
+                  {submittingRequest ? <Spinner className="w-4 h-4 text-white" /> : <Mail className="w-4 h-4 shrink-0" />}
                   {submittingRequest ? 'Submitting...' : 'Submit Request'}
                 </button>
               </div>
@@ -1089,7 +1331,7 @@ export default function ProfilePage() {
           </div>
         )
       }
-    </div >
+    </div>
   );
 }
 

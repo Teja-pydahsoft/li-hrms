@@ -5908,7 +5908,6 @@ export default function AttendancePage() {
                           const summary = typeSummaryData.item.summary;
                           if (summary && summary.contributingDates) {
                             const contrib = summary.contributingDates;
-<<<<<<< HEAD
                             if (typeSummaryData.type === 'present' && contrib.present) {
                               return contrib.present.some((c) => contributingEntryMatchesDate(c, dStr));
                             }
@@ -5921,7 +5920,6 @@ export default function AttendancePage() {
                             if (typeSummaryData.type === 'partial' && contrib.partial) {
                               return contrib.partial.some((c) => contributingEntryMatchesDate(c, dStr));
                             }
-=======
                             const entryDate = (c: string | { date: string; value?: number; label?: string }) =>
                               typeof c === 'string' ? c : c.date;
                             if (typeSummaryData.type === 'present' && contrib.present)
@@ -5930,7 +5928,6 @@ export default function AttendancePage() {
                               return contrib.ods.some((c) => entryDate(c) === dStr);
                             if (typeSummaryData.type === 'leaves' && contrib.leaves)
                               return contrib.leaves.some((c) => entryDate(c) === dStr);
->>>>>>> d7598aa7d358f3c1b42048790f37f884ff5a337a
                           }
 
                           // Fallback to dailyAttendance status if summary is not present or partial

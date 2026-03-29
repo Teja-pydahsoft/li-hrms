@@ -136,6 +136,8 @@ exports.getDepartment = async (req, res) => {
     const department = await Department.findById(req.params.id)
       .populate('hod', 'name email role')
       .populate('hr', 'name email role')
+      .populate('divisionHODs.hod', 'name email role')
+      .populate('divisionHODs.division', 'name code')
       .populate('shifts.shiftId', 'name startTime endTime duration isActive')
       .populate({
         path: 'divisionDefaults.division',

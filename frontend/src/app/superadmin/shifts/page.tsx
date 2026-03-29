@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { api, Shift } from '@/lib/api';
 import Spinner from '@/components/Spinner';
+import { LayoutGrid, Table2 } from 'lucide-react';
 
 const SHIFT_COLORS = [
   '#3b82f6', // blue-500
@@ -36,6 +37,7 @@ export default function ShiftsPage() {
 
   const [lastChanged, setLastChanged] = useState<'start' | 'end' | 'duration' | null>(null);
   const [color, setColor] = useState('#3b82f6');
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
   useEffect(() => {
     loadShifts();
@@ -304,18 +306,52 @@ export default function ShiftsPage() {
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Shift Management</h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Create and manage work shifts</p>
           </div>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowForm(true);
-            }}
-            className="rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/30 transition-all hover:from-blue-600 hover:to-indigo-600"
-          >
-            <svg className="mr-2 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Create Shift
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+            {!loading && shifts.length > 0 && (
+              <div
+                className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+                role="group"
+                aria-label="Shifts display mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grid')}
+                  aria-pressed={viewMode === 'grid'}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors touch-manipulation min-h-[40px] sm:min-h-0 ${viewMode === 'grid'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
+                  Cards
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('table')}
+                  aria-pressed={viewMode === 'table'}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors touch-manipulation min-h-[40px] sm:min-h-0 ${viewMode === 'table'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  <Table2 className="h-4 w-4 shrink-0" aria-hidden />
+                  Table
+                </button>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                resetForm();
+                setShowForm(true);
+              }}
+              className="rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/30 transition-all hover:from-blue-600 hover:to-indigo-600 touch-manipulation min-h-[44px] sm:min-h-0"
+            >
+              <svg className="mr-2 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Create Shift
+            </button>
+          </div>
         </div>
 
         {/* Create/Edit Shift Dialog */}
@@ -414,7 +450,6 @@ export default function ShiftsPage() {
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm transition-all focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Select duration</option>
-                    <option value="">Select duration</option>
                     {allowedDurations.map((dur) => (
                       <option key={dur} value={dur}>
                         {dur} hours
@@ -505,6 +540,93 @@ export default function ShiftsPage() {
             </div>
             <p className="text-base font-semibold text-slate-900 dark:text-slate-100">No shifts found</p>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Create your first shift to get started</p>
+          </div>
+        ) : viewMode === 'table' ? (
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/90 shadow-xl backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/90">
+            <table className="min-w-[720px] w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/90 dark:border-slate-700 dark:bg-slate-800/80">
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Color
+                  </th>
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Name
+                  </th>
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Time
+                  </th>
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Duration
+                  </th>
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Payable
+                  </th>
+                  <th className="px-4 py-3 font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-700 dark:text-slate-200" scope="col">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {shifts.map((shift) => (
+                  <tr
+                    key={shift._id}
+                    className="border-b border-slate-100 transition-colors hover:bg-slate-50/80 dark:border-slate-800 dark:hover:bg-slate-800/40"
+                  >
+                    <td className="px-4 py-3 align-middle">
+                      <div
+                        className="h-3 w-14 rounded-full border border-slate-200/80 dark:border-slate-600"
+                        style={{ backgroundColor: shift.color || '#3b82f6' }}
+                        title={shift.color || '#3b82f6'}
+                      />
+                    </td>
+                    <td className="px-4 py-3 align-middle font-medium text-slate-900 dark:text-slate-100">
+                      <span className="line-clamp-2">{shift.name}</span>
+                    </td>
+                    <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-600 dark:text-slate-400">
+                      {shift.startTime} – {shift.endTime}
+                    </td>
+                    <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-600 dark:text-slate-400">
+                      {shift.duration} h
+                    </td>
+                    <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-600 dark:text-slate-400">
+                      {shift.payableShifts ?? 1}
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${shift.isActive
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          }`}
+                      >
+                        {shift.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 align-middle text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(shift)}
+                          style={{ backgroundColor: shift.color || '#3b82f6' }}
+                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-opacity hover:opacity-90 touch-manipulation min-h-[36px]"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(shift._id)}
+                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 dark:border-red-800 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-900/20 touch-manipulation min-h-[36px]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

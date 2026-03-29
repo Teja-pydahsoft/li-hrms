@@ -8,6 +8,7 @@ import {
   canEditShift  // Used as canManageShifts
 } from '@/lib/permissions';
 import { auth } from '@/lib/auth';
+import { LayoutGrid, Table2 } from 'lucide-react';
 
 export default function ShiftsPage() {
   // User Scope & RBAC
@@ -38,6 +39,7 @@ export default function ShiftsPage() {
   // UI State
   const [showForm, setShowForm] = useState(false);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
   // Form State
   const [name, setName] = useState('');
@@ -524,6 +526,122 @@ export default function ShiftsPage() {
     </div>
   );
 
+  const dedupeShifts = (list: Shift[]) =>
+    Array.from(new Map(list.map((s) => [s._id, s])).values());
+
+  const renderShiftsDisplay = (shiftList: Shift[], allowManageOverride?: boolean) => {
+    const list = dedupeShifts(shiftList);
+    if (list.length === 0) return null;
+    const allowActions = allowManageOverride !== undefined ? allowManageOverride : canManageShifts;
+
+    if (viewMode === 'grid') {
+      return (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {list.map((s) => renderShiftCard(s, allowManageOverride))}
+        </div>
+      );
+    }
+
+    return (
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/90">
+        <table className="min-w-[680px] w-full border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50/90 dark:border-slate-700 dark:bg-slate-800/80">
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Color
+              </th>
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Name
+              </th>
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Time
+              </th>
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Duration
+              </th>
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Payable
+              </th>
+              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3" scope="col">
+                Status
+              </th>
+              {allowActions && (
+                <th
+                  className="px-3 py-2.5 text-right font-semibold text-slate-700 dark:text-slate-200 sm:px-4 sm:py-3"
+                  scope="col"
+                >
+                  Actions
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((shift) => (
+              <tr
+                key={shift._id}
+                className="border-b border-slate-100 transition-colors hover:bg-slate-50/80 dark:border-slate-800 dark:hover:bg-slate-800/40"
+              >
+                <td className="px-3 py-2.5 align-middle sm:px-4 sm:py-3">
+                  <div
+                    className="h-3 w-12 rounded-full border border-slate-200/80 sm:w-14 dark:border-slate-600"
+                    style={{ backgroundColor: shift.color || '#3b82f6' }}
+                    title={shift.color || '#3b82f6'}
+                  />
+                </td>
+                <td className="px-3 py-2.5 align-middle font-medium text-slate-900 sm:px-4 sm:py-3 dark:text-slate-100">
+                  <span className="line-clamp-2">{shift.name}</span>
+                </td>
+                <td className="px-3 py-2.5 align-middle whitespace-nowrap text-slate-600 sm:px-4 sm:py-3 dark:text-slate-400">
+                  {shift.startTime} – {shift.endTime}
+                </td>
+                <td className="px-3 py-2.5 align-middle whitespace-nowrap text-slate-600 sm:px-4 sm:py-3 dark:text-slate-400">
+                  {shift.duration} h
+                </td>
+                <td className="px-3 py-2.5 align-middle whitespace-nowrap text-slate-600 sm:px-4 sm:py-3 dark:text-slate-400">
+                  {shift.payableShifts ?? 1}
+                </td>
+                <td className="px-3 py-2.5 align-middle sm:px-4 sm:py-3">
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${shift.isActive
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                      }`}
+                  >
+                    {shift.isActive ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                {allowActions && (
+                  <td className="px-3 py-2.5 align-middle text-right sm:px-4 sm:py-3">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(shift)}
+                        style={{ backgroundColor: shift.color || '#3b82f6' }}
+                        className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-opacity hover:opacity-90 touch-manipulation min-h-[36px]"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(shift._id)}
+                        className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 dark:border-red-800 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-900/20 touch-manipulation min-h-[36px]"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const showViewModeToggle =
+    !loading && (canViewStructuredShifts || resolvedEmployeeShifts.length > 0);
+
   return (
     <div className="relative min-h-screen">
       {/* Background */}
@@ -539,20 +657,54 @@ export default function ShiftsPage() {
               {canManageShifts ? 'Create and manage work shifts' : 'View available shifts and schedules'}
             </p>
           </div>
-          {canManageShifts && (
-            <button
-              onClick={() => {
-                resetForm();
-                setShowForm(true);
-              }}
-              className="rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/30 transition-all hover:from-blue-600 hover:to-indigo-600"
-            >
-              <svg className="mr-2 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Create Shift
-            </button>
-          )}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+            {showViewModeToggle && (
+              <div
+                className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+                role="group"
+                aria-label="Shifts display mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grid')}
+                  aria-pressed={viewMode === 'grid'}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors touch-manipulation min-h-[40px] sm:min-h-0 ${viewMode === 'grid'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
+                  Cards
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('table')}
+                  aria-pressed={viewMode === 'table'}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors touch-manipulation min-h-[40px] sm:min-h-0 ${viewMode === 'table'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800'
+                    }`}
+                >
+                  <Table2 className="h-4 w-4 shrink-0" aria-hidden />
+                  Table
+                </button>
+              </div>
+            )}
+            {canManageShifts && (
+              <button
+                onClick={() => {
+                  resetForm();
+                  setShowForm(true);
+                }}
+                className="rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/30 transition-all hover:from-blue-600 hover:to-indigo-600 touch-manipulation min-h-[44px] sm:min-h-0"
+              >
+                <svg className="mr-2 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Create Shift
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Create/Edit Shift Dialog */}
@@ -751,10 +903,7 @@ export default function ShiftsPage() {
                     <div className="h-6 w-1 rounded-full bg-orange-500" />
                     {division.name} <span className="text-sm font-normal text-slate-500">Division Defaults</span>
                   </h2>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {/* Unique Shifts only */}
-                    {Array.from(new Map(divisionShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
-                  </div>
+                  {renderShiftsDisplay(divisionShifts)}
                 </div>
               );
             })}
@@ -798,10 +947,7 @@ export default function ShiftsPage() {
                         <div className="h-6 w-1 rounded-full bg-purple-500" />
                         {dept.name} <span className="text-sm font-normal text-slate-500">Department Specific</span>
                       </h2>
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                        {/* Unique Shifts only */}
-                        {Array.from(new Map(allDeptShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
-                      </div>
+                      {renderShiftsDisplay(allDeptShifts)}
                     </>
                   )}
 
@@ -845,9 +991,7 @@ export default function ShiftsPage() {
                                 <div className="h-2 w-2 rounded-full bg-indigo-400" />
                                 {des.name} <span className="text-xs font-normal text-slate-400">Designation Shifts</span>
                               </h3>
-                              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                                {Array.from(new Map(resolvedDesShifts.map(s => [s._id, s])).values()).map(s => renderShiftCard(s))}
-                              </div>
+                              {renderShiftsDisplay(resolvedDesShifts)}
                             </div>
                           )
                         })}
@@ -873,9 +1017,7 @@ export default function ShiftsPage() {
                     <div className="h-6 w-1 rounded-full bg-slate-500" />
                     All Available Shifts
                   </h2>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {shifts.map(s => renderShiftCard(s, false))}
-                  </div>
+                  {renderShiftsDisplay(shifts, false)}
                 </div>
               )}
             </div>
@@ -889,9 +1031,7 @@ export default function ShiftsPage() {
                   <div className="h-6 w-1 rounded-full bg-blue-500" />
                   Your Assigned Shifts
                 </h2>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {resolvedEmployeeShifts.map(s => renderShiftCard(s, false))}
-                </div>
+                {renderShiftsDisplay(resolvedEmployeeShifts, false)}
                 <p className="text-sm text-slate-500 mt-2">
                   These are the specific shifts assigned to you based on your designation, department, or division (in that order of priority).
                 </p>
