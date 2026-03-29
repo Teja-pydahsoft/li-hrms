@@ -433,10 +433,18 @@ exports.getMonthlyTableViewData = async (employees, year, month, startQueryDate,
       const isConflict = (hasLeave || (hasOD && !odIsHourBased && !odIsHalfDay)) && hasAttendance;
 
       let status = 'ABSENT';
-      if (record) status = record.status;
-      else if (hasLeave) status = 'LEAVE';
-      else if (hasOD) status = 'OD';
-      else if (new Date(dateStr) > new Date()) status = '-';
+      if (isConflict) {
+        if (hasOD) status = `${record.status}/OD`;
+        else if (hasLeave) status = `${record.status}/LEAVE`;
+      } else if (record) {
+        status = record.status;
+      } else if (hasLeave) {
+        status = 'LEAVE';
+      } else if (hasOD) {
+        status = 'OD';
+      } else if (new Date(dateStr) > new Date()) {
+        status = '-';
+      }
 
       dailyAttendance[dateStr] = {
         date: dateStr,
