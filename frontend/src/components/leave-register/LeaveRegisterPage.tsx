@@ -6,16 +6,13 @@ import { auth } from '@/lib/auth';
 import { toast } from 'react-toastify';
 import {
   Search,
-  Filter,
   ChevronLeft,
   ChevronRight,
   X,
-  BookOpen,
   Loader2,
   User,
   Building2,
   Layers,
-  CalendarRange,
   Shield,
   Info,
   Printer,
@@ -587,7 +584,7 @@ export default function LeaveRegisterPage({
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, financialYear, departmentId, divisionId, page]);
+  }, [debouncedSearch, financialYear, departmentId, divisionId, page, registerListRefresh]);
 
   const openRegisterExportModal = (format: 'pdf' | 'xlsx') => {
     const fy = financialYear.trim();
@@ -1119,276 +1116,143 @@ export default function LeaveRegisterPage({
   const inputClass =
     'w-full px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:focus:border-blue-400';
 
+  const filterChipWrapClass =
+    'flex flex-nowrap items-center gap-1.5 p-1 shrink-0 bg-slate-100/50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/60 backdrop-blur-sm';
+
+  const compactSelectClass = isSuperadmin
+    ? 'h-8 pl-2 pr-6 text-[11px] font-semibold bg-white dark:bg-slate-800 border-0 rounded-lg focus:ring-2 focus:ring-emerald-500/20 text-slate-700 dark:text-slate-300 shadow-sm min-w-[5.25rem]'
+    : 'h-8 pl-2 pr-6 text-[11px] font-semibold bg-white dark:bg-slate-800 border-0 rounded-lg focus:ring-2 focus:ring-indigo-500/25 text-slate-700 dark:text-slate-300 shadow-sm min-w-[5.25rem]';
+
   return (
     <div
       className={
         isSuperadmin
-          ? 'min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-white dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 pb-12'
+          ? 'relative min-h-screen bg-slate-50 dark:bg-slate-950 pb-8'
           : 'min-h-screen bg-slate-50 dark:bg-slate-950 pb-10'
       }
     >
-      <div
-        className={
-          isSuperadmin
-            ? 'border-b border-slate-200/80 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm'
-            : 'border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
-        }
-      >
-        <div className="w-full max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div
-                className={
-                  isSuperadmin
-                    ? 'h-11 w-11 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex items-center justify-center shadow-md shadow-blue-600/20 shrink-0'
-                    : 'h-10 w-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0'
-                }
+      <div className="mx-auto max-w-[1920px] px-3 sm:px-4 lg:px-6 pt-3 sm:pt-4">
+        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:flex-nowrap sm:items-center sm:justify-between sm:gap-3 overflow-x-auto pb-1 scrollbar-hide">
+          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-nowrap sm:items-center sm:gap-3">
+            <div className="flex shrink-0 flex-nowrap items-center gap-2">
+              <h1 className="whitespace-nowrap text-lg font-bold tracking-tight text-slate-900 dark:text-white sm:text-xl">
+                Leave register
+              </h1>
+              {isSuperadmin && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-blue-200/80 bg-blue-50/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-800 dark:border-blue-800/60 dark:bg-blue-950/40 dark:text-blue-200">
+                  <Shield className="h-3 w-3 shrink-0" />
+                  Super admin
+                </span>
+              )}
+              <button
+                type="button"
+                title="FY balances and payroll-month credits (CL / CCL / EL). Expand a row for months; click a month for transactions. Exports use current list filters (PDF A4 landscape; Excel one sheet per leave type)."
+                className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 sm:inline-flex dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                aria-label="Page help"
               >
-                <BookOpen className="h-5 w-5" />
-              </div>
-              <div className="space-y-1 min-w-0">
-                {isSuperadmin && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-blue-200/80 dark:border-blue-800/60 bg-blue-50/90 dark:bg-blue-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-800 dark:text-blue-200">
-                    <Shield className="h-3 w-3 shrink-0" />
-                    Super admin
-                  </span>
-                )}
-                <h1 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white tracking-tight">
-                  Leave register
-                </h1>
-                <p className="text-xs text-slate-600 dark:text-slate-400 max-w-2xl leading-normal">
-                  {isSuperadmin ? (
-                    <>
-                      FY balances, payroll-month credits (CL / CCL / EL), and per–leave-type apply limits when set in
-                      policy. Expand a row for month detail; click a month for transactions.
-                    </>
-                  ) : (
-                    <>Per-employee ledger (CL, EL, CCL) for the selected financial year and payroll context.</>
-                  )}
-                </p>
-              </div>
+                <Info className="h-4 w-4" />
+              </button>
             </div>
-          </div>
-        </div>
-      </div>
 
-      <div className="w-full max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4">
-        <div
-          className={
-            isSuperadmin
-              ? 'rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-900 p-4 shadow-sm dark:shadow-none'
-              : 'rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm'
-          }
-        >
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-3">
-            <Filter className="h-3.5 w-3.5" />
-            Filters
-            {isSuperadmin && (
-              <span className="ml-auto font-normal normal-case text-[11px] text-slate-400 dark:text-slate-500 max-w-md text-right leading-snug">
-                Payroll month + FY first, then org or search.
-              </span>
-            )}
+            <div className="hidden h-6 w-px shrink-0 bg-slate-200 dark:bg-slate-700 md:block" />
+
+            <div className="relative w-full min-w-[8rem] shrink-0 sm:w-40">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Name or number…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className={
+                  isSuperadmin
+                    ? 'h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-2 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-emerald-500'
+                    : 'h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-2 text-xs text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
+                }
+              />
+            </div>
+
+            <div className={filterChipWrapClass}>
+              <select
+                value={financialYear}
+                onChange={(e) => setFinancialYear(e.target.value)}
+                title="Financial year"
+                className={`${compactSelectClass} max-w-[10rem]`}
+              >
+                {financialYearOptions.map((fy) => (
+                  <option key={fy} value={fy}>
+                    {fy}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={divisionId}
+                onChange={(e) => {
+                  setDivisionId(e.target.value);
+                  setDepartmentId('');
+                }}
+                title="Division"
+                className={`${compactSelectClass} max-w-[8.5rem]`}
+              >
+                <option value="">All divisions</option>
+                {divisions.map((d) => (
+                  <option key={d._id} value={d._id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                title="Department"
+                className={`${compactSelectClass} max-w-[8.5rem]`}
+              >
+                <option value="">All departments</option>
+                {departments.map((d) => (
+                  <option key={d._id} value={d._id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          {isSuperadmin ? (
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Find people</label>
-                <div className="relative mt-1.5">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Name or employee number…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="w-full pl-9 pr-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div className="rounded-lg border border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/25 p-3 space-y-2.5">
-                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                    <CalendarRange className="h-3.5 w-3.5 shrink-0" />
-                    Payroll context
-                  </p>
-                  <div className="grid grid-cols-1 gap-2.5">
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Financial year</label>
-                      <select
-                        value={financialYear}
-                        onChange={(e) => setFinancialYear(e.target.value)}
-                        className={`mt-1 ${inputClass}`}
-                      >
-                        {financialYearOptions.map((fy) => (
-                          <option key={fy} value={fy}>
-                            {fy}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-4 space-y-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                    <Building2 className="h-3.5 w-3.5" />
-                    Organization
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
-                        <Layers className="h-3.5 w-3.5" />
-                        Division
-                      </label>
-                      <select
-                        value={divisionId}
-                        onChange={(e) => {
-                          setDivisionId(e.target.value);
-                          setDepartmentId('');
-                        }}
-                        className={`mt-1 ${inputClass}`}
-                      >
-                        <option value="">All divisions</option>
-                        {divisions.map((d) => (
-                          <option key={d._id} value={d._id}>
-                            {d.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 flex items-center gap-1">
-                        <Building2 className="h-3.5 w-3.5" />
-                        Department
-                      </label>
-                      <select
-                        value={departmentId}
-                        onChange={(e) => setDepartmentId(e.target.value)}
-                        className={`mt-1 ${inputClass}`}
-                      >
-                        <option value="">All departments</option>
-                        {departments.map((d) => (
-                          <option key={d._id} value={d._id}>
-                            {d.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="lg:col-span-2">
-                <label className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Search</label>
-                <div className="relative mt-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Name or employee number…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="w-full pl-10 pr-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] font-medium text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <CalendarRange className="h-3.5 w-3.5" />
-                  Financial year
-                </label>
-                <select
-                  value={financialYear}
-                  onChange={(e) => setFinancialYear(e.target.value)}
-                  className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-sm"
-                >
-                  {financialYearOptions.map((fy) => (
-                    <option key={fy} value={fy}>
-                      {fy}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
-                  <Layers className="h-3.5 w-3.5" />
-                  Division
-                </label>
-                <select
-                  value={divisionId}
-                  onChange={(e) => {
-                    setDivisionId(e.target.value);
-                    setDepartmentId('');
-                  }}
-                  className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-sm"
-                >
-                  <option value="">All divisions</option>
-                  {divisions.map((d) => (
-                    <option key={d._id} value={d._id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
-                  <Building2 className="h-3.5 w-3.5" />
-                  Department
-                </label>
-                <select
-                  value={departmentId}
-                  onChange={(e) => setDepartmentId(e.target.value)}
-                  className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-sm"
-                >
-                  <option value="">All departments</option>
-                  {departments.map((d) => (
-                    <option key={d._id} value={d._id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-          <div className="mt-4 flex flex-wrap items-center justify-end gap-2 sm:gap-3 border-t border-slate-100 dark:border-slate-800 pt-3">
-            <p className="text-[10px] text-slate-500 dark:text-slate-400 max-w-md leading-snug w-full sm:w-auto sm:flex-1 sm:min-w-0 sm:mr-auto order-last sm:order-first">
-              Export uses list filters and all matching employees. PDF: A4 landscape. Excel: one sheet per leave type.
-            </p>
-            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => openRegisterExportModal('pdf')}
-                disabled={exportingPdf || !financialYear.trim()}
-                className={
-                  isSuperadmin
-                    ? 'inline-flex items-center gap-2 rounded-lg border border-blue-200 dark:border-blue-900/50 bg-blue-50 dark:bg-blue-950/40 px-3 py-2 text-xs font-medium text-blue-900 dark:text-blue-100 hover:bg-blue-100/80 dark:hover:bg-blue-950/70 disabled:opacity-50'
-                    : 'inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-medium text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50'
-                }
-              >
-                {exportingPdf && registerExportFormat === 'pdf' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                ) : (
-                  <Printer className="h-3.5 w-3.5 shrink-0" />
-                )}
-                Export PDF
-              </button>
-              <button
-                type="button"
-                onClick={() => openRegisterExportModal('xlsx')}
-                disabled={exportingPdf || !financialYear.trim()}
-                className={
-                  isSuperadmin
-                    ? 'inline-flex items-center gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-900 dark:text-emerald-100 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/70 disabled:opacity-50'
-                    : 'inline-flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/90 dark:bg-emerald-950/30 px-3 py-2 text-xs font-medium text-emerald-900 dark:text-emerald-100 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 disabled:opacity-50'
-                }
-              >
-                {exportingPdf && registerExportFormat === 'xlsx' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                ) : (
-                  <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
-                )}
-                Export Excel
-              </button>
-            </div>
+
+          <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => openRegisterExportModal('pdf')}
+              disabled={exportingPdf || !financialYear.trim()}
+              title="Export PDF — filtered list, all matching employees, A4 landscape"
+              className={
+                isSuperadmin
+                  ? 'inline-flex h-8 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[11px] font-semibold text-blue-900 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-100 dark:hover:bg-blue-950/70'
+                  : 'inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700'
+              }
+            >
+              {exportingPdf && registerExportFormat === 'pdf' ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Printer className="h-3.5 w-3.5 shrink-0" />
+              )}
+              PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => openRegisterExportModal('xlsx')}
+              disabled={exportingPdf || !financialYear.trim()}
+              title="Export Excel — filtered list, one sheet per leave type"
+              className={
+                isSuperadmin
+                  ? 'inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-100 dark:hover:bg-emerald-950/70'
+                  : 'inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50/90 px-2.5 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-800/50 dark:bg-emerald-950/30 dark:text-emerald-100'
+              }
+            >
+              {exportingPdf && registerExportFormat === 'xlsx' ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+              )}
+              Excel
+            </button>
           </div>
         </div>
 
@@ -1400,22 +1264,25 @@ export default function LeaveRegisterPage({
           }
         >
           {isSuperadmin && (
-            <div className="flex flex-wrap items-start sm:items-center justify-between gap-2 px-3 sm:px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">Employee register</p>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 max-w-xl leading-snug">
-                  Balances use the year snapshot when FY is set. Expand a row for monthly Cr / Used / Bal (credits minus
-                  used for that payroll month only) and per-type apply
-                  limits (under each type).
-                </p>
+            <div className="flex flex-nowrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40 px-3 py-1.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-100">Employees</span>
+                <button
+                  type="button"
+                  title="Balances use FY snapshot. Expand a row for monthly credits, used, and apply limits."
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-200/80 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                  aria-label="Register help"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                </button>
               </div>
               {!loading && (
-                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                  <span className="inline-flex items-center rounded-md bg-blue-100 dark:bg-blue-950/60 px-2 py-0.5 text-[11px] font-medium tabular-nums text-blue-900 dark:text-blue-100">
+                <div className="flex shrink-0 flex-nowrap items-center gap-1.5">
+                  <span className="inline-flex items-center rounded bg-blue-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-blue-900 dark:bg-blue-950/60 dark:text-blue-100">
                     {pagination.total} employee{pagination.total === 1 ? '' : 's'}
                   </span>
                   {pagination.pages > 1 && (
-                    <span className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                    <span className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
                       {page}/{pagination.pages}
                     </span>
                   )}
