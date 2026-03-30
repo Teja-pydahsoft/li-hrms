@@ -453,7 +453,15 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         const mergedFirst = Math.max(attFirst, odFirst, leaveFirst);
         const mergedSecond = Math.max(attSecond, odSecond, leaveSecond);
         const dayCovered = Math.min(mergedFirst + mergedSecond, 1.0);
-        const absentPortion = Math.round(Math.max(0, 1.0 - dayCovered) * 100) / 100;
+        // PARTIAL days: attendance halves stay 0 (see attFirst/attSecond above) while payableShifts still
+        // credits working portion (e.g. 0.5). Absent must not treat the full day as missing — add that
+        // payable fraction so e.g. 0.5 pay + partial → 0.5 absent, not 1.0 absent.
+        let effectiveCovered = dayCovered;
+        if (isPartialDay) {
+          const payPortion = Math.min(1, Math.max(0, Number(dayPayable) || 0));
+          effectiveCovered = Math.min(1.0, dayCovered + payPortion);
+        }
+        const absentPortion = Math.round(Math.max(0, 1.0 - effectiveCovered) * 100) / 100;
 
         if (absentPortion > 0 && !contributingDates.absent.some(cd => cd.date === dStr)) {
           contributingDates.absent.push({ date: dStr, value: absentPortion, label: '' });
