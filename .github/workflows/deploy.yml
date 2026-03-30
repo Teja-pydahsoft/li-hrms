@@ -1,61 +1,61 @@
-name: Deploy LI-HRMS Services
-on:
-  push:
-    branches:
-      - main
+# name: Deploy LI-HRMS Services
+# on:
+#   push:
+#     branches:
+#       - main
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+# jobs:
+#   deploy:
+#     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST }} >> ~/.ssh/known_hosts
-          ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST_2 }} >> ~/.ssh/known_hosts
+#       - name: Setup SSH
+#         run: |
+#           mkdir -p ~/.ssh
+#           echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/id_ed25519
+#           chmod 600 ~/.ssh/id_ed25519
+#           ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST }} >> ~/.ssh/known_hosts
+#           ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST_2 }} >> ~/.ssh/known_hosts
 
-      # =========================
-      # DEPLOY TO EC2 - SERVER 1
-      # =========================
-      - name: Deploy to EC2 - Server 1
-        run: |
-          ssh ${{ secrets.LIGHTSAIL_USER }}@${{ secrets.LIGHTSAIL_HOST }} << 'EOF'
-            set -e
-            cd /home/ec2-user/li-hrms
-            git reset --hard
-            git pull origin main
+#       # =========================
+#       # DEPLOY TO EC2 - SERVER 1
+#       # =========================
+#       - name: Deploy to EC2 - Server 1
+#         run: |
+#           ssh ${{ secrets.LIGHTSAIL_USER }}@${{ secrets.LIGHTSAIL_HOST }} << 'EOF'
+#             set -e
+#             cd /home/ec2-user/li-hrms
+#             git reset --hard
+#             git pull origin main
 
-            cd backend && npm install --production
-            cd ../biometric && npm install --production
-            cd ../frontend && npm install
+#             cd backend && npm install --production
+#             cd ../biometric && npm install --production
+#             cd ../frontend && npm install
 
-            cd ..
-            pm2 reload ecosystem.config.js
-            pm2 save
-          EOF
+#             cd ..
+#             pm2 reload ecosystem.config.js
+#             pm2 save
+#           EOF
 
-      # =========================
-      # DEPLOY TO EC2 - SERVER 2
-      # =========================
-      # - name: Deploy to EC2 - Server 2
-      #   run: |
-      #     ssh ${{ secrets.LIGHTSAIL_USER_2 }}@${{ secrets.LIGHTSAIL_HOST_2 }} << 'EOF'
-      #       set -e
-      #       cd /home/ec2-user/li-hrms
-      #       git reset --hard
-      #       git pull origin main
+#       # =========================
+#       # DEPLOY TO EC2 - SERVER 2
+#       # =========================
+#       # - name: Deploy to EC2 - Server 2
+#       #   run: |
+#       #     ssh ${{ secrets.LIGHTSAIL_USER_2 }}@${{ secrets.LIGHTSAIL_HOST_2 }} << 'EOF'
+#       #       set -e
+#       #       cd /home/ec2-user/li-hrms
+#       #       git reset --hard
+#       #       git pull origin main
 
-      #       cd backend && npm install --production
-      #       cd ../biometric && npm install --production
-      #       cd ../frontend && npm install
+#       #       cd backend && npm install --production
+#       #       cd ../biometric && npm install --production
+#       #       cd ../frontend && npm install
 
-      #       cd ..
-      #       pm2 reload ecosystem.config.js
-      #       pm2 save
-      #     EOF
+#       #       cd ..
+#       #       pm2 reload ecosystem.config.js
+#       #       pm2 save
+#       #     EOF
