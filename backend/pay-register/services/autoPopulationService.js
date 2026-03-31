@@ -7,6 +7,8 @@ const PreScheduledShift = require('../../shifts/model/PreScheduledShift');
 const LeaveSettings = require('../../leaves/model/LeaveSettings');
 const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const Shift = require('../../shifts/model/Shift');
+const MonthlyAttendanceSummary = require('../../attendance/model/MonthlyAttendanceSummary');
+const summaryCalculationService = require('../../attendance/services/summaryCalculationService');
 const { getPayrollDateRange, getAllDatesInRange } = require('../../shared/utils/dateUtils');
 
 /**
@@ -472,6 +474,31 @@ async function populatePayRegisterFromSources(employeeId, emp_no, year, monthNum
   return dailyRecords;
 }
 
+/**
+ * Get or calculate monthly attendance summary for the employee
+ * @param {String} employeeId 
+ * @param {String} emp_no 
+ * @param {Number} year 
+ * @param {Number} monthNumber 
+ * @returns {Promise<Object>} MonthlyAttendanceSummary document
+ */
+async function getSummaryData(employeeId, emp_no, year, monthNumber) {
+  const month = `${year}-${String(monthNumber).padStart(2, '0')}`;
+  
+  // 1. Try to find existing summary
+  let summary = await MonthlyAttendanceSummary.findOne({ employeeId, month });
+  
+  // 2. If not present, trigger calculation
+  if (!summary) {
+    console.log(`[Pay Register Sync] Summary not found for ${emp_no} ${month}. Triggering calculation...`);
+    summary = await summaryCalculationService.calculateMonthlySummary(employeeId, emp_no, year, monthNumber);
+  } else {
+    console.log(`[Pay Register Sync] Using existing summary for ${emp_no} ${month}.`);
+  }
+  
+  return summary;
+}
+
 module.exports = {
   populatePayRegisterFromSources,
   fetchAttendanceData,
@@ -481,4 +508,5 @@ module.exports = {
   fetchShiftData,
   resolveConflicts,
   getLeaveNature,
+  getSummaryData,
 };

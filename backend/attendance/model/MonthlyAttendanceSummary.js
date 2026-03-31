@@ -58,6 +58,18 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Total number of paid leaves in this month
+    totalPaidLeaves: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Total number of LOP (Loss of Pay) leaves in this month
+    totalLopLeaves: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
 
     // Total number of ODs (approved) in this month
     totalODs: {

@@ -9,8 +9,8 @@ require('dotenv').config();
  */
 
 async function copyDatabase() {
-    const prodUri = process.env.MONGODB_ATLAS_URI;
-    const localUri = process.env.MONGODB_URI || "mongodb://localhost:27017/hrms";
+    const prodUri = process.env.MONGODB_URI;
+    const localUri = "mongodb://127.0.0.1:27017/hrms";
 
     if (!prodUri) {
         console.error("Error: MONGODB_ATLAS_URI is not defined in .env file.");

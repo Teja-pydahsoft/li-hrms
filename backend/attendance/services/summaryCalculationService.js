@@ -279,6 +279,8 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     let totalEarlyOutMinutes = 0;
     let earlyOutCount = 0;
     let totalLeaveDays = 0;
+    let totalPaidLeaveDays = 0;
+    let totalLopLeaveDays = 0;
     let totalODDays = 0;
     /** Sum of payable-shift contributions on PARTIAL-status days (aligned with Payable column, not day-count). */
     let totalPartialPayableContribution = 0;
@@ -293,6 +295,20 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
           return sum + (l.isHalfDay ? 0.5 : 1);
         }, 0);
         const leaveContrib = Math.min(1, leaveContribRaw);
+
+        // Track Paid vs LOP for the Pay Register sync
+        // If multiple leaves exist on the same day, we attribute the contribution proportionally
+        // but typically it's either one full leave or two 0.5 leaves.
+        day.leaves.forEach(l => {
+          const unit = typeof l.numberOfDays === 'number' ? l.numberOfDays : (l.isHalfDay ? 0.5 : 1);
+          const nature = (l.leaveNature || '').toLowerCase();
+          if (nature === 'paid') {
+            totalPaidLeaveDays += unit;
+          } else {
+            totalLopLeaveDays += unit;
+          }
+        });
+
         const firstLeave = day.leaves[0];
         if (!contributingDates.leaves.some(cd => cd.date === dStr)) {
           contributingDates.leaves.push({
@@ -521,6 +537,8 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     summary.totalPartialDays = Math.round(totalPartialPayableContribution * 100) / 100;
     summary.totalPayableShifts = Math.round(totalPayableShifts * 100) / 100;
     summary.totalLeaves = Math.round(totalLeaveDays * 100) / 100;
+    summary.totalPaidLeaves = Math.round(totalPaidLeaveDays * 100) / 100;
+    summary.totalLopLeaves = Math.round(totalLopLeaveDays * 100) / 100;
     summary.totalODs = Math.round(totalODDays * 100) / 100;
     const totalAbsentDays = contributingDates.absent.reduce((s, cd) => s + (Number(cd.value) || 0), 0);
     summary.totalAbsentDays = Math.round(totalAbsentDays * 100) / 100;

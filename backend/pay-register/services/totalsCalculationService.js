@@ -309,11 +309,63 @@ function calculatePayableShifts(totalPresentDays, totalODDays, totalPaidLeaveDay
   return totalPresentDays + totalODDays + totalPaidLeaveDays;
 }
 
+/**
+ * Map totals from MonthlyAttendanceSummary to PayRegisterSummary structure.
+ * This ensures Pay Register uses the "correct mark" from Attendance module.
+ * @param {Object} payRegister - PayRegisterSummary document (mutated in place)
+ * @param {Object} summary - MonthlyAttendanceSummary document
+ */
+function syncTotalsFromMonthlySummary(payRegister, summary) {
+  if (!payRegister || !summary) return;
+
+  const totals = payRegister.totals || {};
+
+  // Core attendance metrics
+  totals.totalPresentDays = summary.totalPresentDays || 0;
+  totals.totalAbsentDays = summary.totalAbsentDays || 0;
+  totals.totalODDays = summary.totalODs || 0;
+  
+  // Leave breakdown (now with Paid/LOP from attendance summary)
+  totals.totalPaidLeaveDays = summary.totalPaidLeaves || 0;
+  totals.totalLopDays = summary.totalLopLeaves || 0;
+  totals.totalLeaveDays = summary.totalLeaves || 0;
+  
+  // Payroll specific
+  totals.totalPayableShifts = summary.totalPayableShifts || 0;
+  totals.totalOTHours = summary.totalOTHours || 0;
+  
+  // Exceptions (Late/Early)
+  totals.lateCount = summary.lateInCount || 0;
+  totals.earlyOutCount = summary.earlyOutCount || 0;
+  
+  // Optional but helpful for debugging
+  totals.totalLateInMinutes = summary.totalLateInMinutes || 0;
+  totals.totalEarlyOutMinutes = summary.totalEarlyOutMinutes || 0;
+
+  // Since we are overriding the totals, we should probably also 
+  // clear the full/half sub-counters as they are now derived from the attendance summary
+  totals.presentDays = Math.floor(totals.totalPresentDays);
+  totals.presentHalfDays = (totals.totalPresentDays % 1) >= 0.5 ? 1 : 0;
+  
+  totals.absentDays = Math.floor(totals.totalAbsentDays);
+  totals.absentHalfDays = (totals.totalAbsentDays % 1) >= 0.5 ? 1 : 0;
+
+  totals.paidLeaveDays = Math.floor(totals.totalPaidLeaveDays);
+  totals.paidLeaveHalfDays = (totals.totalPaidLeaveDays % 1) >= 0.5 ? 1 : 0;
+
+  totals.lopDays = Math.floor(totals.totalLopDays);
+  totals.lopHalfDays = (totals.totalLopDays % 1) >= 0.5 ? 1 : 0;
+
+  payRegister.totals = totals;
+  payRegister.markModified('totals');
+}
+
 module.exports = {
   calculateTotals,
   countDaysByCategory,
   calculatePayableShifts,
   getRosterWOHOLCounts,
   ensureTotalsRespectRoster,
+  syncTotalsFromMonthlySummary,
 };
 

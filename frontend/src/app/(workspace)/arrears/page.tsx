@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import ArrearsDetailDialog from '@/components/Arrears/ArrearsDetailDialog';
 import ArrearsForm from '@/components/Arrears/ArrearsForm';
 import Spinner from '@/components/Spinner';
+import { Users, Loader2 } from 'lucide-react';
 
 // Icons
 const PlusIcon = () => (
@@ -83,6 +84,12 @@ interface Arrears {
   createdAt: string;
 }
 
+interface BulkArrearRow {
+  employee: any;
+  amount: number;
+  remarks: string;
+}
+
 export default function ArrearsPage() {
   const [arrears, setArrears] = useState<Arrears[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,10 +98,20 @@ export default function ArrearsPage() {
   const [selectedArrearsId, setSelectedArrearsId] = useState<string | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [employees, setEmployees] = useState([]);
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [bulkDivisionId, setBulkDivisionId] = useState('');
+  const [bulkDepartmentId, setBulkDepartmentId] = useState('');
+  const [bulkRows, setBulkRows] = useState<BulkArrearRow[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkSectionOpen, setBulkSectionOpen] = useState(false);
 
   useEffect(() => {
     loadData();
     loadEmployees();
+    api.getDivisions?.().then((r: any) => { if (r?.success && r?.data) setDivisions(r.data); if (Array.isArray(r)) setDivisions(r); }).catch(() => {});
+    api.getDepartments?.().then((r: any) => { if (r?.success && r?.data) setDepartments(r.data); if (Array.isArray(r)) setDepartments(r); }).catch(() => {});
   }, []);
 
   const loadData = () => {
@@ -170,6 +187,79 @@ export default function ArrearsPage() {
     return emp.emp_no;
   };
 
+  const filteredBulkDepartments = React.useMemo(() => {
+    if (!bulkDivisionId) return departments;
+    const div = divisions.find((d: any) => String(d._id) === String(bulkDivisionId));
+    const deptIds = ((div?.departments ?? []) as any[]).map((d: any) => (typeof d === 'string' ? d : d?._id));
+    if (!deptIds.length) return departments;
+    return departments.filter((d: any) => deptIds.includes(String(d._id)));
+  }, [bulkDivisionId, divisions, departments]);
+
+  const loadBulkEmployees = async () => {
+    setBulkLoading(true);
+    try {
+      const filters: any = { is_active: true, limit: 500 };
+      if (bulkDivisionId) filters.division_id = bulkDivisionId;
+      if (bulkDepartmentId) filters.department_id = bulkDepartmentId;
+      const r: any = await api.getEmployees(filters);
+      const list = (r?.data ?? r) || [];
+      const rows: BulkArrearRow[] = list.map((emp: any) => ({
+        employee: emp,
+        amount: 0,
+        remarks: '',
+      }));
+      setBulkRows(rows);
+      toast.info(rows.length ? `Loaded ${rows.length} employees` : 'No employees match filters');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to load employees');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const updateBulkRow = (index: number, field: 'amount' | 'remarks', value: number | string) => {
+    setBulkRows((prev) => {
+      const next = [...prev];
+      if (next[index]) next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const handleBulkSave = async () => {
+    const toCreate = bulkRows.filter((r) => Number(r.amount) > 0);
+    if (toCreate.length === 0) {
+      toast.warn('Enter amount > 0 for at least one employee');
+      return;
+    }
+    setBulkSaving(true);
+    try {
+      const settled = await Promise.allSettled(
+        toCreate.map((r) =>
+          api.createArrears({
+            type: 'direct',
+            employee: r.employee._id,
+            totalAmount: Number(r.amount),
+            reason: (r.remarks || 'Bulk arrear').trim(),
+          })
+        )
+      );
+      const success = settled.filter((x) => x.status === 'fulfilled').length;
+      const failed = settled.length - success;
+      if (success > 0) {
+        toast.success(`${success} arrears request(s) created`);
+        loadData();
+        setBulkRows((prev) =>
+          prev.map((r) => (Number(r.amount) > 0 ? { ...r, amount: 0, remarks: '' } : r))
+        );
+      }
+      if (failed > 0) toast.error(`${failed} request(s) failed`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Bulk create failed');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen p-6">
       <ToastContainer position="top-right" autoClose={3000} />
@@ -214,6 +304,129 @@ export default function ArrearsPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Bulk create section */}
+      <div className="mb-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setBulkSectionOpen((o) => !o)}
+          className="flex w-full items-center justify-between p-5 text-left"
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+              <Users className="h-5 w-5 text-slate-700 dark:text-slate-200" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Bulk create arrears</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Load employees, enter amount and remarks, create direct arrears requests</p>
+            </div>
+          </div>
+          <span className="text-slate-500">{bulkSectionOpen ? '▼' : '▶'}</span>
+        </button>
+        {bulkSectionOpen && (
+          <div className="border-t border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Division</label>
+                <select
+                  value={bulkDivisionId}
+                  onChange={(e) => { setBulkDivisionId(e.target.value); setBulkDepartmentId(''); }}
+                  className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white px-3 py-2 text-sm min-w-[180px]"
+                >
+                  <option value="">All divisions</option>
+                  {divisions.map((d: any) => (
+                    <option key={d._id} value={d._id}>{d.name || d.code || d._id}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Department</label>
+                <select
+                  value={bulkDepartmentId}
+                  onChange={(e) => setBulkDepartmentId(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white px-3 py-2 text-sm min-w-[180px]"
+                >
+                  <option value="">All departments</option>
+                  {filteredBulkDepartments.map((d: any) => (
+                    <option key={d._id} value={d._id}>{d.name || d.code || d._id}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={loadBulkEmployees}
+                disabled={bulkLoading}
+                className="rounded-lg bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+              >
+                {bulkLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                Load employees
+              </button>
+            </div>
+            {bulkRows.length > 0 && (
+              <>
+                <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-900/50 text-xs text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                        <th className="px-3 py-2 text-left">Employee</th>
+                        <th className="px-3 py-2 text-left">Code / Dept</th>
+                        <th className="px-3 py-2 text-right">Amount (₹)</th>
+                        <th className="px-3 py-2 text-left">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkRows.map((row, idx) => (
+                        <tr key={row.employee._id} className="border-b border-slate-100 dark:border-slate-800">
+                          <td className="px-3 py-2 font-medium text-slate-900 dark:text-white">
+                            {row.employee.employee_name || [row.employee.first_name, row.employee.last_name].filter(Boolean).join(' ') || row.employee.emp_no || '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-400">
+                            {row.employee.emp_no || '—'}
+                            {(row.employee.department_id as any)?.name && ` / ${(row.employee.department_id as any).name}`}
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={row.amount === 0 ? '' : row.amount}
+                              onChange={(e) => updateBulkRow(idx, 'amount', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white px-2 py-1.5 text-right"
+                              placeholder="0"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={row.remarks}
+                              onChange={(e) => updateBulkRow(idx, 'remarks', e.target.value)}
+                              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white px-2 py-1.5"
+                              placeholder="Remarks"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    {bulkRows.filter((r) => Number(r.amount) > 0).length} row(s) with amount &gt; 0 will create arrears requests
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleBulkSave}
+                    disabled={bulkSaving || bulkRows.every((r) => Number(r.amount) <= 0)}
+                    className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {bulkSaving ? 'Saving...' : 'Save (create requests)'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tabs */}

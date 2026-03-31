@@ -1,6 +1,6 @@
 const PayRegisterSummary = require('../model/PayRegisterSummary');
-const { populatePayRegisterFromSources } = require('./autoPopulationService');
-const { calculateTotals, ensureTotalsRespectRoster } = require('./totalsCalculationService');
+const { populatePayRegisterFromSources, getSummaryData } = require('./autoPopulationService');
+const { calculateTotals, ensureTotalsRespectRoster, syncTotalsFromMonthlySummary } = require('./totalsCalculationService');
 const { getPayrollDateRange } = require('../../shared/utils/dateUtils');
 const { syncAttendanceFromMSSQL } = require('../../attendance/services/attendanceSyncService');
 
@@ -361,8 +361,16 @@ async function manualSyncPayRegister(employeeId, month) {
     }
 
     payRegister.dailyRecords = dailyRecords;
-    payRegister.totals = calculateTotals(dailyRecords);
-    await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+    
+    // Sync totals from Monthly Attendance Summary (the "correct mark")
+    const summary = await getSummaryData(employeeId, employee.emp_no, year, monthNum);
+    if (summary) {
+      syncTotalsFromMonthlySummary(payRegister, summary);
+    } else {
+      payRegister.totals = calculateTotals(dailyRecords);
+      await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+    }
+
     payRegister.lastAutoSyncedAt = new Date();
     payRegister.lastAutoSyncedFrom.attendance = new Date();
     payRegister.lastAutoSyncedFrom.leaves = new Date();
