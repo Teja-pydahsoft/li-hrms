@@ -60,7 +60,9 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
   try {
     console.log('[OD-FLOW] calculateMonthlySummary called', { employeeId: employeeId?.toString(), emp_no, year, monthNumber, periodOverride: !!periodOverride });
     // Get or create summary
-    const summary = await MonthlyAttendanceSummary.getOrCreate(employeeId, emp_no, year, monthNumber);
+    let summary = await MonthlyAttendanceSummary.getOrCreate(employeeId, emp_no, year, monthNumber);
+
+
 
     let startDateStr, endDateStr, payrollStart, payrollEnd, startComponents, endComponents;
     if (periodOverride && periodOverride.startDateStr && periodOverride.endDateStr) {
@@ -86,6 +88,24 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
       endComponents = extractISTComponents(payrollEnd);
       startDateStr = startComponents.dateStr;
       endDateStr = endComponents.dateStr;
+    }
+
+    // [SELF-REPAIR] If summary exists but missing bounds, or bounds don't match expected period, repair it.
+    if (!summary.startDate || !summary.endDate || !summary.totalDaysInMonth) {
+        summary.startDate = startDateStr;
+        summary.endDate = endDateStr;
+        
+        // Correct total days logic
+        const start = new Date(startDateStr);
+        const end = new Date(endDateStr);
+        summary.totalDaysInMonth = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+        
+        // Force the model to recognize changes since these were newly added
+        summary.markModified('startDate');
+        summary.markModified('endDate');
+        summary.markModified('totalDaysInMonth');
+        
+        await summary.save();
     }
     // IMPORTANT: endDate must be inclusive until end-of-day IST.
     // If we use 00:00 for endDate, Date comparisons ($lte) can drop leaves/splits
@@ -195,11 +215,14 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     contributingDates.holidays = Array.from(holidayDates).map(date => ({ date, value: 1, label: 'HOL' }));
 
     // 4. Get approved leaves for this month (Using .lean() and projections)
+    // Relaxed filter: include leaves where splitStatus is null, empty, or undefined.
     const approvedLeaves = await Leave.find({
       employeeId,
       status: 'approved',
-      // Do NOT count split leaves here; they are handled day-by-day via LeaveSplit.
-      splitStatus: { $in: [null, ''] },
+      $or: [
+          { splitStatus: { $in: [null, ''] } },
+          { splitStatus: { $exists: false } }
+      ],
       $or: [
         {
           fromDate: { $lte: endDate },

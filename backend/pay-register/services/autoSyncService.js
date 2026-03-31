@@ -69,20 +69,18 @@ async function syncPayRegisterFromLeave(leave) {
 
     // Update pay register for each affected month
     for (const month of monthSet) {
-      const payRegister = await PayRegisterSummary.findOne({
-        employeeId: leave.employeeId,
-        month,
-      });
-
-      if (!payRegister) {
-        // Pay register doesn't exist yet, skip (will be created when accessed)
-        continue;
-      }
-
-      // Fetch the actual range for this payroll month
       const [year, monthNum] = month.split('-').map(Number);
-      const { getPayrollDateRange } = require('../../shared/utils/dateUtils');
-      const { startDate, endDate } = await getPayrollDateRange(year, monthNum);
+      
+      // Ensure pay register exists (respects payroll cycle via getOrCreate)
+      const payRegister = await PayRegisterSummary.getOrCreate(
+        leave.employeeId, 
+        leave.emp_no, 
+        year, 
+        monthNum
+      );
+
+      // Fetch the actual range for this payroll month from the register itself
+      const { startDate, endDate } = payRegister;
 
       // Check if any dates in this leave fall within this payroll month and were manually edited
       let hasManualEdits = false;

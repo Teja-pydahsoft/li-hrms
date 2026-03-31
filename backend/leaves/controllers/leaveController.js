@@ -29,7 +29,7 @@ const MONTH_SLOT_EDIT_PERMISSION = 'LEAVE_REGISTER_MONTH_EDIT:write';
 
 function canEditLeaveRegisterMonthSlot(user) {
   if (!user) return false;
-  if (user.role === 'super_admin') return true;
+  if (user.role === 'super_admin' || user.role === 'sub_admin' || user.role === 'manager' || user.role === 'hod') return true;
   const featureControl = Array.isArray(user.featureControl) ? user.featureControl : [];
   return featureControl.includes(MONTH_SLOT_EDIT_PERMISSION) || featureControl.includes('LEAVE_REGISTER_MONTH_EDIT');
 }

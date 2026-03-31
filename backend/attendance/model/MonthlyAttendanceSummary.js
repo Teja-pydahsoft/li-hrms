@@ -111,6 +111,16 @@ const monthlyAttendanceSummarySchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    
+    // Exact dates for the payroll period used for this summary
+    startDate: {
+      type: String, // YYYY-MM-DD
+      default: null,
+    },
+    endDate: {
+      type: String, // YYYY-MM-DD
+      default: null,
+    },
 
     // Total days in the pay period (respects pay cycle: e.g. 28–31 for calendar month, or 33 for 25 Jan–26 Feb)
     totalDaysInMonth: {
@@ -301,6 +311,7 @@ monthlyAttendanceSummarySchema.index({ employeeId: 1, year: 1 });
 
 // Static method to get or create summary for an employee and month
 monthlyAttendanceSummarySchema.statics.getOrCreate = async function (employeeId, emp_no, year, monthNumber) {
+  const dateCycleService = require('../../leaves/services/dateCycleService');
   const monthStr = `${year}-${String(monthNumber).padStart(2, '0')}`;
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -308,12 +319,13 @@ monthlyAttendanceSummarySchema.statics.getOrCreate = async function (employeeId,
   ];
   const monthName = `${monthNames[monthNumber - 1]} ${year}`;
 
-  // Get total days in month via IST
-  const nextMonthFirst = monthNumber === 12
-    ? createISTDate(`${year + 1}-01-01`)
-    : createISTDate(`${year}-${String(monthNumber + 1).padStart(2, '0')}-01`);
-  const lastDayOfMonth = new Date(nextMonthFirst.getTime() - 1000);
-  const totalDaysInMonth = extractISTComponents(lastDayOfMonth).day;
+  // Resolve the actual period window using payroll cycle (pay-cycle aware month).
+  const period = await dateCycleService.getPayrollCycleForMonth(year, monthNumber);
+  const startDate = extractISTComponents(period.startDate).dateStr;
+  const endDate = extractISTComponents(period.endDate).dateStr;
+  
+  // Calculate total days in this specific period
+  const totalDaysInMonth = Math.round((period.endDate - period.startDate) / (1000 * 60 * 60 * 24)) + 1;
 
   // Atomically get or create
   return await this.findOneAndUpdate(
@@ -323,6 +335,8 @@ monthlyAttendanceSummarySchema.statics.getOrCreate = async function (employeeId,
         emp_no,
         year,
         monthNumber,
+        startDate,
+        endDate,
         totalDaysInMonth,
       },
       $set: {

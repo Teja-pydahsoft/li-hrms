@@ -14,7 +14,7 @@ router.use(protect);
 // ==========================================
 
 // Get leave policy settings
-router.get('/leave-policy', authorize('hr', 'sub_admin', 'super_admin'), leavePolicySettingsController.getSettings);
+router.get('/leave-policy', authorize('hr', 'sub_admin', 'super_admin', 'manager', 'hod'), leavePolicySettingsController.getSettings);
 
 // Update leave policy settings
 router.put('/leave-policy', authorize('hr', 'sub_admin', 'super_admin'), leavePolicySettingsController.updateSettings);

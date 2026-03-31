@@ -389,7 +389,8 @@ export default function LeaveRegisterPage({
   const currentUser = useMemo(() => auth.getUser(), []);
   const hasMonthEditPrivilege = useMemo(() => {
     if (!currentUser) return false;
-    if (currentUser.role === 'super_admin') return true;
+    const adminRoles = ['super_admin', 'sub_admin', 'manager', 'hr', 'hod'];
+    if (adminRoles.includes(currentUser.role)) return true;
     const fc = Array.isArray(currentUser.featureControl) ? currentUser.featureControl : [];
     return fc.includes('LEAVE_REGISTER_MONTH_EDIT:write') || fc.includes('LEAVE_REGISTER_MONTH_EDIT');
   }, [currentUser]);
