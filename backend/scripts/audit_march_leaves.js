@@ -7,10 +7,13 @@ const MonthlyAttendanceSummary = require('../attendance/model/MonthlyAttendanceS
 const Employee = require('../employees/model/Employee');
 
 async function auditLeaves() {
-    const empNo = '2144';
+    const empNo = '931';
     const startDate = '2026-02-26';
     const endDate = '2026-03-25';
     const summaryMonth = '2026-03';
+
+    // Toggle this to true to fix LOP natures in the database
+    const UPDATE_MODE = false;
 
     try {
         const mongoURI = process.env.MONGODB_URI;
@@ -40,31 +43,45 @@ async function auditLeaves() {
         console.log('From Date  | To Date    | Status          | Type | Days | Nature | Split Status');
         console.log('----------------------------------------------------------------------------------------------------');
         
+        let lopToFix = [];
+
         leaves.forEach(l => {
             const from = l.fromDate.toISOString().split('T')[0];
             const to = l.toDate.toISOString().split('T')[0];
             const status = (l.status || '').padEnd(15);
             const type = (l.leaveType || 'N/A').padEnd(4);
             const days = (l.numberOfDays || 0).toString().padEnd(4);
-            const nature = (l.leaveNature || 'N/A').toUpperCase().padEnd(6);
+            
+            // Critical check: if leaveType is LOP but nature is not 'lop', flag it
+            let nature = (l.leaveNature || 'N/A').toLowerCase();
+            let natureDisplay = nature.toUpperCase().padEnd(6);
+            
+            if (l.leaveType === 'LOP' && nature !== 'lop') {
+                natureDisplay = `\x1b[31m${natureDisplay}\x1b[0m`; // Red if nature is wrong for LOP
+                lopToFix.push(l._id);
+            }
+
             const splitStatus = l.splitStatus === undefined ? 'UNDEFINED' : (l.splitStatus === null ? 'NULL' : `"${l.splitStatus}"`);
             
-            console.log(`${from} | ${to} | ${status} | ${type} | ${days} | ${nature} | ${splitStatus}`);
+            console.log(`${from} | ${to} | ${status} | ${type} | ${days} | ${natureDisplay} | ${splitStatus}`);
         });
 
-        // 1b. Check for LeaveSplits
-        const LeaveSplit = require('../leaves/model/LeaveSplit');
-        const splits = await LeaveSplit.find({
-            employeeId: employee._id,
-            date: { $gte: new Date(startDate), $lte: new Date(endDate) },
-            isActive: { $ne: false }
-        }).lean();
-
-        if (splits.length > 0) {
-            console.log(`\n[Leave Split Records Found: ${splits.length}]`);
-            splits.forEach(s => {
-                console.log(`- Date: ${s.date.toISOString().split('T')[0]} | Type: ${s.leaveType} | Status: ${s.status}`);
-            });
+        // 1b. Perform Fix if requested
+        if (UPDATE_MODE && lopToFix.length > 0) {
+            console.log(`\n[Fixing ${lopToFix.length} LOP nature records...]`);
+            const updateResult = await Leave.updateMany(
+                { _id: { $in: lopToFix } },
+                { $set: { leaveNature: 'lop' } }
+            );
+            console.log(`- Updated ${updateResult.modifiedCount} records to "lop" nature.`);
+            
+            // Re-fetch to have correct data for analysis
+            const updatedLeaves = await Leave.find({ _id: { $in: leaves.map(l => l._id) } }).lean();
+            leaves.length = 0;
+            leaves.push(...updatedLeaves);
+        } else if (lopToFix.length > 0) {
+            console.log(`\n⚠️  Found ${lopToFix.length} records with mismatch: LeaveType=LOP but LeaveNature != "lop".`);
+            console.log(`   (Run with UPDATE_MODE = true to fix them in the DB)`);
         }
 
         // 2. Fetch Monthly Attendance Summary
@@ -88,16 +105,35 @@ async function auditLeaves() {
 
         console.log('\n--------------------------------------------------------------------------------');
         console.log('Analysis:');
-        const approvedCount = leaves.filter(l => l.status === 'approved').reduce((sum, l) => sum + l.numberOfDays, 0);
-        const totalPending = leaves.filter(l => l.status !== 'approved').reduce((sum, l) => sum + l.numberOfDays, 0);
         
-        console.log(`- Approved Leave Days: ${approvedCount}`);
-        console.log(`- Pending/Other Days:  ${totalPending}`);
+        // Granular counts by nature for approved leaves
+        const approvedPaid = leaves.filter(l => l.status === 'approved' && l.leaveNature === 'paid').reduce((sum, l) => sum + (l.numberOfDays || 0), 0);
+        const approvedLop = leaves.filter(l => l.status === 'approved' && l.leaveNature === 'lop').reduce((sum, l) => sum + (l.numberOfDays || 0), 0);
+        const totalApproved = approvedPaid + approvedLop;
+        const totalPending = leaves.filter(l => l.status !== 'approved').reduce((sum, l) => sum + (l.numberOfDays || 0), 0);
         
-        if (summary && summary.totalLeaves !== approvedCount) {
-          console.log(`- ❌ DISCREPANCY: Summary shows ${summary.totalLeaves} leaves, but DB has ${approvedCount} approved leave days.`);
-        } else if (summary) {
-          console.log('- ✅ SYNCED: Summary matches approved leave count.');
+        console.log(`- DB Approved (PAID): ${approvedPaid}`);
+        console.log(`- DB Approved (LOP) : ${approvedLop}`);
+        console.log(`- DB Total Approved : ${totalApproved}`);
+        console.log(`- DB Pending/Other  : ${totalPending}`);
+        
+        if (summary) {
+            console.log('\nDiscrepancy Check:');
+            const totalDiff = summary.totalLeaves - totalApproved;
+            const paidDiff = summary.totalPaidLeaves - approvedPaid;
+            const lopDiff = summary.totalLopLeaves - approvedLop;
+
+            if (totalDiff === 0 && paidDiff === 0 && lopDiff === 0) {
+                console.log('- ✅ PERFECT SYNC: Nature-level breakdown matches summary exactly.');
+            } else {
+                if (totalDiff !== 0) console.log(`- ❌ Total Leaves mismatch: Summary=${summary.totalLeaves} vs DB=${totalApproved}`);
+                if (paidDiff !== 0) console.log(`- ❌ Paid Leaves mismatch: Summary=${summary.totalPaidLeaves} vs DB=${approvedPaid}`);
+                if (lopDiff !== 0) console.log(`- ❌ LOP Leaves mismatch: Summary=${summary.totalLopLeaves} vs DB=${approvedLop}`);
+                console.log('\nPossible causes:');
+                if (lopToFix.length > 0) console.log('  -> Data nature mismatch (fix them and recalculate summary).');
+                console.log('  -> Multiple summaries exist for same month/employee.');
+                console.log('  -> Summary was not recalculated after leave approval/rejection.');
+            }
         }
 
     } catch (error) {

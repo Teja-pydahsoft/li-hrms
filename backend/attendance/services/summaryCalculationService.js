@@ -314,16 +314,16 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         // Sum all leave units on the same date (multiple 0.5 leaves can make 1.0)
         // and cap to 1.0 day because payroll works per-day (or per-half) capacity.
         const leaveContribRaw = day.leaves.reduce((sum, l) => {
-          if (typeof l.numberOfDays === 'number') return sum + l.numberOfDays;
-          return sum + (l.isHalfDay ? 0.5 : 1);
+          // If it's a multi-day leave, it contributes 1.0 to today.
+          // If it's a half-day leave, it contributes 0.5.
+          const dailyUnit = l.isHalfDay ? 0.5 : 1;
+          return sum + dailyUnit;
         }, 0);
         const leaveContrib = Math.min(1, leaveContribRaw);
 
         // Track Paid vs LOP for the Pay Register sync
-        // If multiple leaves exist on the same day, we attribute the contribution proportionally
-        // but typically it's either one full leave or two 0.5 leaves.
         day.leaves.forEach(l => {
-          const unit = typeof l.numberOfDays === 'number' ? l.numberOfDays : (l.isHalfDay ? 0.5 : 1);
+          const unit = l.isHalfDay ? 0.5 : 1;
           const nature = (l.leaveNature || '').toLowerCase();
           if (nature === 'paid') {
             totalPaidLeaveDays += unit;
