@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { api, apiRequest, Employee, Division } from '@/lib/api';
 import { toast } from 'react-toastify';
+import Swal from 'sweetalert2';
 import * as XLSX from 'xlsx';
 import Spinner from '@/components/Spinner';
 import { parseFile } from '@/lib/bulkUpload';
@@ -135,7 +136,7 @@ export default function PayRegisterPage() {
   const [selectedArrears, setSelectedArrears] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
   const [selectedDeductions, setSelectedDeductions] = useState<Array<{ id: string, amount: number, employeeId?: string }>>([]);
   const [calculatingJobId, setCalculatingJobId] = useState<string | null>(null);
-  // Removed unused calculationProgress state
+  const [calculationProgress, setCalculationProgress] = useState<any>(null);
   const [bulkCalculating, setBulkCalculating] = useState(false);
   const [payrollStrategy, setPayrollStrategy] = useState<'new' | 'legacy' | 'dynamic'>('new');
   const [payrollStartDate, setPayrollStartDate] = useState<string | null>(null);
@@ -167,19 +168,35 @@ export default function PayRegisterPage() {
         try {
           const status = await api.getJobStatus(calculatingJobId);
           if (status.success) {
-            // calculationProgress removed as it was unused in render
+            if (status.data.progress) {
+              setCalculationProgress(status.data.progress);
+            }
 
             if (status.data.state === 'completed') {
               clearInterval(pollInterval);
               setCalculatingJobId(null);
               setBulkCalculating(false);
-              toast.success('Payroll calculation finished successfully.');
+              setCalculationProgress(null);
+              Swal.fire({
+                icon: 'success',
+                title: 'Calculation Complete',
+                text: 'Payroll calculation finished successfully.',
+                timer: 3000,
+                showConfirmButton: false,
+                toast: true,
+                position: 'top-end'
+              });
               loadPayRegisters();
             } else if (status.data.state === 'failed') {
               clearInterval(pollInterval);
               setCalculatingJobId(null);
               setBulkCalculating(false);
-              toast.error(status.data.failedReason || 'The background job failed.');
+              setCalculationProgress(null);
+              Swal.fire({
+                icon: 'error',
+                title: 'Calculation Failed',
+                text: status.data.failedReason || 'The background job failed.',
+              });
             }
           }
         } catch (err) {
@@ -454,9 +471,16 @@ export default function PayRegisterPage() {
       setSyncing(true);
 
       // 1. First trigger a global attendance sync for this payroll cycle's date range
-      // This ensures MongoDB records are updated from MSSQL/Biometric for the spanned dates
       if (payrollStartDate && payrollEndDate) {
-        toast.info('Syncing logs from biometric source...', { autoClose: 2000 });
+        Swal.fire({
+          icon: 'info',
+          title: 'Syncing',
+          text: 'Syncing logs from biometric source...',
+          timer: 2000,
+          showConfirmButton: false,
+          toast: true,
+          position: 'top-end'
+        });
         await apiRequest('/attendance/sync', {
           method: 'POST',
           body: JSON.stringify({
@@ -473,11 +497,23 @@ export default function PayRegisterPage() {
       });
       await Promise.all(syncPromises);
       await loadPayRegisters();
-      toast.success('All pay registers synced successfully');
+      Swal.fire({
+        icon: 'success',
+        title: 'Synced',
+        text: 'All pay registers synced successfully',
+        timer: 3000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+      });
     } catch (err: unknown) {
       const error = err as Error;
       console.error('Error syncing pay registers:', error);
-      toast.error(error.message || 'Failed to sync pay registers');
+      Swal.fire({
+        icon: 'error',
+        title: 'Sync Failed',
+        text: error.message || 'Failed to sync pay registers',
+      });
     } finally {
       setSyncing(false);
     }
@@ -488,7 +524,15 @@ export default function PayRegisterPage() {
       const employeeId = typeof employee === 'object' ? employee._id : employee;
       const params = payrollStrategy === 'legacy' ? '?strategy=legacy' : payrollStrategy === 'dynamic' ? '?strategy=dynamic' : '?strategy=new';
       setCalculatingId(employeeId);
-      toast.info('Calculating payroll...', { autoClose: 1200 });
+      Swal.fire({
+        icon: 'info',
+        title: 'Calculating',
+        text: 'Calculating payroll...',
+        timer: 1500,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+      });
 
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const employeeArrears = selectedArrears.filter((arrear) => arrear.employeeId === employeeId);
@@ -496,12 +540,28 @@ export default function PayRegisterPage() {
       const response = await api.calculatePayroll(employeeId, monthStr, params, employeeArrears);
 
       if (response && response.data && response.data.batchId) {
-        toast.success('Payroll calculated! Redirecting to batch...');
+        Swal.fire({
+          icon: 'success',
+          title: 'Success',
+          text: 'Payroll calculated! Redirecting to batch...',
+          timer: 2000,
+          showConfirmButton: false,
+          toast: true,
+          position: 'top-end'
+        });
         setTimeout(() => {
           router.push(`/workspace/payments/${response.data.batchId}`);
         }, 1000);
       } else {
-        toast.success('Payroll calculated');
+        Swal.fire({
+          icon: 'success',
+          title: 'Success',
+          text: 'Payroll calculated',
+          timer: 2000,
+          showConfirmButton: false,
+          toast: true,
+          position: 'top-end'
+        });
         loadPayRegisters();
       }
     } catch (err: any) {
@@ -511,10 +571,18 @@ export default function PayRegisterPage() {
           setPendingBatchId(err.batchId);
           setShowPermissionModal(true);
         } else {
-          toast.error('This batch is locked. Recalculation requires permission.');
+          Swal.fire({
+            icon: 'warning',
+            title: 'Batch Locked',
+            text: 'This batch is locked. Recalculation requires permission.',
+          });
         }
       } else {
-        toast.error(err.message || 'Failed to calculate payroll');
+        Swal.fire({
+          icon: 'error',
+          title: 'Calculation Failed',
+          text: err.message || 'Failed to calculate payroll',
+        });
       }
     } finally {
       setCalculatingId(null);
@@ -523,16 +591,32 @@ export default function PayRegisterPage() {
 
   const handleCalculatePayrollForAll = async () => {
     if (paginationTotal <= 0 && (!payRegisters || payRegisters.length === 0)) {
-      toast.info('No employees match the selected month and filters.');
+      Swal.fire({
+        icon: 'info',
+        title: 'No Employees',
+        text: 'No employees match the selected month and filters.',
+        timer: 2000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+      });
       return;
     }
+
     setBulkCalculating(true);
-    toast.info(
-      paginationTotal > 0
-        ? `Queuing payroll for all ${paginationTotal} employee(s) matching these filters (not only this page).`
+    setCalculationProgress({ processed: 0, total: paginationTotal || payRegisters.length, currentEmployee: 'Starting...' });
+
+    Swal.fire({
+      icon: 'info',
+      title: 'Calculating',
+      text: paginationTotal > 0
+        ? `Queuing payroll for all ${paginationTotal} employee(s) matching these filters.`
         : 'Queuing payroll for all employees matching these filters...',
-      { autoClose: 2500 }
-    );
+      timer: 2500,
+      showConfirmButton: false,
+      toast: true,
+      position: 'top-end'
+    });
 
     try {
       const requestData = {
@@ -548,27 +632,59 @@ export default function PayRegisterPage() {
       if (response.success) {
         if (response.status === 'queued' || response.jobId) {
           setCalculatingJobId(response.jobId || null);
-          toast.info('Bulk payroll calculation has been queued. You can track progress below.');
+          Swal.fire({
+            icon: 'info',
+            title: 'Queued',
+            text: 'Bulk payroll calculation has been queued. You can track progress below.',
+            timer: 3000,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+          });
           return;
         }
 
         const { successCount, failCount, batchIds } = response.data;
 
         if (failCount === 0) {
-          toast.success('Payroll calculated successfully for all employees');
+          Swal.fire({
+            icon: 'success',
+            title: 'Success',
+            text: 'Payroll calculated successfully for all employees',
+          });
         } else {
-          toast.warning(`Calculation completed with ${failCount} failures`);
+          Swal.fire({
+            icon: 'warning',
+            title: 'Partial Success',
+            text: `Calculation completed with ${failCount} failures`,
+          });
         }
 
         // Redirect logic based on batches created
         const uniqueBatchIds = Array.from(new Set(batchIds as string[]));
         if (uniqueBatchIds.length === 1) {
-          toast.info('Redirecting to Batch Details...');
+          Swal.fire({
+            icon: 'info',
+            title: 'Redirecting',
+            text: 'Redirecting to Batch Details...',
+            timer: 1500,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+          });
           setTimeout(() => {
             router.push(`/workspace/payments/${uniqueBatchIds[0]}`);
           }, 1500);
         } else if (uniqueBatchIds.length > 1) {
-          toast.info('Redirecting to Payments List...');
+          Swal.fire({
+            icon: 'info',
+            title: 'Redirecting',
+            text: 'Redirecting to Payments List...',
+            timer: 1500,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+          });
           setTimeout(() => {
             router.push('/workspace/payments');
           }, 1500);
@@ -576,11 +692,23 @@ export default function PayRegisterPage() {
           await downloadPayrollExcel();
         }
       } else {
-        toast.error(response.message || 'Bulk calculation failed');
+        setBulkCalculating(false);
+        setCalculationProgress(null);
+        Swal.fire({
+          icon: 'error',
+          title: 'Failed',
+          text: response.message || 'Bulk calculation failed',
+        });
       }
     } catch (error: any) {
+      setBulkCalculating(false);
+      setCalculationProgress(null);
       console.error('[Bulk Calculate] Error:', error);
-      toast.error(error?.message || 'Failed to calculate payroll');
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error?.message || 'Failed to calculate payroll',
+      });
     } finally {
       setBulkCalculating(false);
     }
@@ -611,10 +739,22 @@ export default function PayRegisterPage() {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Payroll Summary');
       XLSX.writeFile(wb, `Payroll_Summary_Template_${monthStr}.xlsx`);
-      toast.success('Template downloaded successfully');
+      Swal.fire({
+        icon: 'success',
+        title: 'Template Downloaded',
+        text: 'Payroll summary template downloaded successfully.',
+        timer: 2000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end'
+      });
     } catch (err: any) {
       console.error('Error downloading template:', err);
-      toast.error('Failed to download template');
+      Swal.fire({
+        icon: 'error',
+        title: 'Download Failed',
+        text: 'Failed to download payroll summary template.',
+      });
     } finally {
       setDownloadingTemplate(false);
     }
@@ -626,7 +766,18 @@ export default function PayRegisterPage() {
 
     try {
       setUploadingSummary(true);
-      const results = await parseFile(file);
+      const parseResult = await parseFile(file);
+
+      if (!parseResult.success) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Parsing Failed',
+          text: parseResult.errors[0] || 'Failed to parse Excel file',
+        });
+        return;
+      }
+
+      const results = parseResult.data;
 
       // Send to backend
       const rawResponse = await apiRequest('/payroll/upload-summary', {
@@ -642,18 +793,30 @@ export default function PayRegisterPage() {
         setUploadResults({
           success: response.data?.successCount || 0,
           failed: response.data?.failCount || 0,
-          total: (results as any).length,
+          total: results.length,
           errors: response.data?.errors || []
         });
-        toast.success(`Upload complete: ${response.data?.successCount || 0} successful, ${response.data?.failCount || 0} failed`);
+        Swal.fire({
+          icon: 'success',
+          title: 'Upload Successful',
+          text: `Processed ${results.length} records. ${response.data?.successCount || 0} successful, ${response.data?.failCount || 0} failed.`,
+        });
         loadPayRegisters();
       } else {
-        toast.error(response.message || 'Failed to upload summary');
+        Swal.fire({
+          icon: 'error',
+          title: 'Upload Failed',
+          text: response.message || 'Failed to upload payroll summary',
+        });
       }
     } catch (err: unknown) {
       const error = err as Error;
       console.error('Error uploading summary:', error);
-      toast.error(error.message || 'Failed to parse file');
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error.message || 'Failed to parse or upload file',
+      });
     } finally {
       setUploadingSummary(false);
       // Reset input
@@ -925,16 +1088,31 @@ export default function PayRegisterPage() {
     try {
       const response = await api.requestRecalculation(pendingBatchId, permissionReason);
       if (response.success) {
-        toast.success('Permission requested successfully');
+        Swal.fire({
+          icon: 'success',
+          title: 'Permission Requested',
+          text: 'Permission requested successfully',
+          timer: 2000,
+          showConfirmButton: false,
+          toast: true,
+          position: 'top-end'
+        });
         setShowPermissionModal(false);
         setPendingBatchId(null);
         setPermissionReason('');
       } else {
-        toast.error(response.message || 'Failed to request permission');
+        Swal.fire({
+          icon: 'error',
+          title: 'Request Failed',
+          text: response.message || 'Failed to request permission',
+        });
       }
-    } catch (error: unknown) {
-      const err = error as Error;
-      toast.error(err.message || 'Error asking for permission');
+    } catch (error: any) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: error.message || 'Error asking for permission',
+      });
     }
   };
 
@@ -981,9 +1159,13 @@ export default function PayRegisterPage() {
             <div className="flex items-center gap-3 shrink-0">
               <div className="flex flex-col">
                 <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">Pay Register</h1>
-                <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
-                  Period: {new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - {new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </p>
+                {loading ? (
+                  <div className="h-3 w-40 animate-pulse rounded bg-slate-200 dark:bg-slate-700 mt-0.5" />
+                ) : payrollStartDate && payrollEndDate ? (
+                  <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                    Period: {new Date(payrollStartDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - {new Date(payrollEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </p>
+                ) : null}
               </div>
               <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 hidden md:block" />
             </div>
@@ -1092,6 +1274,18 @@ export default function PayRegisterPage() {
           <div className="flex flex-nowrap items-center gap-1 sm:gap-3 shrink-0 w-full sm:w-auto overflow-hidden">
             {hasManagePermission && (
               <button
+                onClick={() => setShowUploadModal(true)}
+                className="h-8 sm:h-9 flex-1 sm:flex-initial px-2 sm:px-4 flex items-center justify-center gap-1 sm:gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm transition-all whitespace-nowrap"
+              >
+                <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                Upload Summ
+              </button>
+            )}
+
+            {hasManagePermission && (
+              <button
                 onClick={handleSyncAll}
                 disabled={syncing}
                 className="h-8 sm:h-9 flex-1 sm:flex-initial px-2 sm:px-4 flex items-center justify-center gap-1 sm:gap-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm disabled:opacity-50 transition-all whitespace-nowrap"
@@ -1169,7 +1363,7 @@ export default function PayRegisterPage() {
                         disabled={bulkCalculating || exportingExcel}
                         className="h-8 sm:h-9 flex-1 sm:flex-initial px-2 sm:px-4 flex items-center justify-center bg-green-600 hover:bg-green-700 text-white text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm disabled:opacity-50 transition-all whitespace-nowrap"
                       >
-                        {bulkCalculating ? '...' : 'Recalculate'}
+                        {bulkCalculating ? 'Calculating...' : 'Recalculate Payroll'}
                       </button>
                     )}
                     {exportExcelButton}
@@ -1185,7 +1379,7 @@ export default function PayRegisterPage() {
                       disabled={bulkCalculating || exportingExcel}
                       className="h-8 sm:h-9 flex-1 sm:flex-initial px-2 sm:px-4 flex items-center justify-center bg-green-600 hover:bg-green-700 text-white text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm disabled:opacity-50 transition-all whitespace-nowrap"
                     >
-                      {bulkCalculating ? '...' : 'Calculate'}
+                      {bulkCalculating ? 'Calculating...' : 'Calculate Payroll'}
                     </button>
                   )}
                   {exportExcelButton}
@@ -1195,22 +1389,82 @@ export default function PayRegisterPage() {
           </div>
 
           {/* Employee count - own row below header (full width), so buttons stay on the right of row 1 */}
-          {!loading && (paginationTotal > 0 || payRegisters.length > 0) && (
-            <div className="w-full mt-1 mb-0 px-1 basis-full">
-              <p className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                {paginationTotal > 0
-                  ? (() => {
-                    const from = (page - 1) * PAGE_SIZE + 1;
-                    const to = Math.min(page * PAGE_SIZE, paginationTotal);
-                    return paginationTotal <= PAGE_SIZE
-                      ? `${paginationTotal} employee${paginationTotal !== 1 ? 's' : ''}`
-                      : `Showing ${from}–${to} of ${paginationTotal} employees`;
-                  })()
-                  : `${payRegisters.length} employee${payRegisters.length !== 1 ? 's' : ''} listed`}
-              </p>
+          {(loading || paginationTotal > 0 || payRegisters.length > 0) && (
+            <div className="w-full mt-1 mb-0 px-1 basis-full text-left">
+              {loading ? (
+                <div className="h-3 w-48 animate-pulse rounded bg-slate-200 dark:bg-slate-700 mt-1" />
+              ) : (
+                <p className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                  {paginationTotal > 0
+                    ? (() => {
+                      const from = (page - 1) * PAGE_SIZE + 1;
+                      const to = Math.min(page * PAGE_SIZE, paginationTotal);
+                      return paginationTotal <= PAGE_SIZE
+                        ? `${paginationTotal} employee${paginationTotal !== 1 ? 's' : ''}`
+                        : `Showing ${from}–${to} of ${paginationTotal} employees`;
+                    })()
+                    : `${payRegisters.length} employee${payRegisters.length !== 1 ? 's' : ''} listed`}
+                </p>
+              )}
             </div>
           )}
         </div>
+
+          {/* Progress Bar for Bulk Calculation */}
+          {calculationProgress && (() => {
+            const phase = calculationProgress.phase as string | undefined;
+            const phaseLabel =
+              phase === 'second_salary'
+                ? '2nd salary'
+                : phase === 'regular'
+                  ? 'Regular payroll'
+                  : 'Payroll';
+            const showOverall =
+              typeof calculationProgress.overallProcessed === 'number' &&
+              typeof calculationProgress.overallTotal === 'number' &&
+              calculationProgress.overallTotal > 0;
+            const pct =
+              typeof calculationProgress.percentage === 'number'
+                ? calculationProgress.percentage
+                : showOverall
+                  ? Math.round(
+                      (calculationProgress.overallProcessed / calculationProgress.overallTotal) * 100
+                    )
+                  : 0;
+            const countLine = showOverall
+              ? `${calculationProgress.overallProcessed} / ${calculationProgress.overallTotal} overall · phase ${calculationProgress.processed} / ${calculationProgress.total}`
+              : `${calculationProgress.processed} / ${calculationProgress.total}`;
+            return (
+              <div className="mb-6 animate-fade-in relative z-20">
+                <div className="mt-6 space-y-3 p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-100 dark:border-indigo-900/30 shadow-sm backdrop-blur-sm">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
+                    {phaseLabel}
+                  </div>
+                  <div className="flex justify-between items-center text-sm font-medium">
+                    <span className="text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      {calculationProgress.currentEmployee
+                        ? `Calculating for: ${calculationProgress.currentEmployee}`
+                        : 'Processing bulk payroll...'}
+                    </span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                      {calculatingJobId && <span className="mr-3 opacity-50 font-mono text-[10px] font-normal">ID: {calculatingJobId}</span>}
+                      {countLine} ({pct}%)
+                    </span>
+                  </div>
+                  <div className="w-full bg-indigo-200/50 dark:bg-indigo-900/50 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500 ease-out shadow-sm"
+                      style={{ width: `${pct}%` }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
         {/* Permission Request Modal */}
         {showPermissionModal && (
