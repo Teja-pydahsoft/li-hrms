@@ -9,6 +9,7 @@ const Shift = require('../../shifts/model/Shift');
 const { createISTDate, extractISTComponents, getAllDatesInRange } = require('../../shared/utils/dateUtils');
 const dateCycleService = require('../../leaves/services/dateCycleService');
 const Employee = require('../../employees/model/Employee');
+const LeaveRegisterYear = require('../../leaves/model/LeaveRegisterYear');
 const deductionService = require('../../payroll/services/deductionService');
 const { getAbsentDeductionSettings } = require('../../payroll/services/allowanceDeductionResolverService');
 
@@ -36,6 +37,10 @@ function toNormalizedDateStr(val) {
   const s = String(val).trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
   return extractISTComponents(new Date(val)).dateStr;
+}
+
+function isAbsentStatus(status) {
+  return String(status || '').toUpperCase() === 'ABSENT';
 }
 
 /**
@@ -209,11 +214,6 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         }
       }
     }
-    summary.totalWeeklyOffs = weekOffDates.size;
-    summary.totalHolidays = holidayDates.size;
-    contributingDates.weeklyOffs = Array.from(weekOffDates).map(date => ({ date, value: 1, label: 'WO' }));
-    contributingDates.holidays = Array.from(holidayDates).map(date => ({ date, value: 1, label: 'HOL' }));
-
     // 4. Get approved leaves for this month (Using .lean() and projections)
     // Relaxed filter: include leaves where splitStatus is null, empty, or undefined.
     const approvedLeaves = await Leave.find({
@@ -293,6 +293,83 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
         leaveNature: split.leaveNature,
       });
     }
+
+    // Leave override on roster non-working days:
+    // if approved leave exists on WO/HOL, treat that date as leave/working for this employee.
+    for (const dStr of allDates) {
+      const day = dailyStatsMap.get(dStr);
+      if (!day || day.leaves.length === 0) continue;
+      if (day.isWO) {
+        day.isWO = false;
+        weekOffDates.delete(dStr);
+      }
+      if (day.isHOL) {
+        day.isHOL = false;
+        holidayDates.delete(dStr);
+      }
+    }
+
+    // Sandwich absent rule:
+    // if one or more consecutive WO/HOL days are between two ABSENT working days,
+    // convert those WO/HOL days to working days (so they are not counted as WO/HOL).
+    const isOutsideEmploymentBound = (dStr) => {
+      if (dojStrBound && dStr < dojStrBound) return true;
+      if (leftDateStrBound && dStr > leftDateStrBound) return true;
+      return false;
+    };
+    const isStrictAbsentWorkingDay = (dStr) => {
+      if (!dStr || dStr > todayIstStr || isOutsideEmploymentBound(dStr)) return false;
+      const d = dailyStatsMap.get(dStr);
+      if (!d) return false;
+      if (!d.attendance) return false;
+      return isAbsentStatus(d.attendance.status);
+    };
+
+    let idx = 0;
+    while (idx < allDates.length) {
+      const dStr = allDates[idx];
+      const day = dailyStatsMap.get(dStr);
+      const startsNonWorkingBlock = day && (day.isWO || day.isHOL);
+      if (!startsNonWorkingBlock) {
+        idx += 1;
+        continue;
+      }
+
+      let endIdx = idx;
+      while (
+        endIdx + 1 < allDates.length &&
+        (() => {
+          const nextDay = dailyStatsMap.get(allDates[endIdx + 1]);
+          return !!nextDay && (nextDay.isWO || nextDay.isHOL);
+        })()
+      ) {
+        endIdx += 1;
+      }
+
+      const prevDate = idx > 0 ? allDates[idx - 1] : null;
+      const nextDate = endIdx + 1 < allDates.length ? allDates[endIdx + 1] : null;
+      if (isStrictAbsentWorkingDay(prevDate) && isStrictAbsentWorkingDay(nextDate)) {
+        for (let k = idx; k <= endIdx; k += 1) {
+          const blockDate = allDates[k];
+          const blockDay = dailyStatsMap.get(blockDate);
+          if (!blockDay) continue;
+          if (blockDay.isWO) {
+            blockDay.isWO = false;
+            weekOffDates.delete(blockDate);
+          }
+          if (blockDay.isHOL) {
+            blockDay.isHOL = false;
+            holidayDates.delete(blockDate);
+          }
+        }
+      }
+      idx = endIdx + 1;
+    }
+
+    summary.totalWeeklyOffs = weekOffDates.size;
+    summary.totalHolidays = holidayDates.size;
+    contributingDates.weeklyOffs = Array.from(weekOffDates).map(date => ({ date, value: 1, label: 'WO' }));
+    contributingDates.holidays = Array.from(holidayDates).map(date => ({ date, value: 1, label: 'HOL' }));
 
     // Process each day
     let totalPresentDays = 0;
@@ -722,6 +799,57 @@ async function calculateMonthlySummary(employeeId, emp_no, year, monthNumber, pe
     summary.contributingDates = contributingDates;
     summary.lastCalculatedAt = new Date();
 
+    // --- LEAVE REGISTER CAPPING ---
+    // Rebalance Paid/LOP leaves from Leave Register monthly credits.
+    // Paid is capped by CL + CCL credits; LOP is the remaining leaves in the month.
+    try {
+      const fy = await dateCycleService.getFinancialYearForDate(startDate);
+      const registerYear = await LeaveRegisterYear.findOne({
+        employeeId,
+        financialYear: fy.name
+      }).lean();
+      
+      const slot = registerYear?.months?.find(
+        (m) =>
+          Number(m.payrollCycleMonth) === Number(monthNumber) &&
+          Number(m.payrollCycleYear) === Number(year)
+      );
+
+      if (slot) {
+        // Cap paid leaves by effective CL + CCL monthly credits from leave register.
+        // CL "Cr" shown in register can include explicit CL CREDIT transactions
+        // in addition to scheduled slot.clCredits, so include both sources.
+        // EL is intentionally excluded from this payroll monthly summary cap.
+        const clScheduledCredits = Number(slot.clCredits) || 0;
+        const clTxnCredits = (Array.isArray(slot.transactions) ? slot.transactions : [])
+          .filter(
+            (t) =>
+              String(t.leaveType || '').toUpperCase() === 'CL' &&
+              String(t.transactionType || '').toUpperCase() === 'CREDIT'
+          )
+          .reduce((sum, t) => sum + (Number(t.days) || 0), 0);
+        const clCredits = Math.max(clScheduledCredits, clTxnCredits);
+        const cclCredits = Number(slot.compensatoryOffs) || 0;
+        const paidLeaveCap = Math.max(0, clCredits + cclCredits);
+        const totalLeaves = Math.max(0, Number(summary.totalLeaves) || 0);
+        const prevPaid = Math.max(0, Number(summary.totalPaidLeaves) || 0);
+        const prevLop = Math.max(0, Number(summary.totalLopLeaves) || 0);
+
+        const targetPaid = Math.round(Math.min(totalLeaves, paidLeaveCap) * 100) / 100;
+        const targetLop = Math.round(Math.max(0, totalLeaves - targetPaid) * 100) / 100;
+
+        if (prevPaid !== targetPaid || prevLop !== targetLop) {
+          console.log(
+            `[CAPPING] Rebalanced leaves for ${emp_no}: paid ${prevPaid} -> ${targetPaid}, lop ${prevLop} -> ${targetLop} (cap ${paidLeaveCap}, total ${totalLeaves}).`
+          );
+          summary.totalPaidLeaves = targetPaid;
+          summary.totalLopLeaves = targetLop;
+        }
+      }
+    } catch (capErr) {
+      console.error(`[CAPPING] Error applying leave register cap for ${emp_no}:`, capErr.message);
+    }
+
     // 13. Save summary
     await summary.save();
     console.log('[OD-FLOW] calculateMonthlySummary saved', { emp_no, month: summary.month });
@@ -944,6 +1072,29 @@ async function recalculateOnODApproval(od) {
 }
 
 /**
+ * Recalculate monthly summary when leave register credits change
+ * @param {string} employeeId - Employee ID
+ * @param {Date|string} date - Reference date in the payroll cycle
+ */
+async function recalculateOnLeaveRegisterUpdate(employeeId, date) {
+  try {
+    const employee = await Employee.findById(employeeId);
+    if (!employee) return;
+
+    const baseDate = typeof date === 'string' ? createISTDate(date) : date;
+    const periodInfo = await dateCycleService.getPeriodInfo(baseDate);
+    const { year, month: monthNumber, startDate, endDate } = periodInfo.payrollCycle;
+    
+    await calculateMonthlySummary(employee._id, employee.emp_no, year, monthNumber, {
+      startDateStr: extractISTComponents(startDate).dateStr,
+      endDateStr: extractISTComponents(endDate).dateStr,
+    });
+  } catch (error) {
+    console.error(`Error recalculating summary on leave register update:`, error);
+  }
+}
+
+/**
  * Delete monthly attendance summaries (for a given month or all).
  * Use before full recalc to ensure clean state.
  * @param {{ year?: number, monthNumber?: number }} [options] - If both provided, delete only that month; otherwise delete all.
@@ -968,6 +1119,7 @@ module.exports = {
   recalculateOnAttendanceUpdate,
   recalculateOnLeaveApproval,
   recalculateOnODApproval,
+  recalculateOnLeaveRegisterUpdate,
   deleteAllMonthlySummaries,
 };
 

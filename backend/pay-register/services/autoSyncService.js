@@ -3,6 +3,7 @@ const { populatePayRegisterFromSources, getSummaryData } = require('./autoPopula
 const { calculateTotals, ensureTotalsRespectRoster, syncTotalsFromMonthlySummary } = require('./totalsCalculationService');
 const { getPayrollDateRange } = require('../../shared/utils/dateUtils');
 const { syncAttendanceFromMSSQL } = require('../../attendance/services/attendanceSyncService');
+const summaryCalculationService = require('../../attendance/services/summaryCalculationService');
 
 /**
  * Auto Sync Service
@@ -110,9 +111,19 @@ async function syncPayRegisterFromLeave(leave) {
       // Update dailyRecords
       payRegister.dailyRecords = dailyRecords;
 
-      // Recalculate totals; week-offs and holidays from shift roster
-      payRegister.totals = calculateTotals(dailyRecords);
-      await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+      // Recalculate attendance summary and map totals from it so pay register follows attendance rules exactly.
+      const summary = await summaryCalculationService.calculateMonthlySummary(
+        leave.employeeId,
+        leave.emp_no,
+        year,
+        monthNum
+      );
+      if (summary) {
+        syncTotalsFromMonthlySummary(payRegister, summary);
+      } else {
+        payRegister.totals = calculateTotals(dailyRecords);
+        await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+      }
 
       // Update sync tracking
       payRegister.lastAutoSyncedAt = new Date();
@@ -202,8 +213,18 @@ async function syncPayRegisterFromOD(od) {
       );
 
       payRegister.dailyRecords = dailyRecords;
-      payRegister.totals = calculateTotals(dailyRecords);
-      await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+      const summary = await summaryCalculationService.calculateMonthlySummary(
+        od.employeeId,
+        od.emp_no,
+        year,
+        monthNum
+      );
+      if (summary) {
+        syncTotalsFromMonthlySummary(payRegister, summary);
+      } else {
+        payRegister.totals = calculateTotals(dailyRecords);
+        await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+      }
       payRegister.lastAutoSyncedAt = new Date();
       payRegister.lastAutoSyncedFrom.ods = new Date();
 
@@ -278,9 +299,18 @@ async function syncPayRegisterFromOT(ot) {
         dailyRecord.otHours = totalOTHours;
         dailyRecord.otIds = ots.map((o) => o._id);
 
-        // Recalculate totals; week-offs and holidays from shift roster
-        payRegister.totals = calculateTotals(payRegister.dailyRecords);
-        await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+        const summary = await summaryCalculationService.calculateMonthlySummary(
+          ot.employeeId,
+          payRegister.emp_no,
+          year,
+          monthNum
+        );
+        if (summary) {
+          syncTotalsFromMonthlySummary(payRegister, summary);
+        } else {
+          payRegister.totals = calculateTotals(payRegister.dailyRecords);
+          await ensureTotalsRespectRoster(payRegister.totals, payRegister.emp_no, payRegister.startDate, payRegister.endDate);
+        }
         payRegister.lastAutoSyncedAt = new Date();
         payRegister.lastAutoSyncedFrom.ot = new Date();
 

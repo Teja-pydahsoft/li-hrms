@@ -333,6 +333,8 @@ function syncTotalsFromMonthlySummary(payRegister, summary) {
   // Payroll specific
   totals.totalPayableShifts = summary.totalPayableShifts || 0;
   totals.totalOTHours = summary.totalOTHours || 0;
+  totals.totalWeeklyOffs = summary.totalWeeklyOffs || 0;
+  totals.totalHolidays = summary.totalHolidays || 0;
   
   // Exceptions (Late/Early)
   totals.lateCount = summary.lateInCount || 0;
