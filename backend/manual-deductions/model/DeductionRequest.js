@@ -11,10 +11,16 @@ const settlementHistorySchema = new mongoose.Schema({
 const editHistorySchema = new mongoose.Schema({
   editedAt: { type: Date, default: Date.now },
   editedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  originalStartMonth: String,
+  newStartMonth: String,
+  originalEndMonth: String,
+  newEndMonth: String,
   originalAmount: Number,
   newAmount: Number,
   originalMonthlyAmount: Number,
   newMonthlyAmount: Number,
+  originalReason: String,
+  newReason: String,
   reason: String,
   status: String
 }, { _id: false });

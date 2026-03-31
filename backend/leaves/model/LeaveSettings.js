@@ -248,6 +248,18 @@ const LeaveSettingsSchema = new mongoose.Schema(
   }
 );
 
+// Pre-save hook to ensure leaveNature is synced with isPaid for leave types
+LeaveSettingsSchema.pre('save', async function () {
+  if (this.type === 'leave' && this.types && Array.isArray(this.types)) {
+    this.types.forEach(type => {
+      // Sync leaveNature based on isPaid status
+      // If isPaid is true (default), nature is 'paid'
+      // If isPaid is false, nature is 'lop'
+      type.leaveNature = type.isPaid === false ? 'lop' : 'paid';
+    });
+  }
+});
+
 // Ensure only one active settings per type
 LeaveSettingsSchema.index({ type: 1, isActive: 1 });
 

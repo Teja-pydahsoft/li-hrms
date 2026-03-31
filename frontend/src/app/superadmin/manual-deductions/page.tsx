@@ -589,6 +589,15 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionComment, setActionComment] = useState('');
+  const [editMode, setEditMode] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm, setEditForm] = useState({
+    startMonth: '',
+    endMonth: '',
+    monthlyAmount: '',
+    totalAmount: '',
+    reason: '',
+  });
 
   const refresh = () => {
     if (!deductionId) return;
@@ -603,10 +612,23 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
     if (deductionId) refresh();
   }, [deductionId]);
 
+  useEffect(() => {
+    if (!deduction) return;
+    setEditForm({
+      startMonth: deduction.startMonth || '',
+      endMonth: deduction.endMonth || '',
+      monthlyAmount: deduction.monthlyAmount != null ? String(deduction.monthlyAmount) : '',
+      totalAmount: deduction.totalAmount != null ? String(deduction.totalAmount) : '',
+      reason: deduction.reason || '',
+    });
+    setEditMode(false);
+  }, [deduction]);
+
   const pendingStatuses = ['pending_hod', 'pending_hr', 'pending_admin'];
   const actionableStatuses = ['draft', ...pendingStatuses];
   const canAct = deduction && actionableStatuses.includes(deduction.status);
   const isDraft = deduction?.status === 'draft';
+  const canEdit = deduction && !['settled', 'partially_settled', 'cancelled'].includes(deduction.status);
 
   const handleAction = async (approved: boolean) => {
     if (!deductionId || actionLoading) return;
@@ -634,6 +656,52 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
     }
   };
 
+  const handleSaveEdit = async () => {
+    if (!deductionId || !deduction) return;
+    const payload: any = {
+      reason: editForm.reason.trim(),
+      totalAmount: Number(editForm.totalAmount),
+    };
+    if (!payload.reason) {
+      toast.error('Reason is required');
+      return;
+    }
+    if (!Number.isFinite(payload.totalAmount) || payload.totalAmount <= 0) {
+      toast.error('Valid total amount is required');
+      return;
+    }
+    if (deduction.type === 'incremental') {
+      if (!editForm.startMonth || !editForm.endMonth) {
+        toast.error('Start and end month are required');
+        return;
+      }
+      if (editForm.startMonth > editForm.endMonth) {
+        toast.error('Start month must be before or equal to end month');
+        return;
+      }
+      const monthlyAmount = Number(editForm.monthlyAmount);
+      if (!Number.isFinite(monthlyAmount) || monthlyAmount < 0) {
+        toast.error('Valid monthly amount is required');
+        return;
+      }
+      payload.startMonth = editForm.startMonth;
+      payload.endMonth = editForm.endMonth;
+      payload.monthlyAmount = monthlyAmount;
+    }
+    setSavingEdit(true);
+    try {
+      await api.editDeduction(deductionId, payload);
+      toast.success('Deduction request updated');
+      onUpdate();
+      await refresh();
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update deduction');
+    } finally {
+      setSavingEdit(false);
+      setEditMode(false);
+    }
+  };
+
   if (!deductionId) return null;
 
   return (
@@ -651,13 +719,126 @@ function DeductionDetailModal({ deductionId, onClose, onUpdate }: { deductionId:
             <div className="space-y-4 text-sm">
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Employee:</span> {deduction.employee?.employee_name || deduction.employee?.emp_no || '—'}</p>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Type:</span> {deduction.type === 'direct' ? 'Direct' : 'Incremental'}</p>
-              {deduction.type !== 'direct' && deduction.startMonth && deduction.endMonth && (
-                <p><span className="font-semibold text-slate-600 dark:text-slate-400">Period:</span> {deduction.startMonth} – {deduction.endMonth}</p>
+              {deduction.type !== 'direct' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-xs">
+                    <span className="font-semibold text-slate-600 dark:text-slate-400">Start month</span>
+                    {editMode ? (
+                      <input
+                        type="month"
+                        value={editForm.startMonth}
+                        onChange={(e) => setEditForm((p) => ({ ...p, startMonth: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
+                      />
+                    ) : (
+                      <span className="block">{deduction.startMonth || '—'}</span>
+                    )}
+                  </label>
+                  <label className="text-xs">
+                    <span className="font-semibold text-slate-600 dark:text-slate-400">End month</span>
+                    {editMode ? (
+                      <input
+                        type="month"
+                        value={editForm.endMonth}
+                        onChange={(e) => setEditForm((p) => ({ ...p, endMonth: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
+                      />
+                    ) : (
+                      <span className="block">{deduction.endMonth || '—'}</span>
+                    )}
+                  </label>
+                </div>
               )}
-              <p><span className="font-semibold text-slate-600 dark:text-slate-400">Total amount:</span> <span className="text-rose-700 dark:text-rose-400 font-bold">₹{Number(deduction.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></p>
+              {deduction.type !== 'direct' && (
+                <label className="text-xs block">
+                  <span className="font-semibold text-slate-600 dark:text-slate-400">Monthly amount</span>
+                  {editMode ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={editForm.monthlyAmount}
+                      onChange={(e) => setEditForm((p) => ({ ...p, monthlyAmount: e.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
+                    />
+                  ) : (
+                    <span className="block">₹{Number(deduction.monthlyAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  )}
+                </label>
+              )}
+              <label className="text-xs block">
+                <span className="font-semibold text-slate-600 dark:text-slate-400">Total amount</span>
+                {editMode ? (
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={editForm.totalAmount}
+                    onChange={(e) => setEditForm((p) => ({ ...p, totalAmount: e.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
+                  />
+                ) : (
+                  <span className="block text-rose-700 dark:text-rose-400 font-bold">₹{Number(deduction.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                )}
+              </label>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Remaining:</span> ₹{Number(deduction.remainingAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
               <p><span className="font-semibold text-slate-600 dark:text-slate-400">Status:</span> {getStatusLabel(deduction.status)}</p>
-              <p><span className="font-semibold text-slate-600 dark:text-slate-400">Reason:</span> {deduction.reason || '—'}</p>
+              <label className="text-xs block">
+                <span className="font-semibold text-slate-600 dark:text-slate-400">Reason</span>
+                {editMode ? (
+                  <textarea
+                    value={editForm.reason}
+                    onChange={(e) => setEditForm((p) => ({ ...p, reason: e.target.value }))}
+                    rows={2}
+                    className="mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-3 py-2 resize-none"
+                  />
+                ) : (
+                  <span className="block">{deduction.reason || '—'}</span>
+                )}
+              </label>
+
+              {canEdit && (
+                <div className="flex flex-wrap gap-2">
+                  {!editMode ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditMode(true)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 text-xs font-semibold"
+                    >
+                      Edit Request
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleSaveEdit}
+                        disabled={savingEdit}
+                        className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 text-xs font-semibold disabled:opacity-50"
+                      >
+                        {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Save Changes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditMode(false);
+                          setEditForm({
+                            startMonth: deduction.startMonth || '',
+                            endMonth: deduction.endMonth || '',
+                            monthlyAmount: deduction.monthlyAmount != null ? String(deduction.monthlyAmount) : '',
+                            totalAmount: deduction.totalAmount != null ? String(deduction.totalAmount) : '',
+                            reason: deduction.reason || '',
+                          });
+                        }}
+                        disabled={savingEdit}
+                        className="inline-flex items-center gap-2 rounded-xl bg-slate-200 dark:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 disabled:opacity-50"
+                      >
+                        Cancel Edit
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Approval history: HOD → HR → Admin with comments */}
               {(deduction.hodApproval?.approved != null || deduction.hrApproval?.approved != null || deduction.adminApproval?.approved != null) && (

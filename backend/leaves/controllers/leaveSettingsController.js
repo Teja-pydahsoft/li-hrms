@@ -7,12 +7,12 @@ const LeaveSettings = require('../model/LeaveSettings');
 
 // Default leave types
 const DEFAULT_LEAVE_TYPES = [
-  { code: 'CL', name: 'Casual Leave', description: 'Short term personal leave', maxDaysPerYear: 12, isPaid: true, color: '#3b82f6', sortOrder: 1 },
-  { code: 'SL', name: 'Sick Leave', description: 'Leave due to illness', maxDaysPerYear: 12, requiresAttachment: true, isPaid: true, color: '#ef4444', sortOrder: 2 },
-  { code: 'EL', name: 'Earned Leave', description: 'Annual leave earned over time', maxDaysPerYear: 15, carryForward: true, maxCarryForward: 30, isPaid: true, color: '#10b981', sortOrder: 3 },
-  { code: 'ML', name: 'Maternity Leave', description: 'Maternity leave', maxDaysPerYear: 180, requiresAttachment: true, isPaid: true, color: '#ec4899', sortOrder: 4 },
-  { code: 'PL', name: 'Paternity Leave', description: 'Paternity leave', maxDaysPerYear: 15, isPaid: true, color: '#8b5cf6', sortOrder: 5 },
-  { code: 'CO', name: 'Compensatory Off', description: 'Leave for extra work hours', maxDaysPerYear: null, isPaid: true, color: '#f59e0b', sortOrder: 6 },
+  { code: 'CL', name: 'Casual Leave', description: 'Short term personal leave', maxDaysPerYear: 12, isPaid: true, leaveNature: 'paid', color: '#3b82f6', sortOrder: 1 },
+  { code: 'SL', name: 'Sick Leave', description: 'Leave due to illness', maxDaysPerYear: 12, requiresAttachment: true, isPaid: true, leaveNature: 'paid', color: '#ef4444', sortOrder: 2 },
+  { code: 'EL', name: 'Earned Leave', description: 'Annual leave earned over time', maxDaysPerYear: 15, carryForward: true, maxCarryForward: 30, isPaid: true, leaveNature: 'paid', color: '#10b981', sortOrder: 3 },
+  { code: 'ML', name: 'Maternity Leave', description: 'Maternity leave', maxDaysPerYear: 180, requiresAttachment: true, isPaid: true, leaveNature: 'paid', color: '#ec4899', sortOrder: 4 },
+  { code: 'PL', name: 'Paternity Leave', description: 'Paternity leave', maxDaysPerYear: 15, isPaid: true, leaveNature: 'paid', color: '#8b5cf6', sortOrder: 5 },
+  { code: 'CO', name: 'Compensatory Off', description: 'Leave for extra work hours', maxDaysPerYear: null, isPaid: true, leaveNature: 'paid', color: '#f59e0b', sortOrder: 6 },
 ];
 
 // Default OD types
@@ -148,7 +148,17 @@ exports.saveSettings = async (req, res) => {
 
     if (leaveSettings) {
       // Update existing
-      if (types) leaveSettings.types = types;
+      if (types && Array.isArray(types)) {
+        // Sync leaveNature with isPaid if it's a leave type
+        if (type === 'leave') {
+          leaveSettings.types = types.map(t => ({
+            ...t,
+            leaveNature: t.isPaid === false ? 'lop' : 'paid'
+          }));
+        } else {
+          leaveSettings.types = types;
+        }
+      }
       if (statuses) leaveSettings.statuses = statuses;
       if (workflow) leaveSettings.workflow = workflow;
       if (settings) {
@@ -284,6 +294,12 @@ exports.addType = async (req, res) => {
           error: 'Type with this code already exists',
         });
       }
+
+      // Sync leaveNature with isPaid for leave types
+      if (type === 'leave') {
+        typeData.leaveNature = typeData.isPaid === false ? 'lop' : 'paid';
+      }
+
       settings.types.push(typeData);
       settings.updatedBy = req.user._id;
     }

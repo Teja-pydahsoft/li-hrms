@@ -246,26 +246,86 @@ exports.editDeduction = async (req, res) => {
     if (['settled', 'partially_settled', 'cancelled'].includes(deduction.status)) {
       return res.status(403).json({ success: false, message: 'Cannot edit settled or cancelled deductions' });
     }
-    const originalAmount = deduction.totalAmount;
-    const originalMonthlyAmount = deduction.monthlyAmount;
-    if (startMonth) deduction.startMonth = startMonth;
-    if (endMonth) deduction.endMonth = endMonth;
-    if (monthlyAmount) deduction.monthlyAmount = monthlyAmount;
-    if (totalAmount) deduction.totalAmount = totalAmount;
-    if (reason) deduction.reason = reason;
-    if (totalAmount && totalAmount !== originalAmount) {
-      deduction.remainingAmount = totalAmount;
+    const monthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const originalAmount = Number(deduction.totalAmount || 0);
+    const originalMonthlyAmount = deduction.monthlyAmount == null ? null : Number(deduction.monthlyAmount);
+    const originalReason = deduction.reason || '';
+    const originalStartMonth = deduction.startMonth || null;
+    const originalEndMonth = deduction.endMonth || null;
+
+    const nextStartMonth = startMonth !== undefined ? (startMonth || null) : deduction.startMonth;
+    const nextEndMonth = endMonth !== undefined ? (endMonth || null) : deduction.endMonth;
+    const nextMonthlyAmount = monthlyAmount !== undefined ? monthlyAmount : deduction.monthlyAmount;
+    const nextTotalAmount = totalAmount !== undefined ? totalAmount : deduction.totalAmount;
+    const nextReason = reason !== undefined ? String(reason).trim() : deduction.reason;
+
+    if (!nextReason) {
+      return res.status(400).json({ success: false, message: 'Reason/remarks is required' });
+    }
+
+    if (deduction.type === 'incremental') {
+      if (!nextStartMonth || !nextEndMonth) {
+        return res.status(400).json({ success: false, message: 'Start month and end month are required for incremental deductions' });
+      }
+      if (!monthRegex.test(nextStartMonth) || !monthRegex.test(nextEndMonth)) {
+        return res.status(400).json({ success: false, message: 'Invalid month format. Use YYYY-MM' });
+      }
+      if (nextStartMonth > nextEndMonth) {
+        return res.status(400).json({ success: false, message: 'Start month must be before or equal to end month' });
+      }
+      if (nextMonthlyAmount == null || Number.isNaN(Number(nextMonthlyAmount)) || Number(nextMonthlyAmount) < 0) {
+        return res.status(400).json({ success: false, message: 'Valid monthly amount is required for incremental deductions' });
+      }
+    }
+
+    if (nextTotalAmount == null || Number.isNaN(Number(nextTotalAmount)) || Number(nextTotalAmount) <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid total amount is required' });
+    }
+
+    deduction.startMonth = nextStartMonth;
+    deduction.endMonth = nextEndMonth;
+    deduction.monthlyAmount = nextMonthlyAmount;
+    deduction.totalAmount = Number(nextTotalAmount);
+    deduction.reason = nextReason;
+
+    const settledAmount = (deduction.settlementHistory || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+    deduction.remainingAmount = Math.max(0, Number(nextTotalAmount) - settledAmount);
+    if (['approved', 'partially_settled', 'settled'].includes(deduction.status)) {
+      if (deduction.remainingAmount <= 0) deduction.status = 'settled';
+      else if (settledAmount > 0) deduction.status = 'partially_settled';
+      else deduction.status = 'approved';
+    }
+
+    const changed = (
+      originalAmount !== Number(nextTotalAmount) ||
+      originalMonthlyAmount !== (nextMonthlyAmount == null ? null : Number(nextMonthlyAmount)) ||
+      originalReason !== nextReason ||
+      originalStartMonth !== nextStartMonth ||
+      originalEndMonth !== nextEndMonth
+    );
+
+    if (changed) {
       if (!deduction.editHistory) deduction.editHistory = [];
       deduction.editHistory.push({
         editedAt: new Date(),
         editedBy: user._id,
+        originalStartMonth,
+        newStartMonth: nextStartMonth,
+        originalEndMonth,
+        newEndMonth: nextEndMonth,
         originalAmount,
-        newAmount: totalAmount,
+        newAmount: Number(nextTotalAmount),
         originalMonthlyAmount,
-        newMonthlyAmount: monthlyAmount || originalMonthlyAmount,
-        reason: `Amount changed from ₹${originalAmount} to ₹${totalAmount}`,
+        newMonthlyAmount: nextMonthlyAmount == null ? null : Number(nextMonthlyAmount),
+        originalReason,
+        newReason: nextReason,
+        reason: 'Manual deduction request edited after provisioning/approval',
         status: deduction.status
       });
+    }
+
+    if (deduction.adminApproval?.approved) {
+      deduction.adminApproval.modifiedAmount = Number(nextTotalAmount);
     }
     deduction.updatedBy = uid(req);
     await deduction.save();
