@@ -18,7 +18,6 @@ jobs:
           echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST }} >> ~/.ssh/known_hosts
-          ssh-keyscan -H ${{ secrets.LIGHTSAIL_HOST_2 }} >> ~/.ssh/known_hosts
 
       # =========================
       # DEPLOY TO EC2 - SERVER 1
