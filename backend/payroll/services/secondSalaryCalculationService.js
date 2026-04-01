@@ -499,9 +499,36 @@ async function calculateSecondSalaryForPayRegister(employeeId, month, userId, st
     if (useDynamic) {
         const PayrollConfiguration = require('../model/PayrollConfiguration');
         const payrollCalculationFromOutputColumnsService = require('./payrollCalculationFromOutputColumnsService');
+        const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+        const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
         const config = await PayrollConfiguration.get();
         const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
         if (outputColumns.length > 0) {
+            let arrearsSettlements = [];
+            let deductionSettlements = [];
+            try {
+                const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
+                if (pendingArrears && pendingArrears.length > 0) {
+                    arrearsSettlements = pendingArrears.map((ar) => ({
+                        arrearId: ar.id,
+                        amount: ar.remainingAmount || 0,
+                    }));
+                }
+            } catch (err) {
+                console.error(`[SecondSalary] Failed fetching pending arrears for ${employeeId}:`, err.message);
+            }
+            try {
+                const pendingDeductions = await DeductionPayrollIntegrationService.getPendingDeductionsForPayroll(employeeId);
+                if (pendingDeductions && pendingDeductions.length > 0) {
+                    deductionSettlements = pendingDeductions.map((d) => ({
+                        deductionId: d.id,
+                        amount: d.remainingAmount || 0,
+                    }));
+                }
+            } catch (err) {
+                console.error(`[SecondSalary] Failed fetching pending deductions for ${employeeId}:`, err.message);
+            }
+
             return payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
                 employeeId.toString(),
                 month,
@@ -509,8 +536,8 @@ async function calculateSecondSalaryForPayRegister(employeeId, month, userId, st
                 {
                     secondSalaryBasis: true,
                     source: 'payregister',
-                    arrearsSettlements: [],
-                    deductionSettlements: [],
+                    arrearsSettlements,
+                    deductionSettlements,
                 }
             );
         }
