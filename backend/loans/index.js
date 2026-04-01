@@ -36,6 +36,9 @@ router.put('/settings/:type/workflow', authorize('manager', 'super_admin'), sett
 // Get my loans
 router.get('/my', loanController.getMyLoans);
 
+// Get guarantor candidates for employee self-apply
+router.get('/guarantor-candidates', loanController.getGuarantorCandidates);
+
 // Get pending approvals
 router.get('/pending-approvals', authorize('manager', 'hod', 'hr', 'sub_admin', 'super_admin'), loanController.getPendingApprovals);
 

@@ -310,6 +310,77 @@ exports.getMyLoans = async (req, res) => {
   }
 };
 
+// @desc    Get guarantor candidates for current user
+// @route   GET /api/loans/guarantor-candidates
+// @access  Private
+exports.getGuarantorCandidates = async (req, res) => {
+  try {
+    const { search = '', limit = 60 } = req.query;
+
+    // Resolve current employee first (supports both employeeRef and emp_no based login)
+    let selfEmployee = null;
+    if (req.user.employeeRef) {
+      selfEmployee = await findEmployeeByIdOrEmpNo(req.user.employeeRef);
+    } else if (req.user.employeeId) {
+      selfEmployee = await findEmployeeByEmpNo(req.user.employeeId);
+    }
+
+    if (!selfEmployee) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current user is not linked to an employee record',
+      });
+    }
+
+    // Keep candidate scope safe: same division and optionally same department.
+    const baseFilter = {
+      is_active: true,
+      _id: { $ne: selfEmployee._id },
+    };
+    if (selfEmployee.division_id) {
+      baseFilter.division_id = selfEmployee.division_id;
+    }
+    if (selfEmployee.department_id) {
+      baseFilter.department_id = selfEmployee.department_id;
+    }
+
+    if (search && String(search).trim()) {
+      const rx = new RegExp(String(search).trim(), 'i');
+      baseFilter.$or = [
+        { emp_no: rx },
+        { employee_name: rx },
+      ];
+    }
+
+    const max = Math.min(Math.max(parseInt(limit, 10) || 60, 1), 200);
+    const employees = await Employee.find(baseFilter)
+      .select('emp_no employee_name department_id designation_id division_id')
+      .populate('department_id', 'name')
+      .populate('designation_id', 'name')
+      .sort({ employee_name: 1 })
+      .limit(max);
+
+    res.status(200).json({
+      success: true,
+      count: employees.length,
+      data: employees.map((e) => ({
+        _id: e._id,
+        emp_no: e.emp_no,
+        employee_name: e.employee_name,
+        department: e.department_id ? { _id: e.department_id._id, name: e.department_id.name } : null,
+        designation: e.designation_id ? { _id: e.designation_id._id, name: e.designation_id.name } : null,
+        division_id: e.division_id || null,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching guarantor candidates:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch guarantor candidates',
+    });
+  }
+};
+
 // @desc    Calculate salary advance eligibility
 // @route   GET /api/loans/calculate-eligibility
 // @access  Private

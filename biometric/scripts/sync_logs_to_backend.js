@@ -197,7 +197,7 @@ async function main() {
         await hrmsConn.asPromise();
         console.log(`✅ HRMS DB connected: ${hrmsMongoUri}\n`);
 
-        const SYNC_DIVISION_NAME = process.env.SYNC_DIVISION_NAME || 'PYDAH COLLEGE OF ENGINEERING';
+        const SYNC_DIVISION_NAME = process.env.SYNC_DIVISION_NAME ;
         let SYNC_DEPT = process.env.SYNC_DEPT;
         let scope = await loadDivisionScope(hrmsConn, SYNC_DIVISION_NAME, SYNC_DEPT);
 

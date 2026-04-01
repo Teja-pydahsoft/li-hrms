@@ -38,7 +38,8 @@ exports.upsertPayrollConfig = async (req, res) => {
       ? outputColumns.map((c, i) => {
           const header = (c.header != null && String(c.header).trim()) ? String(c.header).trim() : `Column ${i + 1}`;
           const formulaStr = (c.formula != null && String(c.formula).trim()) ? String(c.formula).trim() : '';
-          const source = (c.source === 'formula' || formulaStr.length > 0) ? 'formula' : 'field';
+          const explicitSource = c.source === 'formula' ? 'formula' : (c.source === 'field' ? 'field' : null);
+          const source = explicitSource || (formulaStr.length > 0 ? 'formula' : 'field');
           return {
             header,
             source,
