@@ -127,6 +127,7 @@ interface Employee {
   designation_id?: { _id: string; name: string };
   division?: { _id: string; name: string };
   division_id?: { _id: string; name: string };
+  leftDate?: string;
 }
 
 interface MonthlyAttendanceData {
@@ -796,6 +797,7 @@ export default function AttendancePage() {
           department: { name: item.department_name },
           designation: { name: item.designation_name },
           division_id: item.division_id,
+          leftDate: item.leftDate,
         },
         dailyAttendance: item.dailyAttendance || item.attendance || {},
       } as MonthlyAttendanceData;
@@ -2870,6 +2872,11 @@ export default function AttendancePage() {
                                 {getDeptName(item.employee)}
                               </span>
                             )}
+                            {item.employee?.leftDate && (
+                              <span className="text-amber-600 dark:text-amber-400 font-bold text-[8px] uppercase tracking-wider mt-0.5">
+                                Left {new Date(item.employee.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -3454,6 +3461,11 @@ export default function AttendancePage() {
                   {attendanceDetail.isEdited && (
                     <span className="ml-2 inline-flex items-center rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20" title="This record has been manually modified">
                       Edited
+                    </span>
+                  )}
+                  {selectedEmployee?.leftDate && (
+                    <span className="ml-2 inline-flex items-center rounded-md bg-amber-100 px-2 py-1 text-xs font-bold text-amber-700 ring-1 ring-inset ring-amber-600/20 shadow-sm">
+                      Left {new Date(selectedEmployee.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                     </span>
                   )}
                 </h3>
@@ -4359,16 +4371,24 @@ export default function AttendancePage() {
                           <span className="font-medium text-slate-600 dark:text-slate-400">Employee Number:</span>
                           <span className="ml-2 text-slate-900 dark:text-white">{selectedEmployeeForSummary?.emp_no || '-'}</span>
                         </div>
-                        {selectedEmployeeForSummary && selectedEmployeeForSummary.department && (
+                        {selectedEmployeeForSummary.department && (
                           <div>
                             <span className="font-medium text-slate-600 dark:text-slate-400">Department:</span>
                             <span className="ml-2 text-slate-900 dark:text-white">{((selectedEmployeeForSummary as any).department_id?.name || (selectedEmployeeForSummary.department as any)?.name || '-')}</span>
                           </div>
                         )}
-                        {selectedEmployeeForSummary && selectedEmployeeForSummary.designation && (
+                        {selectedEmployeeForSummary.designation && (
                           <div>
                             <span className="font-medium text-slate-600 dark:text-slate-400">Designation:</span>
                             <span className="ml-2 text-slate-900 dark:text-white">{((selectedEmployeeForSummary as any).designation_id?.name || (selectedEmployeeForSummary.designation as any)?.name || '-')}</span>
+                          </div>
+                        )}
+                        {selectedEmployeeForSummary.leftDate && (
+                          <div>
+                            <span className="font-medium text-slate-600 dark:text-slate-400">Resignation Date:</span>
+                            <span className="ml-2 text-amber-600 dark:text-amber-400 font-bold">
+                              {new Date(selectedEmployeeForSummary.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </span>
                           </div>
                         )}
                       </div>

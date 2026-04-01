@@ -229,6 +229,8 @@ interface Employee {
 
   division?: { _id: string; name: string };
 
+  leftDate?: string | Date | null;
+
 }
 
 
@@ -334,6 +336,7 @@ function normalizeWorkspaceAttendanceData(data: unknown[]): MonthlyAttendanceDat
         department: { name: row.department_name as string },
         designation: { name: row.designation_name as string },
         division_id: row.division_id,
+        leftDate: row.leftDate as string,
       },
       dailyAttendance: (row.dailyAttendance || row.attendance || {}) as MonthlyAttendanceData['dailyAttendance'],
     } as MonthlyAttendanceData;
@@ -3641,6 +3644,11 @@ export default function AttendancePage() {
                   <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                   Monthly Performance Summary
                 </h3>
+                {item.employee.leftDate && (
+                  <div className="text-[10px] bg-amber-100/80 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-3 py-1 rounded-full font-bold shadow-sm border border-amber-200/50 dark:border-amber-800/50">
+                    Employee Left: {new Date(item.employee.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 xl:gap-6">
                 {visibleCards.map((stat) => (
@@ -4105,6 +4113,11 @@ export default function AttendancePage() {
                                     <div className="text-[9px] text-slate-500 dark:text-slate-400 truncate mt-1">
                                       {item.employee.emp_no}
                                       {item.employee.department && ` • ${(item.employee.department as any)?.name || ''}`}
+                                      {item.employee.leftDate && (
+                                        <div className="text-[9px] text-amber-600 dark:text-amber-400 font-bold mt-0.5">
+                                          Left {new Date(item.employee.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 </td>
@@ -4763,20 +4776,29 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {/* Detail Dialog */}
+{/* Detail Dialog */}
         {
           showDetailDialog && attendanceDetail && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
               <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-600">
                 <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                    Attendance Details - {selectedDate}
-                    {selectedEmployee && (
-                      <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">
-                        ({selectedEmployee.employee_name})
-                      </span>
-                    )}
-                  </h3>
+                  <div className="flex flex-col">
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                      Attendance Details - {selectedDate}
+                    </h3>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {selectedEmployee && (
+                        <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                          {selectedEmployee.employee_name} ({selectedEmployee.emp_no})
+                        </span>
+                      )}
+                      {attendanceDetail.leftDate && (
+                        <span className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded-md font-bold shadow-sm border border-amber-200/50 dark:border-amber-800/50">
+                          Left {new Date(attendanceDetail.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                   <button
                     onClick={() => {
                       setShowDetailDialog(false);
@@ -5691,6 +5713,14 @@ export default function AttendancePage() {
                           <div>
                             <span className="font-medium text-slate-600 dark:text-slate-400">Designation:</span>
                             <span className="ml-2 text-slate-900 dark:text-white">{(selectedEmployeeForSummary.designation as any)?.name || '-'}</span>
+                          </div>
+                        )}
+                        {selectedEmployeeForSummary?.leftDate && (
+                          <div className="col-span-2 mt-1">
+                            <span className="font-medium text-amber-600 dark:text-amber-400">Resignation Date:</span>
+                            <span className="ml-2 font-bold text-amber-700 dark:text-amber-300">
+                              {new Date(selectedEmployeeForSummary.leftDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </span>
                           </div>
                         )}
                       </div>

@@ -237,6 +237,7 @@ exports.getAttendanceDetail = async (req, res) => {
         ...record.toObject(),
         rawLogs,
         otRequest: otRequest ? { status: otRequest.status, otHours: otRequest.otHours } : null,
+        leftDate: allowedEmployee.leftDate || null,
       },
     });
 
