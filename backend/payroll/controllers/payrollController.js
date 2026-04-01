@@ -10,6 +10,7 @@ const {
   normalizeOutputColumns,
   buildOutputColumnRows,
   buildSecondSalaryPaysheetFromOutputColumns,
+  getStatutoryCodesForPaysheetExpansion,
   writeBundleBuffer,
 } = require('../utils/paysheetBundleExport');
 const User = require('../../users/model/User');
@@ -956,6 +957,10 @@ function recordToPayslip(record) {
       date_of_joining: empObj?.doj || '',
       pf_number: empObj?.pf_number || '',
       esi_number: empObj?.esi_number || '',
+      salaries:
+        empObj?.salaries && typeof empObj.salaries === 'object' && !Array.isArray(empObj.salaries)
+          ? { ...empObj.salaries }
+          : {},
     },
     attendance: {
       ...rawAtt,
@@ -1053,7 +1058,7 @@ exports.getPaysheetData = async (req, res) => {
         .populate({
           path: 'employeeId',
           select:
-            'employee_name first_name last_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number leftDate',
+            'employee_name first_name last_name emp_no department_id division_id designation_id gross_salary second_salary salaries location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number leftDate applyPF applyESI applyProfessionTax',
           populate: [
             { path: 'department_id', select: 'name' },
             { path: 'division_id', select: 'name' },
@@ -1081,11 +1086,12 @@ exports.getPaysheetData = async (req, res) => {
 
       const config2 = await PayrollConfiguration.get();
       const outputCols2nd = normalizeOutputColumns(config2?.outputColumns);
+      const statutoryCodesForSheet = await getStatutoryCodesForPaysheetExpansion();
 
       let headers;
       let rows;
       if (outputCols2nd.length > 0 && filtered.length > 0) {
-        const built = buildSecondSalaryPaysheetFromOutputColumns(filtered, outputCols2nd);
+        const built = buildSecondSalaryPaysheetFromOutputColumns(filtered, outputCols2nd, statutoryCodesForSheet);
         if (built.rows.length > 0) {
           headers = built.headers;
           rows = built.rows;
@@ -1166,7 +1172,7 @@ exports.getPaysheetData = async (req, res) => {
         .populate({
           path: 'employeeId',
           select:
-            'employee_name first_name last_name emp_no department_id division_id designation_id location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number leftDate',
+            'employee_name first_name last_name emp_no department_id division_id designation_id location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number leftDate salaries',
           populate: [
             { path: 'department_id', select: 'name' },
             { path: 'division_id', select: 'name' },

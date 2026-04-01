@@ -25,6 +25,7 @@ const Settings = require('../../settings/model/Settings');
 const { getNextEmpNo, getNextEmpNos } = require('../../employees/services/empNoService');
 const LeavePolicySettings = require('../../settings/model/LeavePolicySettings');
 const { syncEmployeeCLFromPolicy } = require('../../leaves/services/annualCLResetService');
+const { normalizeEmployeeSalariesPayload } = require('../../employees/utils/employeeSalariesNormalize');
 const {
   isCustomEmployeeGroupingEnabled,
   stripEmployeeGroupIfDisabled,
@@ -708,9 +709,16 @@ const verifySingleApplicationInternal = async (applicationId, approver) => {
     }
   );
 
+  const { salaries: normSalaries, dynamicFields: dynamicFieldsNorm } = await normalizeEmployeeSalariesPayload(
+    appObj,
+    dynamicFields || {},
+    {}
+  );
+
   const employeeData = {
     ...permanentFields,
-    dynamicFields: dynamicFields || {},
+    salaries: normSalaries,
+    dynamicFields: dynamicFieldsNorm || {},
     employeeAllowances: application.employeeAllowances || [],
     employeeDeductions: application.employeeDeductions || [],
     salaryStatus: 'pending_approval',

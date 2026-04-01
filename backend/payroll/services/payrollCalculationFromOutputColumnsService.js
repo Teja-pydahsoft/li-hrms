@@ -570,6 +570,17 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
   // employee.* display fields (name, designation, emp_no, etc.) — return as-is, never coerce to number
   if (path.startsWith('employee.')) {
     const key = path.slice('employee.'.length);
+    if (key.startsWith('salaries.')) {
+      const fieldId = key.slice('salaries.'.length);
+      const salaries = employee?.salaries;
+      if (salaries && typeof salaries === 'object' && !Array.isArray(salaries) && fieldId) {
+        const raw = salaries[fieldId];
+        if (raw === undefined || raw === null || raw === '') return 0;
+        const n = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(n) ? n : 0;
+      }
+      return 0;
+    }
     const emp = record.employee || {};
     let v = emp[key];
     if (v === undefined || v === null) v = key === 'name' ? (employee?.employee_name ?? '') : (employee?.[key] ?? '');
@@ -817,8 +828,14 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
       if (autoTotal != null && autoTotal > 0) totalDaysInMonth = autoTotal;
     }
     const statutoryResult = await statutoryDeductionService.calculateStatutoryDeductions({
-      basicPay, grossSalary, earnedSalary, dearnessAllowance: 0, employee,
-      paidDays, totalDaysInMonth,
+      basicPay,
+      grossSalary,
+      earnedSalary,
+      dearnessAllowance: 0,
+      employee,
+      paidDays,
+      totalDaysInMonth,
+      allSalaries: {},
     });
     const totalStatutory = statutoryResult.totalEmployeeShare || 0;
     if (!record.deductions) record.deductions = {};

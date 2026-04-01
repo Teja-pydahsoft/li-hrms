@@ -11,6 +11,7 @@ const secondSalaryDeductionService = require('./secondSalaryDeductionService');
 const secondSalaryLoanAdvanceService = require('./secondSalaryLoanAdvanceService');
 const SecondSalaryBatchService = require('./secondSalaryBatchService');
 const allowanceDeductionResolverService = require('./allowanceDeductionResolverService');
+const statutoryDeductionService = require('./statutoryDeductionService');
 
 /**
  * Normalize overrides (same logic as regular payroll)
@@ -318,6 +319,20 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
         const totalOtherDeductions = secondSalaryDeductionService.calculateTotalOtherDeductions(mergedDeductions);
         totalDeductions += totalOtherDeductions;
 
+        const grossBeforeStatutory = grossAmountSalary + incentiveAmount;
+        const statutoryResult = await statutoryDeductionService.calculateStatutoryDeductions({
+            basicPay,
+            grossSalary: grossBeforeStatutory,
+            earnedSalary,
+            dearnessAllowance: 0,
+            employee,
+            paidDays: totalPaidDays,
+            totalDaysInMonth: modifiedAttendanceSummary.totalDaysInMonth,
+            allSalaries: {},
+        });
+        const statutoryTotal = statutoryResult.totalEmployeeShare || 0;
+        totalDeductions += statutoryTotal;
+
         // 6. Loans & Advances
         // We deduct them for netSalary calculation, but they are NOT part of "Total Deductions" summary
         const loanAdvanceResult = await secondSalaryLoanAdvanceService.calculateLoanAdvance(
@@ -415,6 +430,17 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
         record.set('deductions.leaveDeductionBreakdown', leaveDeductionResult.breakdown);
         record.set('deductions.totalOtherDeductions', totalOtherDeductions);
         record.set('deductions.otherDeductions', mergedDeductions);
+        record.set(
+            'deductions.statutoryDeductions',
+            (statutoryResult.breakdown || []).map((s) => ({
+                name: s.name,
+                code: s.code,
+                employeeAmount: s.employeeAmount,
+                employerAmount: s.employerAmount,
+            }))
+        );
+        record.set('deductions.statutoryCumulative', statutoryTotal);
+        record.set('deductions.totalStatutoryEmployee', statutoryTotal);
         record.set('deductions.totalDeductions', totalDeductions);
 
         // Loans

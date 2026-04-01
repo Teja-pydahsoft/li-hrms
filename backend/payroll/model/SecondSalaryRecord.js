@@ -337,6 +337,18 @@ const secondSalaryRecordSchema = new mongoose.Schema(
                     },
                 },
             ],
+            // Statutory (PF, ESI, PT) — same shape as PayrollRecord so dynamic 2nd-salary engine persists breakdown
+            statutoryDeductions: [
+                {
+                    name: String,
+                    code: String,
+                    employeeAmount: Number,
+                    employerAmount: Number,
+                },
+            ],
+            totalStatutoryEmployee: { type: Number, default: 0, min: 0 },
+            statutoryCumulative: { type: Number, default: 0, min: 0 },
+            deductionsCumulative: { type: Number, default: 0, min: 0 },
             totalDeductions: {
                 type: Number,
                 default: 0,

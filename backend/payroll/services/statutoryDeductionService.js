@@ -1,5 +1,23 @@
 const StatutoryDeductionConfig = require('../model/StatutoryDeductionConfig');
 
+/** Known dynamic salary field keys for Dearness (PF basic+DA when dearnessAllowance not passed). */
+const DA_SALARY_KEYS = ['dearness_allowance', 'DEARNESS_ALLOWANCE', 'dearnessAllowance', 'DA', 'da'];
+
+function dearnessFromAllSalaries(allSalaries) {
+  if (!allSalaries || typeof allSalaries !== 'object') return 0;
+  for (const k of DA_SALARY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(allSalaries, k)) continue;
+    const v = Number(allSalaries[k]);
+    if (!Number.isNaN(v)) return v;
+  }
+  return 0;
+}
+
+function shallowSalariesMap(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+  return { ...obj };
+}
+
 /**
  * Calculate statutory deductions for an employee for a month.
  * Only employee share is deducted from salary; employer share is for reporting.
@@ -9,14 +27,19 @@ const StatutoryDeductionConfig = require('../model/StatutoryDeductionConfig');
  * @param {number} params.basicPay - Basic pay (full month)
  * @param {number} params.grossSalary - Gross salary (after allowances) - used for ESI
  * @param {number} params.earnedSalary - Earned salary (prorated) - optional for proration
- * @param {number} [params.dearnessAllowance=0] - DA if PF base is basic_da
+ * @param {number} [params.dearnessAllowance=0] - DA if PF base is basic_da; if 0, DA may be read from allSalaries (common field ids)
  * @param {Object} [params.employee] - Employee doc; if applyESI/applyPF/applyProfessionTax are false, that deduction is skipped (amount 0).
  * @param {number} [params.paidDays] - Paid days in the month (for proration). When set with totalDaysInMonth, statutory is prorated.
  * @param {number} [params.totalDaysInMonth] - Total days in month (pay cycle). When set with paidDays, statutory is prorated.
+ * @param {Record<string, number|string>} [params.allSalaries={}] - Optional override map merged on top of employee.salaries
  * @returns {Promise<{ breakdown: Array<{ name, code, employeeAmount, employerAmount }>, totalEmployeeShare, totalEmployerShare }>}
  */
 async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, earnedSalary = 0, dearnessAllowance = 0, employee = null, paidDays = null, totalDaysInMonth = null, allSalaries = {} }) {
   const config = await StatutoryDeductionConfig.get();
+  const fromEmployee = shallowSalariesMap(employee?.salaries);
+  const fromArg = shallowSalariesMap(allSalaries);
+  const mergedAllSalaries = { ...fromEmployee, ...fromArg };
+  const resolvedDearness = Number(dearnessAllowance) || dearnessFromAllSalaries(mergedAllSalaries);
   const breakdown = [];
   let totalEmployeeShare = 0;
   let totalEmployerShare = 0;
@@ -42,9 +65,9 @@ async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, ear
     const emprPct = config.esi.employerPercent ?? 3.25;
     
     let esiWage = 0;
-    if (config.esi.wageBaseField && allSalaries && allSalaries[config.esi.wageBaseField] !== undefined) {
+    if (config.esi.wageBaseField && mergedAllSalaries && mergedAllSalaries[config.esi.wageBaseField] !== undefined) {
       // Use the value from the specific salary field (direct amount, no percentage needed usually)
-      esiWage = Number(allSalaries[config.esi.wageBaseField]) || 0;
+      esiWage = Number(mergedAllSalaries[config.esi.wageBaseField]) || 0;
     } else {
       // Fallback to percentage of basic
       const wageBasePct = Math.min(100, Math.max(0, config.esi.wageBasePercentOfBasic ?? 50));
@@ -68,16 +91,18 @@ async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, ear
 
   // PF: on Basic (or Basic + DA). Upper limit (wage ceiling): if salary ≥ ceiling, calculate on ceiling amount; else calculate on full basic. So contribution base = min(basic or basic+DA, wageCeiling).
   if (applyPF && config.pf && config.pf.enabled) {
-    const base = (config.pf.base === 'basic_da') ? (Number(basicPay) || 0) + (Number(dearnessAllowance) || 0) : (Number(basicPay) || 0);
+    const empPct = config.pf.employeePercent ?? 12;
     const emprPct = config.pf.employerPercent ?? 12;
-    
+
     let contributionBase = 0;
-    if (config.pf.wageBaseField && allSalaries && allSalaries[config.pf.wageBaseField] !== undefined) {
+    if (config.pf.wageBaseField && mergedAllSalaries && mergedAllSalaries[config.pf.wageBaseField] !== undefined) {
       // Use specific salary field as base
-      contributionBase = Number(allSalaries[config.pf.wageBaseField]) || 0;
+      contributionBase = Number(mergedAllSalaries[config.pf.wageBaseField]) || 0;
     } else {
       // Fallback: Apply on Basic (or Basic + DA)
-      const base = (config.pf.base === 'basic_da') ? (Number(basicPay) || 0) + (Number(dearnessAllowance) || 0) : (Number(basicPay) || 0);
+      const base = (config.pf.base === 'basic_da')
+        ? (Number(basicPay) || 0) + (Number(resolvedDearness) || 0)
+        : (Number(basicPay) || 0);
       contributionBase = base;
     }
 

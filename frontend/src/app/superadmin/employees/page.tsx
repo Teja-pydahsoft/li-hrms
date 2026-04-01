@@ -18,6 +18,7 @@ import UpdateRequestReviewModal from '@/components/employee/UpdateRequestReviewM
 import BankUpdateDialog from '@/components/employee/BankUpdateDialog';
 import Spinner from '@/components/Spinner';
 import EmployeeExportDialog from '@/components/employee/EmployeeExportDialog';
+import { getEmployeeGroupedDynamicFieldValue } from '@/lib/employeeDynamicFieldValue';
 
 import {
   EMPLOYEE_TEMPLATE_HEADERS,
@@ -168,6 +169,7 @@ const initialFormState: Partial<Employee> = {
   employeeAllowances: [],
   employeeDeductions: [],
   profilePhoto: '',
+  salaries: {} as Record<string, unknown>,
 };
 
 interface TemplateColumn {
@@ -1988,8 +1990,13 @@ export default function EmployeesPage() {
       }
     }
 
-    // Merge dynamicFields into formData
     const dynamicFieldsData = employee.dynamicFields || {};
+    const mergedSalariesForForm =
+      employee.salaries && typeof employee.salaries === 'object' && !Array.isArray(employee.salaries)
+        ? { ...employee.salaries }
+        : {};
+    const dynamicFieldsForFormSpread = { ...dynamicFieldsData };
+    delete dynamicFieldsForFormSpread.salaries;
 
     // Handle reporting_to field - extract user IDs from populated objects or use existing IDs
     let reportingToValue: string[] = [];
@@ -2025,8 +2032,8 @@ export default function EmployeesPage() {
       // Prefill employee overrides if present
       employeeAllowances: Array.isArray(employee.employeeAllowances) ? employee.employeeAllowances : [],
       employeeDeductions: Array.isArray(employee.employeeDeductions) ? employee.employeeDeductions : [],
-      // Merge dynamicFields at root level for form
-      ...dynamicFieldsData,
+      salaries: mergedSalariesForForm,
+      ...dynamicFieldsForFormSpread,
       // Override with processed values (after dynamicFields so they take precedence)
       second_salary: employee.second_salary, // Ensure root value takes precedence over dynamicFields
       reporting_to: reportingToValue,
@@ -5845,15 +5852,12 @@ export default function EmployeesPage() {
                         const groupFields = group.fields?.filter(f => f.isEnabled) || [];
                         if (groupFields.length === 0) return null;
 
-                        // See if employee has data for this group
-                        const groupData = viewingEmployee.dynamicFields?.[group.id] || {};
-                        
                         return (
                           <div key={group.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5 dark:border-slate-700 dark:bg-slate-900/50">
                             <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">{group.label}</h3>
                             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                               {groupFields.map(field => {
-                                const val = groupData[field.id];
+                                const val = getEmployeeGroupedDynamicFieldValue(viewingEmployee, group.id, field.id);
                                 // Check if the field is from the 'salaries' group to add currency symbol
                                 const isCurrency = group.id === 'salaries' || field.label.toLowerCase().includes('salary') || field.label.toLowerCase().includes('allowance');
                                 const displayVal = (val === undefined || val === null || val === '') 
@@ -6637,7 +6641,7 @@ export default function EmployeesPage() {
                             ?.filter(f => f.isEnabled !== false)
                             .sort((a, b) => (a.order || 0) - (b.order || 0))
                             .map(field => {
-                              const value = (viewingEmployee as any)[field.id] ?? viewingEmployee.dynamicFields?.[field.id];
+                              const value = getEmployeeGroupedDynamicFieldValue(viewingEmployee, group.id, field.id);
                               return (
                                 <div key={field.id}>
                                   <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{field.label}</label>

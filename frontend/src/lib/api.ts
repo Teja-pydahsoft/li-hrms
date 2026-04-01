@@ -304,6 +304,8 @@ export interface PayrollConfig {
   /** Header of the output column whose value is used as total days in month for statutory proration. */
   statutoryProrateTotalDaysColumnHeader?: string;
   updatedAt?: string;
+  /** From Employee Application Form "Salaries" group — use as paysheet field paths employee.salaries.<fieldId> */
+  employeeSalaryFieldOptions?: { value: string; label: string }[];
 }
 
 export interface StatutoryESI {
@@ -647,6 +649,8 @@ export interface Employee {
   doj?: string;
   dob?: string;
   gross_salary?: number;
+  /** Salary components (Salaries form group), canonical — not dynamicFields.salaries */
+  salaries?: Record<string, unknown>;
   gender?: string;
   marital_status?: string;
   blood_group?: string;

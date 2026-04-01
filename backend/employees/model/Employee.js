@@ -53,6 +53,11 @@ const employeeSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    /** Salary components (form "Salaries" group): fieldId -> amount; canonical store — not dynamicFields.salaries */
+    salaries: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     salary_mode: {
       type: String,
       enum: ['Bank', 'Cash'],

@@ -223,11 +223,11 @@ const generateEmployeeUpdateTemplateData = async (selectedFieldIds) => {
                 let val;
                 if (id === 'proposedSalary') {
                     val = base.gross_salary;
+                } else if (groupId === 'salaries') {
+                    val = base.salaries && typeof base.salaries === 'object' ? base.salaries[id] : undefined;
                 } else if (groupId && dynamic[groupId] && dynamic[groupId][id] !== undefined) {
-                    // Pull from group (e.g. dynamicFields.salaries.BASIC)
                     val = dynamic[groupId][id];
                 } else {
-                    // Fallback to flat properties (for other core fields or old data)
                     val = base[id] !== undefined ? base[id] : dynamic[id];
                 }
 
@@ -406,21 +406,25 @@ const processEmployeeUpdateUpload = async (fileBuffer) => {
                         doc.set(persistAs, value);
                     } else {
                         const groupId = fieldIdToGroupId[fieldId];
-                        if (!doc.dynamicFields || typeof doc.dynamicFields !== 'object') {
-                            doc.dynamicFields = {};
-                        }
-                        
-                        if (groupId) {
-                            // Nest under group (e.g. dynamicFields.salaries.BASIC)
-                            if (!doc.dynamicFields[groupId] || typeof doc.dynamicFields[groupId] !== 'object') {
-                                doc.dynamicFields[groupId] = {};
-                            }
-                            doc.dynamicFields[groupId][persistAs] = value;
+                        if (groupId === 'salaries') {
+                            const prev = doc.salaries && typeof doc.salaries === 'object' ? { ...doc.salaries } : {};
+                            prev[persistAs] = value;
+                            doc.set('salaries', prev);
+                            doc.markModified('salaries');
                         } else {
-                            // Flat storage for other dynamic fields
-                            doc.dynamicFields[persistAs] = value;
+                            if (!doc.dynamicFields || typeof doc.dynamicFields !== 'object') {
+                                doc.dynamicFields = {};
+                            }
+                            if (groupId) {
+                                if (!doc.dynamicFields[groupId] || typeof doc.dynamicFields[groupId] !== 'object') {
+                                    doc.dynamicFields[groupId] = {};
+                                }
+                                doc.dynamicFields[groupId][persistAs] = value;
+                            } else {
+                                doc.dynamicFields[persistAs] = value;
+                            }
+                            doc.markModified('dynamicFields');
                         }
-                        doc.markModified('dynamicFields');
                     }
                 });
 
