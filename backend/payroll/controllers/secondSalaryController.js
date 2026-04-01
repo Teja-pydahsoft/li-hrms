@@ -8,6 +8,7 @@ const { buildSecondSalaryExcelRowsNormalized } = require('../utils/secondSalaryP
 const {
     normalizeOutputColumns,
     buildSecondSalaryPaysheetFromOutputColumns,
+    getStatutoryCodesForPaysheetExpansion,
 } = require('../utils/paysheetBundleExport');
 
 /**
@@ -356,7 +357,7 @@ exports.exportSecondSalaryExcel = async (req, res) => {
             .populate({
                 path: 'employeeId',
                 select:
-                    'employee_name first_name last_name emp_no department_id division_id designation_id gross_salary location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number',
+                    'employee_name first_name last_name emp_no department_id division_id designation_id gross_salary second_salary salaries location bank_account_no bank_name bank_place ifsc_code salary_mode doj pf_number esi_number applyPF applyESI applyProfessionTax',
                 populate: [
                     { path: 'department_id', select: 'name' },
                     { path: 'division_id', select: 'name' },
@@ -378,7 +379,8 @@ exports.exportSecondSalaryExcel = async (req, res) => {
 
         let rows;
         if (outputColumnsNormalized.length > 0) {
-            const built = buildSecondSalaryPaysheetFromOutputColumns(records, outputColumnsNormalized);
+            const statutoryCodes = await getStatutoryCodesForPaysheetExpansion();
+            const built = buildSecondSalaryPaysheetFromOutputColumns(records, outputColumnsNormalized, statutoryCodes);
             if (built.rows.length > 0) {
                 rows = built.rows;
             }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api, Department } from '@/lib/api';
 import { toast } from 'react-toastify';
 import { ChevronLeft, ChevronRight, FileSpreadsheet, Search, Calendar, Building2, Download } from 'lucide-react';
@@ -19,6 +19,7 @@ function formatCell(value: unknown): string {
 }
 
 export default function PaysheetPage() {
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [headers, setHeaders] = useState<string[]>([]);
@@ -168,46 +169,76 @@ export default function PaysheetPage() {
     }
   };
 
+  const scrollTableHorizontally = (direction: 'left' | 'right') => {
+    if (!tableScrollRef.current) return;
+    const amount = Math.max(280, Math.floor(tableScrollRef.current.clientWidth * 0.6));
+    tableScrollRef.current.scrollBy({
+      left: direction === 'left' ? -amount : amount,
+      behavior: 'smooth',
+    });
+  };
+
   const isLoading = loadingExisting && rows.length === 0;
   const isEmpty = !loadingExisting && headers.length === 0 && rows.length === 0;
   const hasData = headers.length > 0 && rows.length > 0;
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950/50 -mx-4 w-[calc(100%+2rem)] sm:-mx-5 sm:w-[calc(100%+2.5rem)] lg:-mx-6 lg:w-[calc(100%+3rem)] px-4 sm:px-5 lg:px-6">
-      {/* Page header */}
-      <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 py-2">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400">
-              <FileSpreadsheet className="h-5 w-5" />
+    <div className="flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950/50">
+      <div className="sticky top-0 z-40 bg-slate-50 dark:bg-slate-950/95">
+        {/* Page header */}
+        <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/95">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 py-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400">
+                <FileSpreadsheet className="h-5 w-5" />
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold text-slate-900 dark:text-white tracking-tight">
+                  Paysheet
+                </h1>
+                <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+                  {paysheetKind === 'second_salary'
+                    ? 'Saved 2nd salary by month. With Payroll Configuration output columns set, columns match regular paysheet; otherwise legacy 2nd-salary layout.'
+                    : 'Payroll records by month. Columns follow Payroll Configuration.'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold text-slate-900 dark:text-white tracking-tight">
-                Paysheet
-              </h1>
-              <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-                {paysheetKind === 'second_salary'
-                  ? 'Saved 2nd salary by month. With Payroll Configuration output columns set, columns match regular paysheet; otherwise legacy 2nd-salary layout.'
-                  : 'Payroll records by month. Columns follow Payroll Configuration.'}
-              </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => scrollTableHorizontally('left')}
+                className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                aria-label="Scroll table left"
+                title="Scroll table left"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollTableHorizontally('right')}
+                className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                aria-label="Scroll table right"
+                title="Scroll table right"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={exportPaysheetBundle}
+                disabled={!selectedMonth || exportingBundle}
+                className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-violet-600 text-white text-sm font-semibold shadow-sm hover:bg-violet-700 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                title="Excel with Regular, 2nd salary, and Comparison (paired columns + net difference)"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                {exportingBundle ? 'Exporting…' : 'Export bundle'}
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={exportPaysheetBundle}
-            disabled={!selectedMonth || exportingBundle}
-            className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-violet-600 text-white text-sm font-semibold shadow-sm hover:bg-violet-700 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-            title="Excel with Regular, 2nd salary, and Comparison (paired columns + net difference)"
-          >
-            <Download className="h-4 w-4 shrink-0" />
-            {exportingBundle ? 'Exporting…' : 'Export bundle'}
-          </button>
         </div>
-      </div>
 
-      {/* Filters bar */}
-      <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/30 py-2">
-        <div className="flex flex-wrap items-end gap-4">
+        {/* Filters bar */}
+        <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/30 py-2">
+          <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
               <Calendar className="h-3.5 w-3.5" />
@@ -287,6 +318,7 @@ export default function PaysheetPage() {
           >
             {loading ? 'Calculating…' : 'Load paysheet'}
           </button>
+          </div>
         </div>
       </div>
 
@@ -330,14 +362,14 @@ export default function PaysheetPage() {
             </div>
 
             {/* Table wrapper: scrollable, full width */}
-            <div className="flex-1 min-h-0 overflow-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-800/90 shadow-sm">
+            <div ref={tableScrollRef} className="flex-1 min-h-0 overflow-auto">
+              <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
+                <thead>
                   <tr>
                     {headers.map((h, i) => (
                       <th
                         key={i}
-                        className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap border-b border-slate-200 dark:border-slate-700 border-r border-slate-200 dark:border-slate-700 last:border-r-0"
+                        className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800/95 shadow-sm text-left px-4 py-3 font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap border-b border-slate-200 dark:border-slate-700 border-r border-slate-200 dark:border-slate-700 last:border-r-0"
                       >
                         {h}
                       </th>

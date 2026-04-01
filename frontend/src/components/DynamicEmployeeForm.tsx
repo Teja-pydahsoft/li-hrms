@@ -251,7 +251,10 @@ export default function DynamicEmployeeForm({
     const fieldId = arrayIndex !== undefined ? `${actualFieldId}[${arrayIndex}]` : actualFieldId;
     const value = arrayIndex !== undefined
       ? formData[actualFieldId]?.[arrayIndex]
-      : formData[actualFieldId];
+      : groupId === 'salaries'
+        ? ((formData.salaries && typeof formData.salaries === 'object' ? formData.salaries[field.id] : undefined) ??
+            formData[actualFieldId])
+        : formData[actualFieldId];
     const error = errors[actualFieldId] || errors[fieldId];
     const fieldKey = `${groupId}-${field.id}${arrayIndex !== undefined ? `-${arrayIndex}` : ''}`;
     const displayLabel =
@@ -260,6 +263,20 @@ export default function DynamicEmployeeForm({
       field.id === 'proposedSalary' && formData?.gross_salary !== undefined
         ? 'Gross Salary'
         : field.label;
+
+    const localHandleFieldChange = (id: string, v: any) => {
+      if (groupId === 'salaries' && arrayIndex === undefined) {
+        onChange({
+          ...formData,
+          salaries: {
+            ...(formData.salaries && typeof formData.salaries === 'object' ? formData.salaries : {}),
+            [id]: v,
+          },
+        });
+        return;
+      }
+      handleFieldChange(id, v);
+    };
 
   // Special handling for division_id, department_id, designation_id and employee_group_id
     if (field.id === 'division_id') {
@@ -277,7 +294,7 @@ export default function DynamicEmployeeForm({
           </label>
           <select
             value={selectedDivisionId}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode}
             className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -341,7 +358,7 @@ export default function DynamicEmployeeForm({
           </label>
           <select
             value={selectedDepartmentId}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode || (divisions.length > 0 && !formData.division_id)}
             className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -379,7 +396,7 @@ export default function DynamicEmployeeForm({
           </label>
           <select
             value={selectedDesignationId}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode}
             className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -413,7 +430,7 @@ export default function DynamicEmployeeForm({
           </label>
           <select
             value={selectedGroupId}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
             required={field.isRequired}
             disabled={isViewMode}
             className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -445,7 +462,7 @@ export default function DynamicEmployeeForm({
               value={value || ''}
               onChange={(e) => {
                 const newValue = field.id === 'emp_no' ? e.target.value.toUpperCase() : e.target.value;
-                handleFieldChange(field.id, newValue);
+                localHandleFieldChange(field.id, newValue);
               }}
               placeholder={field.placeholder}
               required={field.isRequired}
@@ -466,7 +483,7 @@ export default function DynamicEmployeeForm({
             </label>
             <textarea
               value={value || ''}
-              onChange={(e) => handleFieldChange(actualFieldId, e.target.value)}
+              onChange={(e) => localHandleFieldChange(actualFieldId, e.target.value)}
               placeholder={field.placeholder}
               required={field.isRequired}
               rows={3}
@@ -488,7 +505,7 @@ export default function DynamicEmployeeForm({
             <input
               type="number"
               value={value || ''}
-              onChange={(e) => handleFieldChange(actualFieldId, parseFloat(e.target.value) || 0)}
+              onChange={(e) => localHandleFieldChange(actualFieldId, parseFloat(e.target.value) || 0)}
               onWheel={(e) => e.currentTarget.blur()}
               placeholder={field.placeholder}
               required={field.isRequired}
@@ -512,7 +529,7 @@ export default function DynamicEmployeeForm({
             <input
               type="date"
               value={value ? new Date(value).toISOString().split('T')[0] : ''}
-              onChange={(e) => handleFieldChange(actualFieldId, e.target.value)}
+              onChange={(e) => localHandleFieldChange(actualFieldId, e.target.value)}
               required={field.isRequired}
               className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
                 }`}
@@ -529,7 +546,7 @@ export default function DynamicEmployeeForm({
             </label>
             <select
               value={value || ''}
-              onChange={(e) => handleFieldChange(field.id, e.target.value || null)}
+              onChange={(e) => localHandleFieldChange(field.id, e.target.value || null)}
               required={field.isRequired}
               className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
                 }`}
@@ -701,7 +718,7 @@ export default function DynamicEmployeeForm({
             <input
               type="email"
               value={value || ''}
-              onChange={(e) => handleFieldChange(field.id, e.target.value)}
+              onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
               placeholder={field.placeholder || 'example@email.com'}
               required={field.isRequired}
               className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -720,7 +737,7 @@ export default function DynamicEmployeeForm({
             <input
               type="tel"
               value={value || ''}
-              onChange={(e) => handleFieldChange(field.id, e.target.value)}
+              onChange={(e) => localHandleFieldChange(field.id, e.target.value)}
               placeholder={field.placeholder || '+91 1234567890'}
               required={field.isRequired}
               className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-all focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${error ? 'border-red-300 dark:border-red-700' : 'border-slate-200 bg-white'
@@ -742,7 +759,7 @@ export default function DynamicEmployeeForm({
                 const file = e.target.files?.[0];
                 if (file) {
                   // Store file name for now, you can enhance this to upload and store file URL
-                  handleFieldChange(field.id, file.name);
+                  localHandleFieldChange(field.id, file.name);
                 }
               }}
               required={field.isRequired}
@@ -778,7 +795,7 @@ export default function DynamicEmployeeForm({
                         } else {
                           newValue = newValue.filter((v) => v !== opt.value);
                         }
-                        handleFieldChange(field.id, newValue);
+                        localHandleFieldChange(field.id, newValue);
                       }}
                       disabled={isViewMode}
                       className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500"
@@ -823,7 +840,7 @@ export default function DynamicEmployeeForm({
                           type={nestedField.type}
                           value={nestedValue || ''}
                           onChange={(e) => {
-                            handleFieldChange(field.id, {
+                            localHandleFieldChange(field.id, {
                               ...objectValue,
                               [nestedField.id]: e.target.value,
                             });
@@ -838,7 +855,7 @@ export default function DynamicEmployeeForm({
                         <textarea
                           value={nestedValue || ''}
                           onChange={(e) => {
-                            handleFieldChange(field.id, {
+                            localHandleFieldChange(field.id, {
                               ...objectValue,
                               [nestedField.id]: e.target.value,
                             });
@@ -855,7 +872,7 @@ export default function DynamicEmployeeForm({
                           type="number"
                           value={nestedValue || ''}
                           onChange={(e) => {
-                            handleFieldChange(field.id, {
+                            localHandleFieldChange(field.id, {
                               ...objectValue,
                               [nestedField.id]: parseFloat(e.target.value) || 0,
                             });
@@ -874,7 +891,7 @@ export default function DynamicEmployeeForm({
                           type="date"
                           value={nestedValue ? new Date(nestedValue).toISOString().split('T')[0] : ''}
                           onChange={(e) => {
-                            handleFieldChange(field.id, {
+                            localHandleFieldChange(field.id, {
                               ...objectValue,
                               [nestedField.id]: e.target.value,
                             });
@@ -887,7 +904,7 @@ export default function DynamicEmployeeForm({
                         <select
                           value={nestedValue || ''}
                           onChange={(e) => {
-                            handleFieldChange(field.id, {
+                            localHandleFieldChange(field.id, {
                               ...objectValue,
                               [nestedField.id]: e.target.value || null,
                             });
@@ -940,7 +957,7 @@ export default function DynamicEmployeeForm({
                 onChange={(e) => {
                   const id = e.target.value;
                   if (!id || selectedUserIds.includes(id) || selectedUserIds.length >= maxUsers) return;
-                  handleFieldChange(field.id, [...selectedUserIds, id]);
+                  localHandleFieldChange(field.id, [...selectedUserIds, id]);
                   e.target.value = '';
                 }}
                 disabled={isViewMode || !canAddMore}
@@ -966,7 +983,7 @@ export default function DynamicEmployeeForm({
                       {!isViewMode && (
                         <button
                           type="button"
-                          onClick={() => handleFieldChange(field.id, selectedUserIds.filter((id) => id !== user._id))}
+                          onClick={() => localHandleFieldChange(field.id, selectedUserIds.filter((id) => id !== user._id))}
                           className="rounded p-0.5 hover:bg-green-200 dark:hover:bg-green-800"
                           aria-label={`Remove ${user.name}`}
                         >
@@ -1025,7 +1042,7 @@ export default function DynamicEmployeeForm({
                         } else {
                           newValue = newValue.filter((id) => id !== user._id);
                         }
-                        handleFieldChange(field.id, newValue);
+                        localHandleFieldChange(field.id, newValue);
                       }}
                       disabled={!canSelect || isViewMode}
                       className="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500 disabled:opacity-50"

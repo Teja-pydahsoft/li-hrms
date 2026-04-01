@@ -137,6 +137,7 @@ export default function PayRegisterPage() {
 
   // Department Batch Status State (Map of DeptID -> Batch Info)
   const [departmentBatchStatus, setDepartmentBatchStatus] = useState<Map<string, { status: string, permissionGranted: boolean, batchId: string }>>(new Map());
+  const [consumedPermissionKeys, setConsumedPermissionKeys] = useState<Set<string>>(new Set());
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
@@ -280,6 +281,11 @@ export default function PayRegisterPage() {
   const month = currentDate.getMonth() + 1;
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
   const daysInMonth = new Date(year, month, 0).getDate();
+  const getPermissionKey = (deptId: string) => `${monthStr}:${deptId}`;
+  const hasEffectivePermission = (
+    deptId: string,
+    batchInfo?: { status: string; permissionGranted: boolean; batchId: string } | null
+  ) => !!batchInfo?.permissionGranted && !consumedPermissionKeys.has(getPermissionKey(deptId));
 
   // Use the configured range from the backend if available, otherwise compute calendar month
   const displayDays = payrollStartDate && payrollEndDate
@@ -889,8 +895,39 @@ export default function PayRegisterPage() {
     router.push(`/superadmin/payroll-transactions?employeeId=${employee._id}&month=${monthStr}`);
   };
 
+  const consumeDepartmentPermission = (deptId?: string) => {
+    if (!deptId) return;
+    setConsumedPermissionKeys((prev) => {
+      const next = new Set(prev);
+      next.add(getPermissionKey(deptId));
+      return next;
+    });
+  };
+
   const handleCalculatePayroll = async (employee: Employee) => {
     try {
+      const deptId = employee && employee.department_id
+        ? (typeof employee.department_id === 'object' ? employee.department_id._id : employee.department_id)
+        : '';
+      const batchInfo = deptId ? departmentBatchStatus.get(deptId) : null;
+      const batchStatus = batchInfo?.status || 'pending';
+      const hasPermission = deptId ? hasEffectivePermission(deptId, batchInfo || null) : false;
+      const isLocked = batchStatus === 'freeze' || batchStatus === 'complete' || (batchStatus === 'approved' && !hasPermission);
+
+      if (isLocked) {
+        if (batchStatus === 'approved' && batchInfo?.batchId) {
+          setPendingBatchId(batchInfo.batchId);
+          setShowPermissionModal(true);
+          return;
+        }
+        Swal.fire({
+          icon: 'info',
+          title: 'Payroll Locked',
+          text: `Payroll is ${batchStatus}. Recalculation is not allowed.`,
+        });
+        return;
+      }
+
       const employeeId = typeof employee === 'object' ? employee._id : employee;
       const params = payrollStrategy === 'legacy' ? '?strategy=legacy' : payrollStrategy === 'dynamic' ? '?strategy=dynamic' : '?strategy=new';
       setCalculatingId(employeeId);
@@ -912,6 +949,7 @@ export default function PayRegisterPage() {
       const response = await api.calculatePayroll(empIdStr, monthStr, params, employeeArrears, employeeDeductions);
 
       if (response && response.data && response.data.batchId) {
+        consumeDepartmentPermission(deptId);
         Swal.fire({
           icon: 'success',
           title: 'Calculated',
@@ -926,6 +964,7 @@ export default function PayRegisterPage() {
           router.push(`/superadmin/payments/${response.data.batchId}`);
         }, 1000);
       } else {
+        consumeDepartmentPermission(deptId);
         Swal.fire({
           icon: 'success',
           title: 'Success',
@@ -1053,6 +1092,42 @@ export default function PayRegisterPage() {
   };
 
   const handleCalculatePayrollForAll = async () => {
+    const getScopedDepartmentIds = (): string[] => {
+      if (selectedDepartment) return [selectedDepartment];
+
+      if (selectedDivision && selectedDivision !== 'all') {
+        const currentDivision = divisions.find((d) => d._id === selectedDivision);
+        return Array.from(
+          new Set(
+            (currentDivision?.departments || [])
+              .map((d: any) => (typeof d === 'string' ? d : d?._id))
+              .filter(Boolean)
+          )
+        );
+      }
+
+      return departments.map((d: any) => d?._id).filter(Boolean);
+    };
+
+    const hasLockedBatchInScope = (): boolean => {
+      const scopedDeptIds = getScopedDepartmentIds();
+      return scopedDeptIds.some((deptId) => {
+        const batchInfo = departmentBatchStatus.get(deptId);
+        const status = batchInfo?.status || 'pending';
+        const permissionGranted = hasEffectivePermission(deptId, batchInfo || null);
+        return status === 'freeze' || status === 'complete' || (status === 'approved' && !permissionGranted);
+      });
+    };
+
+    if (!selectedDepartment && hasLockedBatchInScope()) {
+      Swal.fire({
+        icon: 'info',
+        title: 'Department Selection Required',
+        text: 'Some departments are locked/approved. Select a department to request permission or recalculate.',
+      });
+      return;
+    }
+
     if (paginationTotal <= 0 && (!payRegisters || payRegisters.length === 0)) {
       Swal.fire({
         icon: 'info',
@@ -1099,6 +1174,9 @@ export default function PayRegisterPage() {
 
       if (response.success) {
         if (response.status === 'queued' || response.jobId) {
+          if (selectedDepartment) {
+            consumeDepartmentPermission(selectedDepartment);
+          }
           setCalculatingJobId(response.jobId || null);
           Swal.fire({
             icon: 'info',
@@ -1119,6 +1197,9 @@ export default function PayRegisterPage() {
         }
 
         if (failCount === 0) {
+          if (selectedDepartment) {
+            consumeDepartmentPermission(selectedDepartment);
+          }
           Swal.fire({
             icon: 'success',
             title: 'Success',
@@ -1458,7 +1539,8 @@ export default function PayRegisterPage() {
               if (selectedDepartment) {
                 const batchInfo = departmentBatchStatus.get(selectedDepartment);
                 const status = batchInfo?.status || 'pending';
-                const permissionGranted = batchInfo?.permissionGranted || false;
+                const permissionGranted = hasEffectivePermission(selectedDepartment, batchInfo || null);
+                const hasExistingBatchForMonth = Boolean(batchInfo?.batchId);
 
                 if (status === 'freeze' || status === 'complete') {
                   return exportExcelButton;
@@ -1496,11 +1578,47 @@ export default function PayRegisterPage() {
                       disabled={bulkCalculating || exportingExcel}
                       className="h-9 px-4 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-xl shadow-sm disabled:opacity-50 transition-all"
                     >
-                      {bulkCalculating ? 'Calculating...' : 'Recalculate Payroll'}
+                      {bulkCalculating
+                        ? 'Calculating...'
+                        : hasExistingBatchForMonth
+                          ? 'Recalculate Payroll'
+                          : 'Calculate Payroll'}
                     </button>
                     {exportExcelButton}
                   </>
                 );
+              }
+
+              if (selectedDivision && selectedDivision !== 'all') {
+                const currentDivision = divisions.find((d) => d._id === selectedDivision);
+                const scopedDeptIds = Array.from(
+                  new Set(
+                    (currentDivision?.departments || [])
+                      .map((d: any) => (typeof d === 'string' ? d : d?._id))
+                      .filter(Boolean)
+                  )
+                );
+                const hasLockedInDivision = scopedDeptIds.some((deptId) => {
+                  const batchInfo = departmentBatchStatus.get(deptId);
+                  const status = batchInfo?.status || 'pending';
+                  const permissionGranted = hasEffectivePermission(deptId, batchInfo || null);
+                  return status === 'freeze' || status === 'complete' || (status === 'approved' && !permissionGranted);
+                });
+
+                if (hasLockedInDivision) {
+                  return (
+                    <>
+                      <button
+                        disabled
+                        className="h-9 px-4 bg-amber-500/80 text-white text-xs font-semibold rounded-xl shadow-sm cursor-not-allowed"
+                        title="Select department to request permission"
+                      >
+                        Select Department
+                      </button>
+                      {exportExcelButton}
+                    </>
+                  );
+                }
               }
 
               return (
@@ -2053,9 +2171,9 @@ export default function PayRegisterPage() {
 
                       const batchInfo = deptId ? departmentBatchStatus.get(deptId) : null;
                       const batchStatus = batchInfo?.status || 'pending';
-                      const hasPermission = batchInfo?.permissionGranted || false;
+                      const hasPermission = deptId ? hasEffectivePermission(deptId, batchInfo || null) : false;
 
-                      const isLocked = (['approved', 'freeze', 'complete'].includes(batchStatus) && !hasPermission);
+                      const isLocked = batchStatus === 'freeze' || batchStatus === 'complete' || (batchStatus === 'approved' && !hasPermission);
                       const isFrozenOrComplete = ['freeze', 'complete'].includes(batchStatus);
 
                       return (
@@ -2078,6 +2196,37 @@ export default function PayRegisterPage() {
                                 </div>
                                 <div className="flex gap-2">
                                   {!pr.payrollId ? (
+                                    isLocked ? (
+                                      batchStatus === 'approved' ? (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (batchInfo?.batchId) {
+                                              setPendingBatchId(batchInfo.batchId);
+                                              setShowPermissionModal(true);
+                                            } else {
+                                              Swal.fire({
+                                                icon: 'error',
+                                                title: 'Error',
+                                                text: 'Batch ID not found',
+                                              });
+                                            }
+                                          }}
+                                          className="rounded-md px-2 py-1 text-[9px] font-semibold text-white shadow-sm transition-all hover:shadow-md bg-amber-500 hover:bg-amber-600"
+                                          title="Request permission to recalculate"
+                                        >
+                                          Permission
+                                        </button>
+                                      ) : (
+                                        <button
+                                          disabled
+                                          className="rounded-md px-2 py-1 text-[9px] font-semibold text-slate-500 bg-slate-200 dark:bg-slate-700 dark:text-slate-300 cursor-not-allowed"
+                                          title={`Payroll ${batchStatus}`}
+                                        >
+                                          Locked
+                                        </button>
+                                      )
+                                    ) : (
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -2088,6 +2237,7 @@ export default function PayRegisterPage() {
                                     >
                                       Calculate
                                     </button>
+                                    )
                                   ) : (
                                     <Link
                                       href={`/superadmin/payroll-transactions?employeeId=${employeeId}&month=${monthStr}`}

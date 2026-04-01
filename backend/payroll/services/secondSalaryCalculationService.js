@@ -11,6 +11,7 @@ const secondSalaryDeductionService = require('./secondSalaryDeductionService');
 const secondSalaryLoanAdvanceService = require('./secondSalaryLoanAdvanceService');
 const SecondSalaryBatchService = require('./secondSalaryBatchService');
 const allowanceDeductionResolverService = require('./allowanceDeductionResolverService');
+const statutoryDeductionService = require('./statutoryDeductionService');
 
 /**
  * Normalize overrides (same logic as regular payroll)
@@ -159,9 +160,24 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
             month
         });
 
-        if (existingBatch && ['approved', 'freeze', 'complete'].includes(existingBatch.status)) {
-            // Recalculation permission logic could be added here if needed
-            // For now, we follow the same pattern
+        if (existingBatch) {
+            if (['freeze', 'complete'].includes(existingBatch.status)) {
+                const error = new Error(`2nd Salary payroll for ${month} is ${existingBatch.status}. Recalculation is not allowed.`);
+                error.code = 'BATCH_LOCKED';
+                error.batchId = existingBatch._id;
+                throw error;
+            }
+            if (existingBatch.status === 'approved') {
+                if (!existingBatch.hasValidRecalculationPermission()) {
+                    const error = new Error(`2nd Salary payroll for ${month} is approved. Recalculation requires permission.`);
+                    error.code = 'BATCH_LOCKED';
+                    error.batchId = existingBatch._id;
+                    throw error;
+                }
+                // Single-use permission
+                existingBatch.consumeRecalculationPermission?.();
+                await existingBatch.save();
+            }
         }
 
         console.log(`\n========== SECOND SALARY CALCULATION START (${employee.emp_no}) ==========`);
@@ -318,6 +334,20 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
         const totalOtherDeductions = secondSalaryDeductionService.calculateTotalOtherDeductions(mergedDeductions);
         totalDeductions += totalOtherDeductions;
 
+        const grossBeforeStatutory = grossAmountSalary + incentiveAmount;
+        const statutoryResult = await statutoryDeductionService.calculateStatutoryDeductions({
+            basicPay,
+            grossSalary: grossBeforeStatutory,
+            earnedSalary,
+            dearnessAllowance: 0,
+            employee,
+            paidDays: totalPaidDays,
+            totalDaysInMonth: modifiedAttendanceSummary.totalDaysInMonth,
+            allSalaries: {},
+        });
+        const statutoryTotal = statutoryResult.totalEmployeeShare || 0;
+        totalDeductions += statutoryTotal;
+
         // 6. Loans & Advances
         // We deduct them for netSalary calculation, but they are NOT part of "Total Deductions" summary
         const loanAdvanceResult = await secondSalaryLoanAdvanceService.calculateLoanAdvance(
@@ -415,6 +445,17 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
         record.set('deductions.leaveDeductionBreakdown', leaveDeductionResult.breakdown);
         record.set('deductions.totalOtherDeductions', totalOtherDeductions);
         record.set('deductions.otherDeductions', mergedDeductions);
+        record.set(
+            'deductions.statutoryDeductions',
+            (statutoryResult.breakdown || []).map((s) => ({
+                name: s.name,
+                code: s.code,
+                employeeAmount: s.employeeAmount,
+                employerAmount: s.employerAmount,
+            }))
+        );
+        record.set('deductions.statutoryCumulative', statutoryTotal);
+        record.set('deductions.totalStatutoryEmployee', statutoryTotal);
         record.set('deductions.totalDeductions', totalDeductions);
 
         // Loans
@@ -458,9 +499,36 @@ async function calculateSecondSalaryForPayRegister(employeeId, month, userId, st
     if (useDynamic) {
         const PayrollConfiguration = require('../model/PayrollConfiguration');
         const payrollCalculationFromOutputColumnsService = require('./payrollCalculationFromOutputColumnsService');
+        const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+        const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
         const config = await PayrollConfiguration.get();
         const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
         if (outputColumns.length > 0) {
+            let arrearsSettlements = [];
+            let deductionSettlements = [];
+            try {
+                const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
+                if (pendingArrears && pendingArrears.length > 0) {
+                    arrearsSettlements = pendingArrears.map((ar) => ({
+                        arrearId: ar.id,
+                        amount: ar.remainingAmount || 0,
+                    }));
+                }
+            } catch (err) {
+                console.error(`[SecondSalary] Failed fetching pending arrears for ${employeeId}:`, err.message);
+            }
+            try {
+                const pendingDeductions = await DeductionPayrollIntegrationService.getPendingDeductionsForPayroll(employeeId);
+                if (pendingDeductions && pendingDeductions.length > 0) {
+                    deductionSettlements = pendingDeductions.map((d) => ({
+                        deductionId: d.id,
+                        amount: d.remainingAmount || 0,
+                    }));
+                }
+            } catch (err) {
+                console.error(`[SecondSalary] Failed fetching pending deductions for ${employeeId}:`, err.message);
+            }
+
             return payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
                 employeeId.toString(),
                 month,
@@ -468,8 +536,8 @@ async function calculateSecondSalaryForPayRegister(employeeId, month, userId, st
                 {
                     secondSalaryBasis: true,
                     source: 'payregister',
-                    arrearsSettlements: [],
-                    deductionSettlements: [],
+                    arrearsSettlements,
+                    deductionSettlements,
                 }
             );
         }

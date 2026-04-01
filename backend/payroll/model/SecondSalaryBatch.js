@@ -196,6 +196,16 @@ secondSalaryBatchSchema.methods.hasValidRecalculationPermission = function () {
     return true;
 };
 
+// Instance method to consume recalculation permission (single-use)
+secondSalaryBatchSchema.methods.consumeRecalculationPermission = function () {
+    if (!this.recalculationPermission) return;
+    this.recalculationPermission.granted = false;
+    this.recalculationPermission.grantedBy = null;
+    this.recalculationPermission.grantedAt = null;
+    this.recalculationPermission.expiresAt = null;
+    this.recalculationPermission.reason = null;
+};
+
 // Pre-save hook to update history
 secondSalaryBatchSchema.pre('save', async function () {
     if (this.isNew && this.statusHistory.length === 0) {

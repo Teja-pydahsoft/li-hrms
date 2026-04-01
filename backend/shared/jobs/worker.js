@@ -26,7 +26,10 @@ const startWorkers = () => {
                 for (let i = 0; i < batch.employeePayrolls.length; i++) {
                     const payroll = batch.employeePayrolls[i];
                     const empId = payroll.employeeId?._id || payroll.employeeId;
-                    await PayrollCalculationService.calculatePayrollNew(empId, batch.month, userId, { source: 'payregister' });
+                    await PayrollCalculationService.calculatePayrollNew(empId, batch.month, userId, {
+                        source: 'payregister',
+                        consumeRecalculationPermission: false
+                    });
 
                     // Update progress
                     await job.updateProgress({
@@ -34,6 +37,11 @@ const startWorkers = () => {
                         total: batch.employeePayrolls.length,
                         percentage: Math.round(((i + 1) / batch.employeePayrolls.length) * 100)
                     });
+                }
+
+                if (['approved', 'freeze', 'complete'].includes(batch.status) && batch.hasValidRecalculationPermission()) {
+                    batch.consumeRecalculationPermission?.();
+                    await batch.save();
                 }
 
                 console.log(`[Worker] Batch ${batchId} recalculation complete`);
@@ -173,7 +181,7 @@ const startWorkers = () => {
                                 employee._id.toString(),
                                 month,
                                 userId,
-                                opts,
+                                { ...opts, consumeRecalculationPermission: false },
                                 sharedContext
                             );
                         }
@@ -197,6 +205,11 @@ const startWorkers = () => {
                 // Recalculate totals for all affected batches
                 for (const bId of batchIds) {
                     await PayrollBatchService.recalculateBatchTotals(bId);
+                    const batchDoc = await require('../../payroll/model/PayrollBatch').findById(bId);
+                    if (batchDoc && ['approved', 'freeze', 'complete'].includes(batchDoc.status) && batchDoc.hasValidRecalculationPermission()) {
+                        batchDoc.consumeRecalculationPermission?.();
+                        await batchDoc.save();
+                    }
                 }
                 console.log(`[Worker] Bulk regular payroll calculation complete`);
 

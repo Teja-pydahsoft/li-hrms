@@ -21,6 +21,7 @@ const PERMANENT_FIELDS = [
   'doj',
   'dob',
   'gross_salary',
+  'salaries',
   'gender',
   'marital_status',
   'blood_group',

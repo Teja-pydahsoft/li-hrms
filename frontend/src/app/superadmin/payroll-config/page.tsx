@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api, PayrollConfig, PayrollConfigStep, PayrollOutputColumn, PayrollStepComponent, StatutoryDeductionConfig } from '@/lib/api';
 import { toast } from 'react-toastify';
 import { FileSpreadsheet, Save, Plus, Trash2, ChevronDown, ChevronRight, HelpCircle, ArrowRight, GripVertical } from 'lucide-react';
@@ -74,6 +74,20 @@ export default function PayrollConfigPage() {
   const [statutoryConfig, setStatutoryConfig] = useState<StatutoryDeductionConfig | null>(null);
   const [statutoryProratePaidDaysColumnHeader, setStatutoryProratePaidDaysColumnHeader] = useState('');
   const [statutoryProrateTotalDaysColumnHeader, setStatutoryProrateTotalDaysColumnHeader] = useState('');
+
+  const outputFieldOptions = useMemo(() => {
+    const extra = config?.employeeSalaryFieldOptions ?? [];
+    if (extra.length === 0) return OUTPUT_FIELD_OPTIONS;
+    const seen = new Set(OUTPUT_FIELD_OPTIONS.map((o) => o.value));
+    const merged = [...OUTPUT_FIELD_OPTIONS];
+    for (const o of extra) {
+      if (o?.value && !seen.has(o.value)) {
+        seen.add(o.value);
+        merged.push(o);
+      }
+    }
+    return merged;
+  }, [config?.employeeSalaryFieldOptions]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -268,7 +282,7 @@ export default function PayrollConfigPage() {
               Payroll configuration
             </h1>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              The paysheet flow (columns in order) is the payroll flow configuration. Field values (OT pay, attendance deduction, etc.) come from the dedicated functions in the services and controllers—for the respective employee we get those values from them. Add cumulative columns to place allowances/deductions/statutory sums.
+              The paysheet flow (columns in order) is the payroll flow configuration. Field values (OT pay, attendance deduction, etc.) come from the dedicated functions in the services and controllers—for the respective employee we get those values from them. Add cumulative columns to place allowances/deductions/statutory sums. Enabled components from the employee form <strong>Salaries</strong> group appear under the field dropdown as <code className="text-xs">employee.salaries.&lt;field id&gt;</code>.
             </p>
           </div>
           <button
@@ -693,7 +707,7 @@ export default function PayrollConfigPage() {
                             className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
                           >
                             <option value="">Select field...</option>
-                            {OUTPUT_FIELD_OPTIONS.map((opt) => (
+                            {outputFieldOptions.map((opt) => (
                               <option key={opt.value} value={opt.value}>
                                 {opt.label}
                               </option>

@@ -33,6 +33,10 @@ function payrollRecordToPayslipShape(record) {
       date_of_joining: empObj?.doj || '',
       pf_number: empObj?.pf_number || '',
       esi_number: empObj?.esi_number || '',
+      salaries:
+        empObj?.salaries && typeof empObj.salaries === 'object' && !Array.isArray(empObj.salaries)
+          ? { ...empObj.salaries }
+          : {},
     },
     attendance: {
       ...rawAtt,
@@ -82,6 +86,10 @@ function secondSalaryRecordToPayslipShape(record) {
       date_of_joining: empObj?.doj || '',
       pf_number: empObj?.pf_number || '',
       esi_number: empObj?.esi_number || '',
+      salaries:
+        empObj?.salaries && typeof empObj.salaries === 'object' && !Array.isArray(empObj.salaries)
+          ? { ...empObj.salaries }
+          : {},
     },
     attendance: {
       ...rawAtt,
@@ -254,23 +262,43 @@ function netDiffFromRowsDefault(reg, sec) {
   return nSec - nReg;
 }
 
+/** PF / ESI / PT codes for paysheet column expansion when saved records have no statutory breakdown yet */
+async function getStatutoryCodesForPaysheetExpansion() {
+  try {
+    const StatutoryDeductionConfig = require('../model/StatutoryDeductionConfig');
+    const st = await StatutoryDeductionConfig.get();
+    const codes = [];
+    if (st?.pf?.enabled) codes.push('PF');
+    if (st?.esi?.enabled) codes.push('ESI');
+    if (st?.professionTax?.enabled) codes.push('PT');
+    return codes.length ? codes : ['PF', 'ESI', 'PT'];
+  } catch {
+    return ['PF', 'ESI', 'PT'];
+  }
+}
+
 /**
  * Second-salary paysheet / Excel rows aligned with Payroll Configuration outputColumns (same as regular paysheet).
  * @param {Object[]} records - SecondSalaryRecord lean docs with employeeId populated
  * @param {Object[]} outputColumnsNormalized - from normalizeOutputColumns(config.outputColumns)
  * @returns {{ headers: string[], rows: Record<string, unknown>[] }}
  */
-function buildSecondSalaryPaysheetFromOutputColumns(records, outputColumnsNormalized) {
+function buildSecondSalaryPaysheetFromOutputColumns(records, outputColumnsNormalized, extraStatutoryCodes = []) {
   if (!Array.isArray(records) || records.length === 0 || !outputColumnsNormalized.length) {
     return { headers: [], rows: [] };
   }
   const payslips = records.map(secondSalaryRecordToPayslipShape);
   const { allAllowanceNames, allDeductionNames, allStatutoryCodes } = collectBreakdownSetsFromPayslips(payslips);
+  const statutoryMerged = new Set(allStatutoryCodes || []);
+  for (const c of extraStatutoryCodes || []) {
+    const s = String(c || '').trim();
+    if (s) statutoryMerged.add(s);
+  }
   const expandedColumns = outputColumnService.expandOutputColumnsWithBreakdown(
     outputColumnsNormalized,
     allAllowanceNames,
     allDeductionNames,
-    allStatutoryCodes
+    statutoryMerged
   );
   const rows = payslips.map((payslip, index) => {
     const rowData = outputColumnService.buildRowFromOutputColumns(payslip, expandedColumns, index + 1);
@@ -290,6 +318,7 @@ module.exports = {
   normalizeOutputColumns,
   buildOutputColumnRows,
   buildSecondSalaryPaysheetFromOutputColumns,
+  getStatutoryCodesForPaysheetExpansion,
   writeBundleBuffer,
   netDiffFromRowsDefault,
 };

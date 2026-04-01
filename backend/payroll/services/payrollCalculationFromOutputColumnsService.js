@@ -12,6 +12,7 @@ const PayrollBatch = require('../model/PayrollBatch');
 const SecondSalaryRecord = require('../model/SecondSalaryRecord');
 const SecondSalaryBatch = require('../model/SecondSalaryBatch');
 const SecondSalaryBatchService = require('./secondSalaryBatchService');
+const PayrollPayslipSnapshot = require('../model/PayrollPayslipSnapshot');
 const basicPayService = require('./basicPayService');
 const otPayService = require('./otPayService');
 const allowanceService = require('./allowanceService');
@@ -31,6 +32,98 @@ const outputColumnService = require('./outputColumnService');
 const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
 const DeductionIntegrationService = require('./deductionIntegrationService');
 const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
+
+function normalizeOutputColumns(rawColumns) {
+  const raw = Array.isArray(rawColumns) ? rawColumns : [];
+  return raw.map((c, i) => {
+    const doc = c && typeof c.toObject === 'function' ? c.toObject() : (c && typeof c === 'object' ? { ...c } : {});
+    return {
+      header: doc.header != null && String(doc.header).trim() ? String(doc.header).trim() : `Column ${i + 1}`,
+      source: doc.source === 'formula' ? 'formula' : 'field',
+      field: doc.field != null ? String(doc.field) : '',
+      formula: doc.formula != null ? String(doc.formula) : '',
+      order: typeof doc.order === 'number' ? doc.order : i,
+    };
+  });
+}
+
+function statutoryCodesFromConfig(config) {
+  const out = [];
+  if (config?.pf?.enabled) out.push('PF');
+  if (config?.esi?.enabled) out.push('ESI');
+  if (config?.professionTax?.enabled) out.push('PT');
+  return out.length ? out : ['PF', 'ESI', 'PT'];
+}
+
+function buildPaysheetSnapshotData(payslip, outputColumnsNormalized, configDoc) {
+  const allAllowanceNames = new Set();
+  const allDeductionNames = new Set();
+  const allStatutoryCodes = new Set();
+  (payslip?.earnings?.allowances || []).forEach((a) => { if (a && a.name) allAllowanceNames.add(a.name); });
+  (payslip?.deductions?.otherDeductions || []).forEach((d) => { if (d && d.name) allDeductionNames.add(d.name); });
+  (payslip?.deductions?.statutoryDeductions || []).forEach((s) => { if (s && (s.code || s.name)) allStatutoryCodes.add(String(s.code || s.name).trim()); });
+  // If breakdown is missing, still expand using enabled statutory codes so the sheet layout stays stable.
+  statutoryCodesFromConfig(configDoc).forEach((c) => allStatutoryCodes.add(c));
+
+  const expandedColumns = outputColumnService.expandOutputColumnsWithBreakdown(
+    outputColumnsNormalized,
+    allAllowanceNames,
+    allDeductionNames,
+    allStatutoryCodes
+  );
+  const rowData = outputColumnService.buildRowFromOutputColumns(payslip, expandedColumns, null);
+  const headers = expandedColumns.map((c) => c.header || 'Column');
+  return { expandedColumns, headers, rowData };
+}
+
+async function enforceBatchLock({ kind, month, departmentId, divisionId, employeeId }) {
+  if (!month || !departmentId || !divisionId) return;
+  if (kind === 'second_salary') {
+    const batch = await SecondSalaryBatch.findOne({ department: departmentId, division: divisionId, month });
+    if (batch) {
+      if (['freeze', 'complete'].includes(batch.status)) {
+        const error = new Error(`2nd Salary payroll for ${month} is ${batch.status}. Recalculation is not allowed.`);
+        error.code = 'BATCH_LOCKED';
+        error.batchId = batch._id;
+        error.employeeId = employeeId;
+        throw error;
+      }
+      if (batch.status === 'approved') {
+        if (!batch.hasValidRecalculationPermission()) {
+          const error = new Error(`2nd Salary payroll for ${month} is approved. Recalculation requires permission.`);
+          error.code = 'BATCH_LOCKED';
+          error.batchId = batch._id;
+          error.employeeId = employeeId;
+          throw error;
+        }
+        batch.consumeRecalculationPermission?.();
+        await batch.save();
+      }
+    }
+    return;
+  }
+  const batch = await PayrollBatch.findOne({ department: departmentId, division: divisionId, month });
+  if (batch) {
+    if (['freeze', 'complete'].includes(batch.status)) {
+      const error = new Error(`Payroll for ${month} is ${batch.status}. Recalculation is not allowed.`);
+      error.code = 'BATCH_LOCKED';
+      error.batchId = batch._id;
+      error.employeeId = employeeId;
+      throw error;
+    }
+    if (batch.status === 'approved') {
+      if (!batch.hasValidRecalculationPermission()) {
+        const error = new Error(`Payroll for ${month} is approved. Recalculation requires permission.`);
+        error.code = 'BATCH_LOCKED';
+        error.batchId = batch._id;
+        error.employeeId = employeeId;
+        throw error;
+      }
+      batch.consumeRecalculationPermission?.();
+      await batch.save();
+    }
+  }
+}
 
 /** Extract identifier-like variable names from a formula string (for demand-driven service resolution). */
 function extractFormulaVariableNames(formula) {
@@ -570,6 +663,17 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
   // employee.* display fields (name, designation, emp_no, etc.) — return as-is, never coerce to number
   if (path.startsWith('employee.')) {
     const key = path.slice('employee.'.length);
+    if (key.startsWith('salaries.')) {
+      const fieldId = key.slice('salaries.'.length);
+      const salaries = employee?.salaries;
+      if (salaries && typeof salaries === 'object' && !Array.isArray(salaries) && fieldId) {
+        const raw = salaries[fieldId];
+        if (raw === undefined || raw === null || raw === '') return 0;
+        const n = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(n) ? n : 0;
+      }
+      return 0;
+    }
     const emp = record.employee || {};
     let v = emp[key];
     if (v === undefined || v === null) v = key === 'name' ? (employee?.employee_name ?? '') : (employee?.[key] ?? '');
@@ -817,8 +921,14 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
       if (autoTotal != null && autoTotal > 0) totalDaysInMonth = autoTotal;
     }
     const statutoryResult = await statutoryDeductionService.calculateStatutoryDeductions({
-      basicPay, grossSalary, earnedSalary, dearnessAllowance: 0, employee,
-      paidDays, totalDaysInMonth,
+      basicPay,
+      grossSalary,
+      earnedSalary,
+      dearnessAllowance: 0,
+      employee,
+      paidDays,
+      totalDaysInMonth,
+      allSalaries: {},
     });
     const totalStatutory = statutoryResult.totalEmployeeShare || 0;
     if (!record.deductions) record.deductions = {};
@@ -1040,9 +1150,17 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   const config = await PayrollConfiguration.get();
   const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
   const sorted = [...outputColumns].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const outputColumnsNormalized = normalizeOutputColumns(sorted);
 
   const departmentId = (employee.department_id?._id || employee.department_id)?.toString();
   const divisionId = (employee.division_id?._id || employee.division_id)?.toString();
+  await enforceBatchLock({
+    kind: secondSalaryBasis ? 'second_salary' : 'regular',
+    month,
+    departmentId,
+    divisionId,
+    employeeId,
+  });
 
   const { attendanceSummary, attendance } = await buildAttendanceFromSummary(payRegisterSummary, employee, month);
 
@@ -1172,6 +1290,35 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       month,
       payRegisterSummary
     );
+    try {
+      const { expandedColumns, headers, rowData } = buildPaysheetSnapshotData(record, outputColumnsNormalized, config);
+      await PayrollPayslipSnapshot.upsertSnapshot(
+        { employeeId, month, kind: 'second_salary' },
+        {
+          employeeId,
+          emp_no: employee.emp_no || '',
+          month,
+          kind: 'second_salary',
+          payrollRecordId: null,
+          secondSalaryRecordId: secondSalaryRecord?._id || null,
+          configSnapshot: {
+            configId: config?._id || null,
+            configUpdatedAt: config?.updatedAt || config?.updated_at || null,
+            statutoryProratePaidDaysColumnHeader: String(config?.statutoryProratePaidDaysColumnHeader || ''),
+            statutoryProrateTotalDaysColumnHeader: String(config?.statutoryProrateTotalDaysColumnHeader || ''),
+            outputColumns: outputColumnsNormalized,
+            expandedColumns,
+          },
+          headers,
+          row: rowData,
+          generatedAt: new Date(),
+          generatedBy: userId || null,
+          source: 'dynamic_engine',
+        }
+      );
+    } catch (e) {
+      console.warn('[PayrollFromOutputColumns] snapshot write (2nd salary) failed:', e.message);
+    }
     return {
       success: true,
       payrollRecord: null,
@@ -1225,6 +1372,35 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
   payrollRecord.markModified('deductions');
   payrollRecord.markModified('loanAdvance');
   await payrollRecord.save();
+  try {
+    const { expandedColumns, headers, rowData } = buildPaysheetSnapshotData(record, outputColumnsNormalized, config);
+    await PayrollPayslipSnapshot.upsertSnapshot(
+      { employeeId, month, kind: 'regular' },
+      {
+        employeeId,
+        emp_no: employee.emp_no || '',
+        month,
+        kind: 'regular',
+        payrollRecordId: payrollRecord?._id || null,
+        secondSalaryRecordId: null,
+        configSnapshot: {
+          configId: config?._id || null,
+          configUpdatedAt: config?.updatedAt || config?.updated_at || null,
+          statutoryProratePaidDaysColumnHeader: String(config?.statutoryProratePaidDaysColumnHeader || ''),
+          statutoryProrateTotalDaysColumnHeader: String(config?.statutoryProrateTotalDaysColumnHeader || ''),
+          outputColumns: outputColumnsNormalized,
+          expandedColumns,
+        },
+        headers,
+        row: rowData,
+        generatedAt: new Date(),
+        generatedBy: userId || null,
+        source: 'dynamic_engine',
+      }
+    );
+  } catch (e) {
+    console.warn('[PayrollFromOutputColumns] snapshot write (regular) failed:', e.message);
+  }
 
   // Create or find batch and add this payroll record (same as legacy flow — batches created right after record save)
   let batchId = null;

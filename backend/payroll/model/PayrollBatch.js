@@ -270,6 +270,16 @@ payrollBatchSchema.methods.revokeRecalculationPermission = function () {
     this.recalculationPermission.reason = null;
 };
 
+// Instance method to consume recalculation permission (single-use)
+payrollBatchSchema.methods.consumeRecalculationPermission = function () {
+    if (!this.recalculationPermission) return;
+    this.recalculationPermission.granted = false;
+    this.recalculationPermission.grantedBy = null;
+    this.recalculationPermission.grantedAt = null;
+    this.recalculationPermission.expiresAt = null;
+    this.recalculationPermission.reason = null;
+};
+
 // Instance method to validate batch
 payrollBatchSchema.methods.validateBatch = async function () {
     const Employee = mongoose.model('Employee');

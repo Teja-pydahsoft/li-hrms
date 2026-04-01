@@ -248,9 +248,28 @@ const EmployeeApplicationFormSettingsSchema = new mongoose.Schema(
 // Index
 EmployeeApplicationFormSettingsSchema.index({ isActive: 1 });
 
-// Static method to get active settings
+const SALARIES_GROUP_TEMPLATE = {
+  id: 'salaries',
+  label: 'Salaries',
+  description: 'Salary components configuration',
+  isSystem: true,
+  isArray: false,
+  order: 6,
+  isEnabled: true,
+  fields: [],
+};
+
+// Static method to get active settings (ensures salaries system group exists like basic_info on fresh DB)
 EmployeeApplicationFormSettingsSchema.statics.getActiveSettings = async function () {
-  return this.findOne({ isActive: true }).sort({ createdAt: -1 });
+  const doc = await this.findOne({ isActive: true }).sort({ createdAt: -1 });
+  if (!doc || !Array.isArray(doc.groups)) return doc;
+  const hasSalaries = doc.groups.some((g) => g && g.id === 'salaries');
+  if (!hasSalaries) {
+    doc.groups.push({ ...SALARIES_GROUP_TEMPLATE });
+    doc.groups.sort((a, b) => (a.order || 0) - (b.order || 0));
+    await doc.save();
+  }
+  return doc;
 };
 
 // Predefined qualification table columns (for merge on getSettings)
@@ -593,19 +612,9 @@ EmployeeApplicationFormSettingsSchema.statics.initializeDefault = async function
     return this.create(defaultSettings);
   }
 
-  // Ensure 'salaries' group is present for existing settings
-  if (!settings.groups.some((g) => g.id === 'salaries')) {
-    const salariesGroup = {
-      id: 'salaries',
-      label: 'Salaries',
-      description: 'Salary components configuration',
-      isSystem: true,
-      isArray: false,
-      order: 6,
-      isEnabled: true,
-      fields: [],
-    };
-    settings.groups.push(salariesGroup);
+  // Ensure 'salaries' group is present for existing settings (same as getActiveSettings migration)
+  if (!settings.groups.some((g) => g && g.id === 'salaries')) {
+    settings.groups.push({ ...SALARIES_GROUP_TEMPLATE });
     settings.groups.sort((a, b) => (a.order || 0) - (b.order || 0));
     await settings.save();
   }

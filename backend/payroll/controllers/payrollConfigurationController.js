@@ -1,9 +1,30 @@
 const PayrollConfiguration = require('../model/PayrollConfiguration');
+const EmployeeApplicationFormSettings = require('../../employee-applications/model/EmployeeApplicationFormSettings');
+
+function buildEmployeeSalaryFieldOptionsFromSettings(settings) {
+  const salariesGroup = (settings?.groups || []).find((g) => g && g.id === 'salaries');
+  const fields = (salariesGroup?.fields || []).filter((f) => f && f.id && f.isEnabled !== false);
+  return fields.map((f) => ({
+    value: `employee.salaries.${f.id}`,
+    label: `Salary: ${f.label || f.id}`,
+  }));
+}
 
 exports.getPayrollConfig = async (req, res) => {
   try {
     const config = await PayrollConfiguration.get();
-    return res.status(200).json({ success: true, data: config });
+    let employeeSalaryFieldOptions = [];
+    try {
+      const formSettings = await EmployeeApplicationFormSettings.getActiveSettings();
+      employeeSalaryFieldOptions = buildEmployeeSalaryFieldOptionsFromSettings(formSettings);
+    } catch (e) {
+      console.warn('getPayrollConfig employee salary fields:', e.message);
+    }
+    const plain = config && typeof config.toObject === 'function' ? config.toObject() : { ...(config || {}) };
+    return res.status(200).json({
+      success: true,
+      data: { ...plain, employeeSalaryFieldOptions },
+    });
   } catch (error) {
     console.error('getPayrollConfig error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Failed to get payroll config' });

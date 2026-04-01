@@ -436,10 +436,11 @@ class PayrollBatchService {
             }
 
             // Check permissions based on status
-            if (['approved', 'freeze', 'complete'].includes(batch.status)) {
-                if (!batch.hasValidRecalculationPermission()) {
-                    throw new Error('Recalculation permission required for approved batches');
-                }
+            if (['freeze', 'complete'].includes(batch.status)) {
+                throw new Error(`Recalculation is not allowed when batch is ${batch.status}`);
+            }
+            if (batch.status === 'approved' && !batch.hasValidRecalculationPermission()) {
+                throw new Error('Recalculation permission required for approved batches');
             }
 
             // Add job to BullMQ queue

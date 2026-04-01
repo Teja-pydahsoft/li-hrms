@@ -41,6 +41,11 @@ const {
   validateEmployeeGroupIfEnabled,
 } = require('../../shared/utils/customEmployeeGrouping');
 const streamingExportService = require('../../shared/services/streamingExportService');
+const {
+  normalizeEmployeeSalariesPayload,
+  stripSalaryKeysFromDynamicField,
+  getSalariesGroupFieldIds,
+} = require('../utils/employeeSalariesNormalize');
 
 // ============== Helper Functions ==============
 
@@ -318,11 +323,21 @@ const transformEmployeeForResponse = async (employee, populateUsers = true) => {
     populatedDynamicFields = await populateUsersInDynamicFields(dynamicFields);
   }
 
+  const salariesOut =
+    permanentFields.salaries && typeof permanentFields.salaries === 'object' && !Array.isArray(permanentFields.salaries)
+      ? { ...permanentFields.salaries }
+      : {};
+  if (populatedDynamicFields.salaries !== undefined) {
+    const { salaries: _rm, ...restDf } = populatedDynamicFields;
+    populatedDynamicFields = restDf;
+  }
+
   // Merge dynamicFields into root level (dynamicFields act as fallback)
   // Permanent fields (Source of Truth) must overwrite dynamicFields
   const merged = {
     ...populatedDynamicFields,
     ...permanentFields,
+    salaries: salariesOut,
     dynamicFields: populatedDynamicFields,
   };
 
@@ -806,6 +821,11 @@ exports.createEmployee = async (req, res) => {
       }
     });
 
+    const { salaries: normalizedSalaries, dynamicFields: dynamicFieldsAfterSalaries } =
+      await normalizeEmployeeSalariesPayload(employeeData, dynamicFields, {});
+    dynamicFields = dynamicFieldsAfterSalaries;
+    permanentFields.salaries = normalizedSalaries;
+
     const normalizeOverrides = (list) => {
       try {
         const parsed = typeof list === 'string' ? JSON.parse(list) : (list || []);
@@ -1114,7 +1134,8 @@ exports.updateEmployee = async (req, res) => {
       employeeData.ctcSalary !== undefined ||
       employeeData.calculatedSalary !== undefined ||
       employeeData.paidLeaves !== undefined ||
-      employeeData.second_salary !== undefined
+      employeeData.second_salary !== undefined ||
+      employeeData.salaries !== undefined
     );
 
     // Only validate if dynamicFields are being updated (not for simple permanent field updates)
@@ -1221,6 +1242,18 @@ exports.updateEmployee = async (req, res) => {
       }
     });
 
+    const existingSalariesFlat =
+      existingEmployee.salaries && typeof existingEmployee.salaries === 'object' && !Array.isArray(existingEmployee.salaries)
+        ? { ...existingEmployee.salaries }
+        : {};
+    const {
+      salaries: normalizedSalaries,
+      dynamicFields: dynamicFieldsAfterSalaries,
+      fieldIds: salaryFieldIds,
+    } = await normalizeEmployeeSalariesPayload(employeeData, dynamicFields, existingSalariesFlat);
+    dynamicFields = dynamicFieldsAfterSalaries;
+    permanentFields.salaries = normalizedSalaries;
+
     // Normalize employee allowances and deductions
     const normalizeOverrides = (list) => {
       try {
@@ -1315,10 +1348,28 @@ exports.updateEmployee = async (req, res) => {
         ];
         bankFieldsToCleanup.forEach(f => delete cleanedExistingDynamic[f]);
 
+        const sids = Array.isArray(salaryFieldIds) && salaryFieldIds.length > 0
+          ? salaryFieldIds
+          : await getSalariesGroupFieldIds();
+        const cleanedExistingNoSalaries = stripSalaryKeysFromDynamicField(cleanedExistingDynamic, sids);
+
         updateData.dynamicFields = {
-          ...cleanedExistingDynamic,
+          ...cleanedExistingNoSalaries,
           ...dynamicFields
         };
+      } else if (existingEmployee.dynamicFields && typeof existingEmployee.dynamicFields === 'object') {
+        const sidsFallback = Array.isArray(salaryFieldIds) && salaryFieldIds.length > 0
+          ? salaryFieldIds
+          : await getSalariesGroupFieldIds();
+        const hadLegacySalaries =
+          existingEmployee.dynamicFields.salaries != null ||
+          sidsFallback.some((id) => existingEmployee.dynamicFields[id] !== undefined);
+        if (hadLegacySalaries) {
+          updateData.dynamicFields = stripSalaryKeysFromDynamicField(
+            { ...existingEmployee.dynamicFields },
+            sidsFallback
+          );
+        }
       }
 
       // Explicitly handle paidLeaves to ensure it's saved even if 0

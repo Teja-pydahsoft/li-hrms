@@ -201,13 +201,23 @@ async function calculatePayroll(employeeId, month, userId) {
       division: employee.division_id, // Division Scope
       month
     });
-    if (existingBatch && ['approved', 'freeze', 'complete'].includes(existingBatch.status)) {
-      // Check for permission
-      if (!existingBatch.hasValidRecalculationPermission()) {
-        const error = new Error(`Payroll for ${month} is ${existingBatch.status}. Recalculation requires permission.`);
+    if (existingBatch) {
+      if (['freeze', 'complete'].includes(existingBatch.status)) {
+        const error = new Error(`Payroll for ${month} is ${existingBatch.status}. Recalculation is not allowed.`);
         error.code = 'BATCH_LOCKED';
         error.batchId = existingBatch._id;
         throw error;
+      }
+      if (existingBatch.status === 'approved') {
+        if (!existingBatch.hasValidRecalculationPermission()) {
+          const error = new Error(`Payroll for ${month} is approved. Recalculation requires permission.`);
+          error.code = 'BATCH_LOCKED';
+          error.batchId = existingBatch._id;
+          throw error;
+        }
+        // Single-use permission: consume on first successful entry into recalculation
+        existingBatch.consumeRecalculationPermission?.();
+        await existingBatch.save();
       }
     }
 
@@ -862,6 +872,7 @@ async function calculatePayroll(employeeId, month, userId) {
  */
 async function calculatePayrollNew(employeeId, month, userId, options = { source: 'payregister', arrearsSettlements: [] }, sharedContext = null) {
   try {
+    const shouldConsumePermission = options.consumeRecalculationPermission !== false;
     const employee = await Employee.findById(employeeId).populate('department_id designation_id division_id');
     if (!employee) throw new Error('Employee not found');
     // if (!employee.gross_salary || employee.gross_salary <= 0) throw new Error('Employee gross salary is missing or invalid');
@@ -937,13 +948,24 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
       division: employee.division_id, // Division Scope
       month
     });
-    if (existingBatch && ['approved', 'freeze', 'complete'].includes(existingBatch.status)) {
-      // Check for permission
-      if (!existingBatch.hasValidRecalculationPermission()) {
-        const error = new Error(`Payroll for ${month} is ${existingBatch.status}. Recalculation requires permission.`);
+    let permissionBatchToConsume = null;
+    if (existingBatch) {
+      if (['freeze', 'complete'].includes(existingBatch.status)) {
+        const error = new Error(`Payroll for ${month} is ${existingBatch.status}. Recalculation is not allowed.`);
         error.code = 'BATCH_LOCKED';
         error.batchId = existingBatch._id;
         throw error;
+      }
+      if (existingBatch.status === 'approved') {
+        if (!existingBatch.hasValidRecalculationPermission()) {
+          const error = new Error(`Payroll for ${month} is approved. Recalculation requires permission.`);
+          error.code = 'BATCH_LOCKED';
+          error.batchId = existingBatch._id;
+          throw error;
+        }
+        if (shouldConsumePermission) {
+          permissionBatchToConsume = existingBatch;
+        }
       }
     }
 
@@ -1208,7 +1230,7 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
         earnedSalary,
         dearnessAllowance: 0,
         employee,
-        allSalaries: employee.dynamicFields?.salaries || {},
+        allSalaries: {},
       });
       if (statutoryResult.breakdown && statutoryResult.breakdown.length > 0) {
         totalDeductions += statutoryResult.totalEmployeeShare;
@@ -1592,6 +1614,11 @@ async function calculatePayrollNew(employeeId, month, userId, options = { source
       }
     } catch (batchError) {
       console.error('Error updating payroll batch:', batchError);
+    }
+
+    if (permissionBatchToConsume) {
+      permissionBatchToConsume.consumeRecalculationPermission?.();
+      await permissionBatchToConsume.save();
     }
 
     return { success: true, payrollRecord, batchId, payslip };
