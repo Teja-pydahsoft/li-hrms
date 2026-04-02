@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Department, Division, User, Employee, DataScope } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { MODULE_CATEGORIES } from '@/config/moduleCategories';
 import Spinner from '@/components/Spinner';
 import {
@@ -112,6 +113,7 @@ export default function UsersPage() {
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [employeesWithoutAccount, setEmployeesWithoutAccount] = useState<Employee[]>([]);
   const [stats, setStats] = useState<UserStats | null>(null);
+  const { user: currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -142,7 +144,7 @@ export default function UsersPage() {
   const [formData, setFormData] = useState<UserFormData>({
     email: '',
     name: '',
-    role: 'super_admin',
+    role: 'sub_admin',
     departmentType: 'single',
     department: '',
     departments: [],
@@ -709,7 +711,7 @@ export default function UsersPage() {
     setFormData({
       email: '',
       name: '',
-      role: 'super_admin',
+      role: 'sub_admin',
       departmentType: 'single',
       department: '',
       departments: [],
@@ -1527,7 +1529,7 @@ export default function UsersPage() {
                                 }}
                                 className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                               >
-                                {ROLES.filter(r => r.value !== 'employee').map((role) => (
+                                {ROLES.filter(r => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                   <option key={role.value} value={role.value}>
                                     {role.label}
                                   </option>
@@ -2016,14 +2018,14 @@ export default function UsersPage() {
                                 setEmployeeFormData({
                                   ...employeeFormData,
                                   role,
-                                  dataScope: ['hr', 'sub_admin'].includes(role) ? 'all' : (role === 'hod' ? 'division' : 'department'),
+                                  dataScope: ['hr', 'sub_admin', 'super_admin'].includes(role) ? 'all' : (role === 'hod' ? 'division' : 'department'),
                                   departments: [],
                                   divisionMapping: []
                                 });
                               }}
                               className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                             >
-                              {ROLES.filter((r) => !['super_admin', 'employee'].includes(r.value)).map((role) => (
+                              {ROLES.filter((r) => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                 <option key={role.value} value={role.value}>{role.label}</option>
                               ))}
                             </select>
@@ -2403,15 +2405,15 @@ export default function UsersPage() {
                                     divisionMapping: []
                                   });
                                 }}
-                                disabled={selectedUser.role === 'super_admin'}
+                                disabled={selectedUser.role === 'super_admin' && currentUser?.role !== 'super_admin'}
                                 className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {ROLES.filter((r) => !['super_admin', 'employee'].includes(r.value)).map((role) => (
+                                {ROLES.filter((r) => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                   <option key={role.value} value={role.value}>
                                     {role.label}
                                   </option>
                                 ))}
-                                {selectedUser.role === 'super_admin' && (
+                                {selectedUser.role === 'super_admin' && currentUser?.role !== 'super_admin' && (
                                   <option value="super_admin">Super Admin</option>
                                 )}
                               </select>

@@ -40,6 +40,14 @@ exports.registerUser = async (req, res) => {
     } = req.body;
     const { department, division } = req.body;
 
+    // Only super_admin can create another super_admin
+    if (role === 'super_admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only a super admin can create another super admin',
+      });
+    }
+
     // Validate required fields
     if (!email || !name || !role) {
       return res.status(400).json({
@@ -205,6 +213,14 @@ exports.createUserFromEmployee = async (req, res) => {
       divisionMapping,
     } = req.body;
     const { departments, department, division } = req.body;
+
+    // Only super_admin can create another super_admin from employee
+    if (role === 'super_admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only a super admin can create a super admin account from an employee',
+      });
+    }
 
     // Find employee (including password for inheritance)
     const employee = await Employee.findOne({ emp_no: empNo })
@@ -545,6 +561,14 @@ exports.updateUser = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: 'Cannot modify super admin user',
+      });
+    }
+
+    // Only super_admin can promote someone else to super_admin
+    if (role === 'super_admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only a super admin can promote a user to super admin role',
       });
     }
 

@@ -192,7 +192,7 @@ export default function UsersPage() {
   const [formData, setFormData] = useState<UserFormData>({
     email: '',
     name: '',
-    role: 'super_admin',
+    role: 'sub_admin',
     departmentType: 'single',
     department: '',
     departments: [],
@@ -766,7 +766,7 @@ export default function UsersPage() {
     setFormData({
       email: '',
       name: '',
-      role: 'super_admin',
+      role: 'sub_admin',
       departmentType: 'single',
       department: '',
       departments: [],
@@ -1618,7 +1618,7 @@ export default function UsersPage() {
                                 }}
                                 className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                               >
-                                {ROLES.filter(r => r.value !== 'employee').map((role) => (
+                                {ROLES.filter(r => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                   <option key={role.value} value={role.value}>
                                     {role.label}
                                   </option>
@@ -2051,7 +2051,7 @@ export default function UsersPage() {
                               }}
                               className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                             >
-                              {ROLES.filter((r) => !['super_admin', 'employee'].includes(r.value)).map((role) => (
+                              {ROLES.filter((r) => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                 <option key={role.value} value={role.value}>{role.label}</option>
                               ))}
                             </select>
@@ -2353,15 +2353,15 @@ export default function UsersPage() {
                                     divisionMapping: []
                                   });
                                 }}
-                                disabled={selectedUser.role === 'super_admin'}
+                                disabled={selectedUser.role === 'super_admin' && currentUser?.role !== 'super_admin'}
                                 className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pl-11 text-sm font-medium text-slate-900 transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {ROLES.filter((r) => !['super_admin', 'employee'].includes(r.value)).map((role) => (
+                                {ROLES.filter((r) => r.value !== 'employee' && (r.value !== 'super_admin' || currentUser?.role === 'super_admin')).map((role) => (
                                   <option key={role.value} value={role.value}>
                                     {role.label}
                                   </option>
                                 ))}
-                                {selectedUser.role === 'super_admin' && (
+                                {selectedUser.role === 'super_admin' && currentUser?.role !== 'super_admin' && (
                                   <option value="super_admin">Super Admin</option>
                                 )}
                               </select>
