@@ -1332,10 +1332,13 @@ exports.getPendingApprovals = async (req, res) => {
     const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10)));
     const skip = (pageNum - 1) * limitNum;
 
-    let filter = {
-      isActive: true,
-      appliedBy: { $ne: req.user._id }
-    };
+    // Base filter: Active
+    // For regular roles, exclude "Applied by Me" (Self-requests go to "My Leaves").
+    // For Super Admins, show EVERYTHING pending in the system for global visibility.
+    let filter = { isActive: true };
+    if (!['super_admin', 'sub_admin'].includes(userRole)) {
+      filter.appliedBy = { $ne: req.user._id };
+    }
 
     // 1. Super Admin: View all non-final ODs globally
     if (['super_admin'].includes(userRole)) {
