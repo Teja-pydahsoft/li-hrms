@@ -2251,7 +2251,7 @@ export default function LeavesPage() {
           >
             <span className="flex items-center gap-2">
               <ClockIcon />
-              Actions Required ({totalPending})
+              Actions Required ({loadingStats ? '…' : dashboardStats.totalPending})
             </span>
           </button>
         </div>
