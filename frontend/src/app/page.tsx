@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { auth } from '@/lib/auth';
 import LiquidEther from '@/components/LiquidEther';
 import '@/components/LiquidEther.css';
-import { ChevronRight, ShieldCheck, Zap, Users, BarChart3, Clock, CreditCard } from 'lucide-react';
+import { ChevronRight, ShieldCheck, Zap, Users, BarChart3, Clock, CreditCard, Fingerprint } from 'lucide-react';
 
 export default function Home() {
   const router = useRouter();
@@ -30,14 +30,17 @@ export default function Home() {
     const token = auth.getToken();
     const user = auth.getUser();
 
-    if (token && user) {
-      // User is authenticated, redirect to their dashboard
-      const dashboardPath = auth.getRoleBasedPath(user.role);
-      router.replace(dashboardPath);
-    } else {
-      // No token, show welcome page
-      setChecking(false);
-    }
+    // Local development delay to preview the Biometric Loader
+    const authDelay = setTimeout(() => {
+      if (token && user) {
+        // User is authenticated, redirect to their dashboard
+        const dashboardPath = auth.getRoleBasedPath(user.role);
+        router.replace(dashboardPath);
+      } else {
+        // No token, show welcome page
+        setChecking(false);
+      }
+    }, 2000);
 
     // Headline rotation interval
     const timer = setInterval(() => {
@@ -45,16 +48,49 @@ export default function Home() {
       setCurrentLine((prev) => (prev + 1) % lines.length);
     }, 5000);
 
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(authDelay);
+      clearInterval(timer);
+    };
   }, [router, lines.length, currentLine]);
 
   // Show loading while checking authentication
   if (checking) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white">
-        <div className="flex flex-col items-center gap-4">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent"></div>
-          <p className="text-slate-600 font-light">Loading experience...</p>
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 biometric-grid overflow-hidden">
+        <div className="relative flex flex-col items-center gap-12">
+          {/* Biometric Sensor Frame */}
+          <div className="relative w-48 h-48 flex items-center justify-center">
+            {/* Corners */}
+            <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-emerald-600/30 rounded-tl-lg" />
+            <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-emerald-600/30 rounded-tr-lg" />
+            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-emerald-600/30 rounded-bl-lg" />
+            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-emerald-600/30 rounded-br-lg" />
+            
+            {/* Base Fingerprint (Dim) */}
+            <div className="absolute transition-opacity duration-500 text-emerald-100">
+              <Fingerprint size={120} strokeWidth={1.5} />
+            </div>
+            
+            {/* Scanned Fingerprint (Filing) */}
+            <div className="absolute text-emerald-600 animate-scan-fill drop-shadow-[0_0_10px_rgba(5,150,105,0.3)]">
+              <Fingerprint size={120} strokeWidth={1.5} />
+            </div>
+            
+            {/* Scanning Laser Line */}
+            <div className="absolute w-64 h-0.5 bg-emerald-600 animate-scan-line shadow-[0_0_10px_rgba(5,150,105,0.5)] z-10">
+              <div className="absolute inset-0 bg-emerald-500 blur-sm opacity-50" />
+            </div>
+          </div>
+          
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-slate-400 font-display font-medium tracking-[0.2em] uppercase text-xs">
+              Authenticating Biometrics
+            </p>
+            <div className="h-1 w-32 bg-slate-200 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 animate-[scan-fill_3s_ease-in-out_infinite]" />
+            </div>
+          </div>
         </div>
       </div>
     );
