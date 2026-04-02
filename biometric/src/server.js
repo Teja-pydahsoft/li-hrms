@@ -120,8 +120,8 @@ app.all('*', async (req, res) => {
         logger.error(`Discovery Logging Failed: ${err.message}`);
     }
 
-    // Respond with a generic OK (standard for ADMS devices)
-    res.send('OK');
+    // Respond with a generic OK explicitly as text/plain (standard for ADMS devices)
+    res.type('text/plain').send('OK');
 });
 
 // Connect to MongoDB

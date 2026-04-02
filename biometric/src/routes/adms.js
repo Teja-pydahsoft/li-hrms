@@ -15,6 +15,29 @@ const ADMS_OK = "OK";
 const ADMS_ERROR = "ERROR";
 
 /**
+ * Middleware to ensure all ADMS protocol responses use text/plain
+ * Newer eSSL/ZK devices strictly require Content-Type: text/plain
+ */
+router.use((req, res, next) => {
+    if (req.path.endsWith('.aspx') || req.path.includes('registry')) {
+        res.type('text/plain');
+    }
+    next();
+});
+
+/**
+ * GET /iclock/registry
+ * Modern Push Protocol 3.0+ Handshake (used by AiFace series)
+ */
+router.get(['/registry', '/registry.aspx'], async (req, res) => {
+    const { SN, RegistryCode } = req.query;
+    logger.info(`ADMS Registry Handshake: SN=${SN || 'unknown'} from ${req.ip}`);
+    
+    // The device expects its registry code echoed back, or simply OK
+    res.send(`RegistryCode=${RegistryCode || '1'}`);
+});
+
+/**
  * OPTIONS /iclock/getrequest.aspx
  * Part of some ADMS handshake flows
  */
@@ -153,7 +176,7 @@ router.get('/cdata.aspx', async (req, res) => {
                 'Realtime=1',
                 'Encrypt=0',
                 'ServerVer=3.4.1',
-                'PushProtVer=2.4.1',
+                `PushProtVer=${pushver || '3.4.1'}`,
                 'ErrorDelay=3',
                 'Delay=10',
                 'TransTimes=00:00;23:59',
