@@ -1183,6 +1183,7 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       date_of_joining: employee.doj || '',
       pf_number: employee.pf_number || '',
       esi_number: employee.esi_number || '',
+      leftDate: employee.leftDate,
     },
     attendance: { ...attendance },
     earnings: {},

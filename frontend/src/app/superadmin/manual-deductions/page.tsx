@@ -57,7 +57,7 @@ interface Deduction {
 }
 
 interface BulkRow {
-  employee: { _id: string; emp_no?: string; employee_name?: string; first_name?: string; last_name?: string; department_id?: { _id: string; name?: string } | string; division_id?: { _id: string; name?: string } | string };
+  employee: { _id: string; emp_no?: string; employee_name?: string; first_name?: string; last_name?: string; leftDate?: string; department_id?: { _id: string; name?: string } | string; division_id?: { _id: string; name?: string } | string };
   amount: number;
   remarks: string;
 }
@@ -84,6 +84,8 @@ export function ManualDeductionsContent() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkSectionOpen, setBulkSectionOpen] = useState(false);
+  const [bulkSearchQuery, setBulkSearchQuery] = useState('');
+  const [bulkMonth, setBulkMonth] = useState(format(new Date(), 'yyyy-MM'));
   const [designations, setDesignations] = useState<any[]>([]);
   const [filterDivisionId, setFilterDivisionId] = useState('');
   const [filterDepartmentId, setFilterDepartmentId] = useState('');
@@ -105,9 +107,32 @@ export function ManualDeductionsContent() {
     return departments.filter((d: any) => deptIds.includes(String(d._id)));
   }, [bulkDivisionId, divisions, departments]);
 
+  const filteredBulkRows = useMemo(() => {
+    if (!bulkSearchQuery.trim()) return bulkRows;
+    const q = bulkSearchQuery.toLowerCase().trim();
+    return bulkRows.filter((row) => {
+      const emp = row.employee;
+      const name = (emp.employee_name || [emp.first_name, emp.last_name].filter(Boolean).join(' ') || '').toLowerCase();
+      const code = (emp.emp_no || '').toLowerCase();
+      return name.includes(q) || code.includes(q);
+    });
+  }, [bulkRows, bulkSearchQuery]);
+
   const loadBulkEmployees = () => {
     setBulkLoading(true);
-    const filters: any = { is_active: true, limit: 500 };
+    setBulkSearchQuery('');
+    
+    // Calculate start and end of selected month
+    const [year, monthNum] = bulkMonth.split('-').map(Number);
+    const startDate = format(new Date(year, monthNum - 1, 1), 'yyyy-MM-dd');
+    const endDate = format(new Date(year, monthNum, 0), 'yyyy-MM-dd');
+
+    const filters: any = { 
+      includeLeft: true,
+      startDate,
+      endDate,
+      limit: 1000 
+    };
     if (bulkDivisionId) filters.division_id = bulkDivisionId;
     if (bulkDepartmentId) filters.department_id = bulkDepartmentId;
     api.getEmployees(filters)
@@ -391,6 +416,15 @@ export function ManualDeductionsContent() {
           <div className="border-t border-slate-200 dark:border-slate-700 p-6 space-y-4">
             <div className="flex flex-wrap items-end gap-4">
               <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Pay Period</label>
+                <input
+                  type="month"
+                  value={bulkMonth}
+                  onChange={(e) => setBulkMonth(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white dark:bg-slate-800 dark:border-slate-600 dark:text-white px-3 py-2 text-sm min-w-[150px]"
+                />
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Division</label>
                 <select
                   value={bulkDivisionId}
@@ -425,6 +459,19 @@ export function ManualDeductionsContent() {
                 {bulkLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
                 Load employees
               </button>
+
+              {bulkRows.length > 0 && (
+                <div className="relative min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    value={bulkSearchQuery}
+                    onChange={(e) => setBulkSearchQuery(e.target.value)}
+                    placeholder="Search loaded employees..."
+                    className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-4 text-sm dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                  />
+                </div>
+              )}
             </div>
             {bulkRows.length > 0 && (
               <>
@@ -439,37 +486,48 @@ export function ManualDeductionsContent() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                      {bulkRows.map((row, idx) => (
-                        <tr key={row.employee._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                          <td className="px-4 py-2 font-medium text-slate-950 dark:text-white">
-                            {row.employee.employee_name || [row.employee.first_name, row.employee.last_name].filter(Boolean).join(' ') || row.employee.emp_no || '—'}
-                          </td>
-                          <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
-                            {row.employee.emp_no || '—'}
-                            {(row.employee.department_id as any)?.name && ` / ${(row.employee.department_id as any).name}`}
-                          </td>
-                          <td className="px-4 py-2 text-right">
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              value={row.amount === 0 ? '' : row.amount}
-                              onChange={(e) => updateBulkRow(idx, 'amount', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-                              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5 text-right"
-                              placeholder="0"
-                            />
-                          </td>
-                          <td className="px-4 py-2">
-                            <input
-                              type="text"
-                              value={row.remarks}
-                              onChange={(e) => updateBulkRow(idx, 'remarks', e.target.value)}
-                              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
-                              placeholder="Remarks"
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredBulkRows.map((row) => {
+                        const originalIndex = bulkRows.findIndex(r => r.employee._id === row.employee._id);
+                        return (
+                          <tr key={row.employee._id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                            <td className="px-4 py-2 font-medium text-slate-950 dark:text-white">
+                              <div className="flex flex-col">
+                                <span>{row.employee.employee_name || [row.employee.first_name, row.employee.last_name].filter(Boolean).join(' ') || row.employee.emp_no || '—'}</span>
+                                {row.employee.leftDate && format(new Date(row.employee.leftDate), 'yyyy-MM') === bulkMonth && (
+                                  <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                                    <AlertCircle className="h-3 w-3" />
+                                    Left at {format(new Date(row.employee.leftDate), 'yyyy-MM-dd')}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
+                              {row.employee.emp_no || '—'}
+                              {(row.employee.department_id as any)?.name && ` / ${(row.employee.department_id as any).name}`}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                value={row.amount === 0 ? '' : row.amount}
+                                onChange={(e) => updateBulkRow(originalIndex, 'amount', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                                className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5 text-right"
+                                placeholder="0"
+                              />
+                            </td>
+                            <td className="px-4 py-2">
+                              <input
+                                type="text"
+                                value={row.remarks}
+                                onChange={(e) => updateBulkRow(originalIndex, 'remarks', e.target.value)}
+                                className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white px-2 py-1.5"
+                                placeholder="Remarks"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

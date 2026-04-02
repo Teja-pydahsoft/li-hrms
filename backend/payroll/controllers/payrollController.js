@@ -154,6 +154,7 @@ async function buildPayslipData(employeeId, month) {
       date_of_joining: employee?.doj || '',
       pf_number: employee?.pf_number || '',
       esi_number: employee?.esi_number || '',
+      leftDate: employee?.leftDate,
     },
     attendance: {
       // Use new attendance breakdown if available, fallback to old fields
@@ -437,6 +438,7 @@ async function buildPayslipsFromStoredPayrollRecords(payrollRecords, month) {
           date_of_joining: employee?.doj || '',
           pf_number: employee?.pf_number || '',
           esi_number: employee?.esi_number || '',
+          leftDate: employee?.leftDate,
         },
         attendance: {
           totalDaysInMonth: payrollRecord.attendance?.totalDaysInMonth || monthDays,
@@ -958,6 +960,7 @@ function recordToPayslip(record) {
       date_of_joining: empObj?.doj || '',
       pf_number: empObj?.pf_number || '',
       esi_number: empObj?.esi_number || '',
+      leftDate: empObj?.leftDate,
       salaries:
         empObj?.salaries && typeof empObj.salaries === 'object' && !Array.isArray(empObj.salaries)
           ? { ...empObj.salaries }
@@ -1269,7 +1272,9 @@ exports.getPaysheetData = async (req, res) => {
       );
       const rows = payslips.map((payslip, index) => {
         const rowData = outputColumnService.buildRowFromOutputColumns(payslip, expandedColumns, index + 1);
-        return { 'S.No': index + 1, ...rowData };
+        const row = { 'S.No': index + 1, ...rowData };
+        if (payslip.employee?.leftDate) row._leftDate = payslip.employee.leftDate;
+        return row;
       });
       const headers = rows.length > 0
         ? ['S.No', ...Object.keys(rows[0]).filter((k) => k !== 'S.No')]
@@ -1360,7 +1365,9 @@ exports.getPaysheetData = async (req, res) => {
         );
         rows = payslips.map((payslip, index) => {
           const rowData = outputColumnService.buildRowFromOutputColumns(payslip, expandedColumns, index + 1);
-          return { 'S.No': index + 1, ...rowData };
+          const row = { 'S.No': index + 1, ...rowData };
+          if (payslip.employee?.leftDate) row._leftDate = payslip.employee.leftDate;
+          return row;
         });
         headers = rows.length > 0
           ? ['S.No', ...Object.keys(rows[0]).filter((k) => k !== 'S.No')]

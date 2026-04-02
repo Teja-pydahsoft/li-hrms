@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api, Department } from '@/lib/api';
 import { toast } from 'react-toastify';
-import { ChevronLeft, ChevronRight, FileSpreadsheet, Search, Calendar, Building2, Download } from 'lucide-react';
+import { format } from 'date-fns';
+import { ChevronLeft, ChevronRight, FileSpreadsheet, Search, Calendar, Building2, Download, AlertCircle } from 'lucide-react';
 
 /** Negative value = show all loaded rows (API returns full set; table was capped by page size before). */
 const ROWS_PER_PAGE_ALL = -1;
@@ -382,14 +383,26 @@ export default function PaysheetPage() {
                       key={startRow + rIdx}
                       className="border-b border-slate-100 dark:border-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800/40 even:bg-slate-50/50 dark:even:bg-slate-800/20 transition-colors"
                     >
-                      {headers.map((header, cIdx) => (
-                        <td
-                          key={cIdx}
-                          className="px-4 py-2.5 text-slate-700 dark:text-slate-300 whitespace-nowrap border-r border-slate-100 dark:border-slate-800/80 last:border-r-0"
-                        >
-                          {formatCell(row[header])}
-                        </td>
-                      ))}
+                      {headers.map((header, cIdx) => {
+                        const isNameColumn = header.toLowerCase().includes('name');
+                        const leftDate = row._leftDate as string | undefined;
+                        return (
+                          <td
+                            key={cIdx}
+                            className="px-4 py-2.5 text-slate-700 dark:text-slate-300 whitespace-nowrap border-r border-slate-100 dark:border-slate-800/80 last:border-r-0"
+                          >
+                            <div className="flex flex-col">
+                              <span>{formatCell(row[header])}</span>
+                              {isNameColumn && leftDate && format(new Date(leftDate as string), 'yyyy-MM') === selectedMonth && (
+                                <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                                  <AlertCircle className="h-3 w-3" />
+                                  Left at {format(new Date(leftDate as string), 'yyyy-MM-dd')}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
