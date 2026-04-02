@@ -19,12 +19,10 @@ const ADMS_ERROR = "ERROR";
  * Newer eSSL/ZK devices strictly require Content-Type: text/plain
  */
 router.use((req, res, next) => {
-    if (req.path.endsWith('.aspx') || req.path.includes('registry')) {
-        res.type('text/plain');
-        // Explicitly force Status 200 and disable caching to prevent ANY 304 Not Modified
-        res.status(200);
-        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    }
+    // Blanket apply text/plain to ALL ADMS endpoints (solves the missing .aspx check)
+    // Removed Cache-Control because vintage devices (iClock) have tiny buffer sizes 
+    // for HTTP Headers and large headers cause them to instantly abort the connection.
+    res.type('text/plain');
     next();
 });
 
