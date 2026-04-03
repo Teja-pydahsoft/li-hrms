@@ -74,6 +74,7 @@ export default function PayrollConfigPage() {
   const [statutoryConfig, setStatutoryConfig] = useState<StatutoryDeductionConfig | null>(null);
   const [statutoryProratePaidDaysColumnHeader, setStatutoryProratePaidDaysColumnHeader] = useState('');
   const [statutoryProrateTotalDaysColumnHeader, setStatutoryProrateTotalDaysColumnHeader] = useState('');
+  const [professionTaxSlabEarningsColumnHeader, setProfessionTaxSlabEarningsColumnHeader] = useState('');
 
   const outputFieldOptions = useMemo(() => {
     const extra = config?.employeeSalaryFieldOptions ?? [];
@@ -128,6 +129,7 @@ export default function PayrollConfigPage() {
       }
       setStatutoryProratePaidDaysColumnHeader(data?.statutoryProratePaidDaysColumnHeader ?? '');
       setStatutoryProrateTotalDaysColumnHeader(data?.statutoryProrateTotalDaysColumnHeader ?? '');
+      setProfessionTaxSlabEarningsColumnHeader(data?.professionTaxSlabEarningsColumnHeader ?? '');
     } catch (e) {
       console.error(e);
       toast.error('Failed to load payroll config');
@@ -165,6 +167,7 @@ export default function PayrollConfigPage() {
         outputColumns: normalizedColumns,
         statutoryProratePaidDaysColumnHeader: statutoryProratePaidDaysColumnHeader.trim(),
         statutoryProrateTotalDaysColumnHeader: statutoryProrateTotalDaysColumnHeader.trim(),
+        professionTaxSlabEarningsColumnHeader: professionTaxSlabEarningsColumnHeader.trim(),
       };
       await api.putPayrollConfig(payload);
       toast.success('Payroll configuration saved');
@@ -813,6 +816,31 @@ export default function PayrollConfigPage() {
                     const header = (c.header && String(c.header).trim()) || `Column ${(c.order ?? 0) + 1}`;
                     return (
                       <option key={header + (c.order ?? 0)} value={header}>
+                        {header}
+                      </option>
+                    );
+                  })}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                Profession Tax slab — earnings column (optional)
+              </label>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2 max-w-xl">
+                Dynamic payroll only. If you pick a column here, the <strong>numeric value of that column</strong> (after it is calculated) is used to choose the Profession Tax slab. Leave empty to keep the default: slab from <strong>prorated basic pay</strong>. The column must appear <strong>before</strong> Statutory cumulative in the output column list, and the header must match exactly.
+              </p>
+              <select
+                value={professionTaxSlabEarningsColumnHeader}
+                onChange={(e) => setProfessionTaxSlabEarningsColumnHeader(e.target.value)}
+                className="w-full max-w-md px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+              >
+                <option value="">Use prorated basic pay for PT slab</option>
+                {[...outputColumns]
+                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                  .map((c) => {
+                    const header = (c.header && String(c.header).trim()) || `Column ${(c.order ?? 0) + 1}`;
+                    return (
+                      <option key={`pt-${header}-${c.order ?? 0}`} value={header}>
                         {header}
                       </option>
                     );

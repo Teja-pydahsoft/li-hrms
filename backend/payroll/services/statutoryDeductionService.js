@@ -32,9 +32,10 @@ function shallowSalariesMap(obj) {
  * @param {number} [params.paidDays] - Paid days in the month (for proration). When set with totalDaysInMonth, statutory is prorated.
  * @param {number} [params.totalDaysInMonth] - Total days in month (pay cycle). When set with paidDays, statutory is prorated.
  * @param {Record<string, number|string>} [params.allSalaries={}] - Optional override map merged on top of employee.salaries
+ * @param {number} [params.professionTaxSlabBase] - When set (finite, >= 0), Profession Tax slab is chosen from this amount (not prorated). When omitted, slab uses prorated basic pay.
  * @returns {Promise<{ breakdown: Array<{ name, code, employeeAmount, employerAmount }>, totalEmployeeShare, totalEmployerShare }>}
  */
-async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, earnedSalary = 0, dearnessAllowance = 0, employee = null, paidDays = null, totalDaysInMonth = null, allSalaries = {} }) {
+async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, earnedSalary = 0, dearnessAllowance = 0, employee = null, paidDays = null, totalDaysInMonth = null, allSalaries = {}, professionTaxSlabBase = undefined }) {
   const config = await StatutoryDeductionConfig.get();
   const fromEmployee = shallowSalariesMap(employee?.salaries);
   const fromArg = shallowSalariesMap(allSalaries);
@@ -127,10 +128,15 @@ async function calculateStatutoryDeductions({ basicPay = 0, grossSalary = 0, ear
 
   // Profession Tax: employee only; slab-based on basic pay (slab where basicPay falls → amount)
   if (applyPT && config.professionTax && config.professionTax.enabled && Array.isArray(config.professionTax.slabs) && config.professionTax.slabs.length > 0) {
-    // Requirement: first prorate the salary base using paidDays/totalDaysInMonth,
-    // then choose the slab using this prorated base.
-    const basic = Number(basicPay) || 0;
-    const basicForSlab = prorate(basic);
+    // Default: prorate basic by paidDays/totalDaysInMonth, then choose slab from that base.
+    // Optional override (dynamic payroll): use professionTaxSlabBase as-is for slab selection (no proration on that base).
+    let basicForSlab;
+    if (typeof professionTaxSlabBase === 'number' && Number.isFinite(professionTaxSlabBase) && professionTaxSlabBase >= 0) {
+      basicForSlab = professionTaxSlabBase;
+    } else {
+      const basic = Number(basicPay) || 0;
+      basicForSlab = prorate(basic);
+    }
     const sorted = [...config.professionTax.slabs].filter(s => s && typeof s.min === 'number').sort((a, b) => a.min - b.min);
     let amount = 0;
     for (const slab of sorted) {

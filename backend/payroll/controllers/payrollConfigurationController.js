@@ -33,7 +33,14 @@ exports.getPayrollConfig = async (req, res) => {
 
 exports.upsertPayrollConfig = async (req, res) => {
   try {
-    const { enabled, steps, outputColumns, statutoryProratePaidDaysColumnHeader, statutoryProrateTotalDaysColumnHeader } = req.body || {};
+    const {
+      enabled,
+      steps,
+      outputColumns,
+      statutoryProratePaidDaysColumnHeader,
+      statutoryProrateTotalDaysColumnHeader,
+      professionTaxSlabEarningsColumnHeader,
+    } = req.body || {};
     const normalizedOutputColumns = Array.isArray(outputColumns)
       ? outputColumns.map((c, i) => {
           const header = (c.header != null && String(c.header).trim()) ? String(c.header).trim() : `Column ${i + 1}`;
@@ -56,6 +63,7 @@ exports.upsertPayrollConfig = async (req, res) => {
     };
     if (statutoryProratePaidDaysColumnHeader !== undefined) payload.statutoryProratePaidDaysColumnHeader = statutoryProratePaidDaysColumnHeader;
     if (statutoryProrateTotalDaysColumnHeader !== undefined) payload.statutoryProrateTotalDaysColumnHeader = statutoryProrateTotalDaysColumnHeader;
+    if (professionTaxSlabEarningsColumnHeader !== undefined) payload.professionTaxSlabEarningsColumnHeader = professionTaxSlabEarningsColumnHeader;
     const config = await PayrollConfiguration.upsert(payload);
     return res.status(200).json({ success: true, data: config });
   } catch (error) {

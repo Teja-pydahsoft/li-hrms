@@ -530,6 +530,18 @@ function getPaidDaysAndTotalDaysFromContext(colContext, payrollConfig) {
   return { paidDays, totalDaysInMonth };
 }
 
+/** When payroll config names a column header, return its numeric value from formula context for Profession Tax slab selection. */
+function getProfessionTaxSlabBaseFromContext(colContext, payrollConfig) {
+  const h = payrollConfig && typeof payrollConfig.professionTaxSlabEarningsColumnHeader === 'string' && payrollConfig.professionTaxSlabEarningsColumnHeader.trim();
+  if (!h || !colContext || typeof colContext !== 'object') return undefined;
+  const key = headerToKey(h);
+  if (!key || !(key in colContext)) return undefined;
+  const v = colContext[key];
+  const n = typeof v === 'number' && !Number.isNaN(v) ? v : Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return n;
+}
+
 // Aliases so formula variable names (e.g. extradays, month_days) match context keys from column headers.
 function getContextKeysAndAliases(header) {
   const key = headerToKey(header);
@@ -936,6 +948,7 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
       const autoTotal = getFromContextByHeaderNames(colContext, TOTAL_DAYS_HEADER_CANDIDATES);
       if (autoTotal != null && autoTotal > 0) totalDaysInMonth = autoTotal;
     }
+    const professionTaxSlabBase = getProfessionTaxSlabBaseFromContext(colContext, payrollConfig);
     const statutoryResult = await statutoryDeductionService.calculateStatutoryDeductions({
       basicPay,
       grossSalary,
@@ -945,6 +958,7 @@ async function resolveFieldValue(fieldPath, employee, employeeId, month, payRegi
       paidDays,
       totalDaysInMonth,
       allSalaries: {},
+      ...(professionTaxSlabBase !== undefined ? { professionTaxSlabBase } : {}),
     });
     const totalStatutory = statutoryResult.totalEmployeeShare || 0;
     if (!record.deductions) record.deductions = {};
@@ -1356,6 +1370,7 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
             configUpdatedAt: config?.updatedAt || config?.updated_at || null,
             statutoryProratePaidDaysColumnHeader: String(config?.statutoryProratePaidDaysColumnHeader || ''),
             statutoryProrateTotalDaysColumnHeader: String(config?.statutoryProrateTotalDaysColumnHeader || ''),
+            professionTaxSlabEarningsColumnHeader: String(config?.professionTaxSlabEarningsColumnHeader || ''),
             outputColumns: outputColumnsNormalized,
             expandedColumns,
           },
@@ -1438,6 +1453,7 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
           configUpdatedAt: config?.updatedAt || config?.updated_at || null,
           statutoryProratePaidDaysColumnHeader: String(config?.statutoryProratePaidDaysColumnHeader || ''),
           statutoryProrateTotalDaysColumnHeader: String(config?.statutoryProrateTotalDaysColumnHeader || ''),
+          professionTaxSlabEarningsColumnHeader: String(config?.professionTaxSlabEarningsColumnHeader || ''),
           outputColumns: outputColumnsNormalized,
           expandedColumns,
         },

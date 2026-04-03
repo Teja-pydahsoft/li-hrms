@@ -50,6 +50,11 @@ const payrollConfigurationSchema = new mongoose.Schema({
   statutoryProratePaidDaysColumnHeader: { type: String, default: '' },
   /** Header of the output column whose value is used as total days in month for statutory proration. If empty, record.attendance.totalDaysInMonth is used. */
   statutoryProrateTotalDaysColumnHeader: { type: String, default: '' },
+  /**
+   * Dynamic payroll only: header of an output column whose numeric value is used to pick the Profession Tax slab (min/max).
+   * If empty, slab uses prorated basic pay (current behavior). Column must appear before statutory columns in order.
+   */
+  professionTaxSlabEarningsColumnHeader: { type: String, default: '' },
   updatedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
@@ -109,6 +114,9 @@ function normalizeConfigPayload(payload = {}) {
   }
   if (payload.statutoryProrateTotalDaysColumnHeader !== undefined) {
     update.statutoryProrateTotalDaysColumnHeader = String(payload.statutoryProrateTotalDaysColumnHeader || '').trim();
+  }
+  if (payload.professionTaxSlabEarningsColumnHeader !== undefined) {
+    update.professionTaxSlabEarningsColumnHeader = String(payload.professionTaxSlabEarningsColumnHeader || '').trim();
   }
   return update;
 }

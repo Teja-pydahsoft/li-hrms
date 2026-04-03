@@ -303,6 +303,8 @@ export interface PayrollConfig {
   statutoryProratePaidDaysColumnHeader?: string;
   /** Header of the output column whose value is used as total days in month for statutory proration. */
   statutoryProrateTotalDaysColumnHeader?: string;
+  /** Dynamic payroll: output column header whose value selects the Profession Tax slab (if empty, prorated basic is used). */
+  professionTaxSlabEarningsColumnHeader?: string;
   updatedAt?: string;
   /** From Employee Application Form "Salaries" group — use as paysheet field paths employee.salaries.<fieldId> */
   employeeSalaryFieldOptions?: { value: string; label: string }[];
@@ -3581,6 +3583,7 @@ export const api = {
     outputColumns?: PayrollOutputColumn[];
     statutoryProratePaidDaysColumnHeader?: string;
     statutoryProrateTotalDaysColumnHeader?: string;
+    professionTaxSlabEarningsColumnHeader?: string;
   }) => {
     return apiRequest<{ success: boolean; data: PayrollConfig }>('/payroll/config', { method: 'PUT', body: JSON.stringify(body) });
   },
