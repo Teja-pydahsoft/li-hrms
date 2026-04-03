@@ -1069,7 +1069,6 @@ export default function PayRegisterPage() {
       });
       return;
     }
-    const params = payrollStrategy === 'new' ? '?strategy=new' : '?strategy=legacy';
     let successCount = 0;
     let failCount = 0;
     const batchIds = new Set<string>(); // Store unique batch IDs
@@ -1092,7 +1091,21 @@ export default function PayRegisterPage() {
         month: monthStr,
         divisionId: selectedDivision === 'all' ? undefined : selectedDivision,
         departmentId: selectedDepartment === 'all' ? undefined : selectedDepartment,
-        strategy: payrollStrategy
+        strategy: payrollStrategy,
+        arrears: selectedArrears
+          .filter((a) => a.employeeId != null)
+          .map((a) => ({
+            arrearId: a.id,
+            amount: a.amount,
+            employeeId: String(a.employeeId),
+          })),
+        deductions: selectedDeductions
+          .filter((d) => d.employeeId != null)
+          .map((d) => ({
+            deductionId: d.id,
+            amount: d.amount,
+            employeeId: String(d.employeeId),
+          })),
       };
 
       console.log('[Bulk Calculate] Request:', requestData);

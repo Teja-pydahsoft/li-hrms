@@ -3430,7 +3430,16 @@ export const api = {
     });
   },
 
-  calculatePayrollBulk: async (data: { month: string; divisionId?: string; departmentId?: string; strategy?: string }) => {
+  calculatePayrollBulk: async (data: {
+    month: string;
+    divisionId?: string;
+    departmentId?: string;
+    strategy?: string;
+    /** Per-employee arrears (employeeId required); same semantics as single calculate body.arrears */
+    arrears?: Array<{ arrearId: string; amount: number; employeeId: string }>;
+    /** Per-employee manual deductions (employeeId required); same as single calculate body.deductions */
+    deductions?: Array<{ deductionId: string; amount: number; employeeId: string }>;
+  }) => {
     return apiRequest<any>('/payroll/bulk-calculate', {
       method: 'POST',
       body: JSON.stringify(data),

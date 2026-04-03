@@ -601,11 +601,15 @@ exports.calculatePayroll = async (req, res) => {
     const useDynamic = strategy === 'dynamic';
     const useLegacy = strategy === 'legacy';
 
+    /** True only when regular payroll used calculatePayrollFromOutputColumns (same engine must run for 2nd salary). */
+    let regularUsedDynamicOutputColumns = false;
+
     let result;
     if (useDynamic) {
       const config = await PayrollConfiguration.get();
       const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
       if (outputColumns.length > 0) {
+        regularUsedDynamicOutputColumns = true;
         result = await payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
           employeeId,
           month,
@@ -626,6 +630,7 @@ exports.calculatePayroll = async (req, res) => {
       result = await payrollCalculationService.calculatePayrollNew(employeeId, month, req.user._id, options);
     }
 
+    let secondSalaryPayRegister = null;
     try {
       const emp = await Employee.findById(employeeId).select('second_salary');
       if (emp && Number(emp.second_salary) > 0) {
@@ -636,8 +641,14 @@ exports.calculatePayroll = async (req, res) => {
           month,
           req.user._id,
           strategy,
-          null
+          null,
+          {
+            arrearsSettlements: req.body.arrears || [],
+            deductionSettlements: req.body.deductions || [],
+          },
+          { regularUsedDynamicOutputColumns }
         );
+        secondSalaryPayRegister = sec;
         const bid = sec?.batchId;
         if (bid) await SecondSalaryBatchService.recalculateBatchTotals(bid.toString());
       }
@@ -664,11 +675,29 @@ exports.calculatePayroll = async (req, res) => {
     }
 
     // Convert mongoose ref to object if needed to merge properties
-    const responseData = result.payrollRecord.toObject ? result.payrollRecord.toObject() : result.payrollRecord;
+    const responseData = result.payrollRecord
+      ? (result.payrollRecord.toObject ? result.payrollRecord.toObject() : result.payrollRecord)
+      : {};
 
     if (result.batchId) {
       responseData.batchId = result.batchId;
       responseData.payrollBatchId = result.batchId; // Also set standard field
+    }
+
+    responseData.regularPayrollEngine = regularUsedDynamicOutputColumns ? 'dynamic_output_columns' : 'payroll_new';
+
+    if (secondSalaryPayRegister) {
+      const sec = secondSalaryPayRegister;
+      const secRec = sec.secondSalaryRecord;
+      const secPlain = secRec && secRec.toObject ? secRec.toObject() : secRec;
+      responseData.secondSalary = {
+        engine: sec.engine,
+        batchId: sec.batchId || null,
+        secondSalaryBatchId: sec.batchId || null,
+        secondSalaryRecordId: sec.secondSalaryRecordId || secPlain?._id || null,
+        netSalary: sec.netSalary ?? secPlain?.netSalary,
+        record: secPlain,
+      };
     }
 
     res.status(200).json({
@@ -2333,7 +2362,7 @@ exports.getPayrollTransactionsWithAnalytics = async (req, res) => {
  */
 exports.calculatePayrollBulk = async (req, res) => {
   try {
-    const { month, divisionId, departmentId, strategy } = req.body;
+    const { month, divisionId, departmentId, strategy, arrears, deductions } = req.body;
 
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({
@@ -2387,6 +2416,8 @@ exports.calculatePayrollBulk = async (req, res) => {
       strategy,
       userId: req.user._id,
       scopeFilter: scopeFilterForJob,
+      arrears: Array.isArray(arrears) ? arrears : [],
+      deductions: Array.isArray(deductions) ? deductions : [],
     });
 
     res.status(202).json({

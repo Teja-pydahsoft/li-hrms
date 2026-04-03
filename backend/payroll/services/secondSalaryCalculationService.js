@@ -491,21 +491,54 @@ async function calculateSecondSalary(employeeId, month, userId, sharedContext = 
 }
 
 /**
- * 2nd salary for pay register / bulk: use dynamic output-column engine when strategy=dynamic and config has columns;
- * otherwise legacy second-salary pipeline.
+ * 2nd salary after Pay Register regular payroll.
+ * - Uses the **output-column dynamic engine** only when regular payroll used that same engine
+ *   (`payRegisterFollowUpOptions.regularUsedDynamicOutputColumns === true` and config has columns).
+ * - If regular used calculatePayrollNew (strategy new/legacy, or dynamic with no output columns), uses **legacy** second-salary pipeline (same idea as before).
+ *
+ * @param {Object|null} [regularPayrollSettlements] `{ arrearsSettlements, deductionSettlements }` — same payload as regular; when null, dynamic path may fetch pending.
+ * @param {Object} [payRegisterFollowUpOptions] `{ regularUsedDynamicOutputColumns?: boolean }` — pass true only if regular run invoked calculatePayrollFromOutputColumns.
  */
-async function calculateSecondSalaryForPayRegister(employeeId, month, userId, strategy, sharedContext = null) {
-    const useDynamic = String(strategy || '').toLowerCase() === 'dynamic';
-    if (useDynamic) {
-        const PayrollConfiguration = require('../model/PayrollConfiguration');
-        const payrollCalculationFromOutputColumnsService = require('./payrollCalculationFromOutputColumnsService');
-        const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
-        const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
-        const config = await PayrollConfiguration.get();
-        const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
-        if (outputColumns.length > 0) {
-            let arrearsSettlements = [];
-            let deductionSettlements = [];
+async function calculateSecondSalaryForPayRegister(
+    employeeId,
+    month,
+    userId,
+    strategy,
+    sharedContext = null,
+    regularPayrollSettlements = null,
+    payRegisterFollowUpOptions = {}
+) {
+    const PayrollConfiguration = require('../model/PayrollConfiguration');
+    const payrollCalculationFromOutputColumnsService = require('./payrollCalculationFromOutputColumnsService');
+    const ArrearsPayrollIntegrationService = require('../../arrears/services/arrearsPayrollIntegrationService');
+    const DeductionPayrollIntegrationService = require('../../manual-deductions/services/deductionPayrollIntegrationService');
+
+    const config = await PayrollConfiguration.get();
+    const outputColumns = Array.isArray(config?.outputColumns) ? config.outputColumns : [];
+    const columnsOk = outputColumns.length > 0;
+    const strategyIsDynamic = String(strategy || '').toLowerCase() === 'dynamic';
+    const explicit = payRegisterFollowUpOptions.regularUsedDynamicOutputColumns;
+
+    let useDynamicOutputColumnsSecond;
+    if (explicit === true) {
+        useDynamicOutputColumnsSecond = columnsOk;
+    } else if (explicit === false) {
+        useDynamicOutputColumnsSecond = false;
+    } else {
+        useDynamicOutputColumnsSecond = strategyIsDynamic && columnsOk;
+    }
+
+    if (useDynamicOutputColumnsSecond) {
+        let arrearsSettlements = [];
+        let deductionSettlements = [];
+        if (regularPayrollSettlements != null && typeof regularPayrollSettlements === 'object') {
+            arrearsSettlements = Array.isArray(regularPayrollSettlements.arrearsSettlements)
+                ? regularPayrollSettlements.arrearsSettlements
+                : [];
+            deductionSettlements = Array.isArray(regularPayrollSettlements.deductionSettlements)
+                ? regularPayrollSettlements.deductionSettlements
+                : [];
+        } else {
             try {
                 const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
                 if (pendingArrears && pendingArrears.length > 0) {
@@ -528,21 +561,44 @@ async function calculateSecondSalaryForPayRegister(employeeId, month, userId, st
             } catch (err) {
                 console.error(`[SecondSalary] Failed fetching pending deductions for ${employeeId}:`, err.message);
             }
-
-            return payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
-                employeeId.toString(),
-                month,
-                userId,
-                {
-                    secondSalaryBasis: true,
-                    source: 'payregister',
-                    arrearsSettlements,
-                    deductionSettlements,
-                }
-            );
         }
+
+        const out = await payrollCalculationFromOutputColumnsService.calculatePayrollFromOutputColumns(
+            employeeId.toString(),
+            month,
+            userId,
+            {
+                secondSalaryBasis: true,
+                source: 'payregister',
+                arrearsSettlements,
+                deductionSettlements,
+            }
+        );
+        const rec = out.secondSalaryRecord;
+        return {
+            engine: 'dynamic_output_columns',
+            batchId: out.batchId,
+            secondSalaryRecord: rec,
+            secondSalaryRecordId: rec?._id || null,
+            netSalary: rec?.netSalary ?? out.payslip?.netSalary,
+            payrollRecord: out.payrollRecord,
+            payslip: out.payslip,
+            row: out.row,
+        };
     }
-    return calculateSecondSalary(employeeId, month, userId, sharedContext);
+
+    const leg = await calculateSecondSalary(employeeId, month, userId, sharedContext);
+    const rec = leg.record;
+    return {
+        engine: 'legacy',
+        batchId: leg.batchId,
+        secondSalaryRecord: rec,
+        secondSalaryRecordId: rec?._id || null,
+        netSalary: rec?.netSalary,
+        payrollRecord: null,
+        payslip: null,
+        row: null,
+    };
 }
 
 module.exports = {

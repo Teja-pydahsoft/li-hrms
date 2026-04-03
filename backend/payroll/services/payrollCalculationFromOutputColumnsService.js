@@ -167,8 +167,8 @@ function getRequiredServices(outputColumns) {
   const formulaVarsNeedingOT = new Set(['otPay', 'extra_hours_pay']);
   const formulaVarsNeedingOtherDeductions = new Set(['otherDeductions', 'deductionsCumulative', 'totalDeductions']);
   const formulaVarsNeedingLoan = new Set(['advanceDeduction', 'loanEMI', 'salary_advance', 'loan_recovery', 'remaining_balance']);
-  const formulaVarsNeedingArrears = new Set(['arrearsAmount']);
-  const formulaVarsNeedingManualDeductions = new Set(['manualDeductionsAmount', 'manual_deductions_amount']);
+  const formulaVarsNeedingArrears = new Set(['arrearsAmount', 'arrears']);
+  const formulaVarsNeedingManualDeductions = new Set(['manualDeductionsAmount', 'manual_deductions_amount', 'manual_deductions']);
 
   for (const col of outputColumns) {
     const field = (col.field || '').trim();
@@ -360,6 +360,22 @@ async function runRequiredServices(required, record, employee, employeeId, month
     } catch (e) {
       if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
       record.arrears.arrearsAmount = 0;
+    }
+  }
+
+  if (required.needsManualDeductions) {
+    try {
+      const pending = await DeductionPayrollIntegrationService.getPendingDeductionsForPayroll(employeeId);
+      const manualDeductionsAmount = Math.round(
+        (pending || []).reduce((sum, d) => sum + (Number(d.remainingAmount) || 0), 0) * 100
+      ) / 100;
+      if (!record.manualDeductions) record.manualDeductions = { manualDeductionsAmount: 0 };
+      record.manualDeductions.manualDeductionsAmount = manualDeductionsAmount;
+      record.manualDeductionsAmount = manualDeductionsAmount;
+    } catch (e) {
+      if (!record.manualDeductions) record.manualDeductions = { manualDeductionsAmount: 0 };
+      record.manualDeductions.manualDeductionsAmount = 0;
+      record.manualDeductionsAmount = 0;
     }
   }
 
@@ -1071,6 +1087,25 @@ function buildAttendancePatchForSecondSalary(recordAttendance, payRegisterSummar
   };
 }
 
+/**
+ * If Pay Register did not pass arrears settlements, pending totals may still be loaded later only when an
+ * arrears FIELD column runs — formulas earlier in the list would see arrearsAmount as 0 in context.
+ * Prime from pending when there are no explicit settlements (same totals resolveFieldValue would use).
+ */
+async function primeArrearsFromPendingIfNoSettlements(record, employeeId, arrearsSettlements) {
+  if (arrearsSettlements.length) return;
+  try {
+    const pendingArrears = await ArrearsPayrollIntegrationService.getPendingArrearsForPayroll(employeeId);
+    const arrearsAmount = Math.round(
+      (pendingArrears || []).reduce((sum, ar) => sum + (Number(ar.remainingAmount) || 0), 0) * 100
+    ) / 100;
+    if (!record.arrears) record.arrears = { arrearsAmount: 0, arrearsSettlements: [] };
+    record.arrears.arrearsAmount = arrearsAmount;
+  } catch (e) {
+    console.warn('[PayrollFromOutputColumns] prime arrears from pending:', e.message);
+  }
+}
+
 async function persistSecondSalaryFromOutputColumns(record, employee, userId, month, payRegisterSummary) {
   const [yearStr, monthStr] = month.split('-');
   const year = parseInt(yearStr, 10);
@@ -1117,6 +1152,18 @@ async function persistSecondSalaryFromOutputColumns(record, employee, userId, mo
   });
   ssRecord.set('deductions', record.deductions || {});
   ssRecord.set('loanAdvance', record.loanAdvance || {});
+  ssRecord.set('arrearsAmount', Number(record.arrears?.arrearsAmount) || 0);
+  ssRecord.set('manualDeductionsAmount', Number(record.manualDeductionsAmount) || 0);
+  const arrSet = record.arrears?.arrearsSettlements;
+  if (Array.isArray(arrSet) && arrSet.length > 0) {
+    ssRecord.set('arrearsSettlements', arrSet);
+    ssRecord.markModified('arrearsSettlements');
+  }
+  const dedSet = record.deductionSettlements;
+  if (Array.isArray(dedSet) && dedSet.length > 0) {
+    ssRecord.set('deductionSettlements', dedSet);
+    ssRecord.markModified('deductionSettlements');
+  }
   await ssRecord.save();
 
   let batch = null;
@@ -1225,6 +1272,8 @@ async function calculatePayrollFromOutputColumns(employeeId, month, userId, opti
       console.error('[PayrollFromOutputColumns] Manual deductions apply error:', e.message);
     }
   }
+
+  await primeArrearsFromPendingIfNoSettlements(record, employeeId, arrearsSettlements);
 
   const context = { ...outputColumnService.getContextFromPayslip(record) };
   const row = {};

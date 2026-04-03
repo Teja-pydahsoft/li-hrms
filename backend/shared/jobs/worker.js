@@ -162,26 +162,44 @@ const startWorkers = () => {
                     ? require('../../payroll/services/payrollCalculationFromOutputColumnsService')
                     : null;
 
+                const { settlementsForEmployee } = require('../../payroll/utils/bulkPayrollSettlements');
+                const bulkArrears = job.data.arrears;
+                const bulkDeductions = job.data.deductions;
+
                 const secondSalaryEmployees = employees.filter((e) => Number(e.second_salary) > 0);
                 const overallTotal = employees.length + secondSalaryEmployees.length;
 
                 for (let i = 0; i < employees.length; i++) {
                     const employee = employees[i];
                     try {
+                        const { arrearsSettlements, deductionSettlements } = settlementsForEmployee(
+                            employee._id,
+                            bulkArrears,
+                            bulkDeductions
+                        );
                         let result;
                         if (useOutputColumnsEngine && payrollFromOutputColumns) {
                             result = await payrollFromOutputColumns.calculatePayrollFromOutputColumns(
                                 employee._id.toString(),
                                 month,
                                 userId,
-                                { source: 'payregister', arrearsSettlements: [] }
+                                {
+                                    source: 'payregister',
+                                    arrearsSettlements,
+                                    deductionSettlements,
+                                }
                             );
                         } else {
                             result = await PayrollCalculationService.calculatePayrollNew(
                                 employee._id.toString(),
                                 month,
                                 userId,
-                                { ...opts, consumeRecalculationPermission: false },
+                                {
+                                    ...opts,
+                                    consumeRecalculationPermission: false,
+                                    arrearsSettlements,
+                                    deductionSettlements,
+                                },
                                 sharedContext
                             );
                         }
@@ -220,12 +238,20 @@ const startWorkers = () => {
                 for (let j = 0; j < secondSalaryEmployees.length; j++) {
                     const employee = secondSalaryEmployees[j];
                     try {
+                        const { arrearsSettlements, deductionSettlements } = settlementsForEmployee(
+                            employee._id,
+                            bulkArrears,
+                            bulkDeductions
+                        );
+                        const regularUsedDynamicOutputColumns = !!(useOutputColumnsEngine && payrollFromOutputColumns);
                         const result = await calculateSecondSalaryForPayRegister(
                             employee._id.toString(),
                             month,
                             userId,
                             job.data.strategy || 'new',
-                            sharedContext
+                            sharedContext,
+                            { arrearsSettlements, deductionSettlements },
+                            { regularUsedDynamicOutputColumns }
                         );
                         const bid = result?.batchId;
                         if (bid) secondBatchIds.add(bid.toString());

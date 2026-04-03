@@ -87,6 +87,22 @@ const secondSalaryRecordSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        manualDeductionsAmount: {
+            type: Number,
+            default: 0,
+        },
+        arrearsSettlements: [
+            {
+                arrearId: { type: mongoose.Schema.Types.ObjectId, ref: 'ArrearsRequest' },
+                amount: { type: Number, required: true },
+            },
+        ],
+        deductionSettlements: [
+            {
+                deductionId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeductionRequest' },
+                amount: { type: Number, required: true },
+            },
+        ],
         // Pay for extra days specifically
         extraDaysPay: {
             type: Number,
@@ -333,7 +349,7 @@ const secondSalaryRecordSchema = new mongoose.Schema(
                     },
                     base: {
                         type: String,
-                        enum: ['basic', 'gross'],
+                        enum: ['basic', 'gross', 'fixed'],
                     },
                 },
             ],
