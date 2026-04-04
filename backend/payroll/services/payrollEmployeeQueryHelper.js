@@ -30,7 +30,7 @@ function toObjectIdIfValid(id) {
  * @param {Date} rangeEnd - UTC end (inclusive) of payroll period for leftDate
  * @returns {Object} MongoDB query for Employee.find()
  */
-function buildPayrollBulkEmployeeQuery(scopeFilter, divisionId, departmentId, rangeStart, rangeEnd) {
+function buildPayrollBulkEmployeeQuery(scopeFilter, divisionId, departmentId, rangeStart, rangeEnd, designationId, employeeGroupId) {
   const employmentOr = {
     $or: [
       { is_active: true, leftDate: null },
@@ -47,8 +47,12 @@ function buildPayrollBulkEmployeeQuery(scopeFilter, divisionId, departmentId, ra
 
   const div = toObjectIdIfValid(divisionId);
   const dept = toObjectIdIfValid(departmentId);
+  const des = toObjectIdIfValid(designationId);
+  const grp = toObjectIdIfValid(employeeGroupId);
   if (div) andParts.push({ division_id: div });
   if (dept) andParts.push({ department_id: dept });
+  if (des) andParts.push({ designation_id: des });
+  if (grp) andParts.push({ employee_group_id: grp });
 
   if (andParts.length === 1) return andParts[0];
   return { $and: andParts };
@@ -63,12 +67,14 @@ function buildPayrollBulkEmployeeQuery(scopeFilter, divisionId, departmentId, ra
  * @param {string|null|undefined} departmentId
  * @param {Date} rangeStart
  * @param {Date} rangeEnd
- * @param {{ status?: string, search?: string }} [options]
+ * @param {{ status?: string, search?: string, designationId?: string, employeeGroupId?: string }} [options]
  */
 function buildPaysheetEmployeeFilter(scopeFilter, divisionId, departmentId, rangeStart, rangeEnd, options = {}) {
-  const { status, search } = options;
+  const { status, search, designationId, employeeGroupId } = options;
   const divF = toObjectIdIfValid(divisionId);
   const depF = toObjectIdIfValid(departmentId);
+  const desF = toObjectIdIfValid(designationId);
+  const grpF = toObjectIdIfValid(employeeGroupId);
 
   if (status === 'inactive') {
     const parts = [];
@@ -79,6 +85,8 @@ function buildPaysheetEmployeeFilter(scopeFilter, divisionId, departmentId, rang
     if (depF) deptDiv.department_id = depF;
     if (divF) deptDiv.division_id = divF;
     if (Object.keys(deptDiv).length > 0) parts.push(deptDiv);
+    if (desF) parts.push({ designation_id: desF });
+    if (grpF) parts.push({ employee_group_id: grpF });
     parts.push({ is_active: false });
     if (search && String(search).trim()) {
       const term = String(search).trim();
@@ -97,7 +105,9 @@ function buildPaysheetEmployeeFilter(scopeFilter, divisionId, departmentId, rang
     scopeFilter && typeof scopeFilter === 'object' && Object.keys(scopeFilter).length > 0 ? scopeFilter : null;
   const divArg = divisionId && divisionId !== 'all' ? divisionId : undefined;
   const depArg = departmentId && departmentId !== 'all' ? departmentId : undefined;
-  let q = buildPayrollBulkEmployeeQuery(scope, divArg, depArg, rangeStart, rangeEnd);
+  const desArg = designationId && designationId !== 'all' ? designationId : undefined;
+  const groupArg = employeeGroupId && employeeGroupId !== 'all' ? employeeGroupId : undefined;
+  let q = buildPayrollBulkEmployeeQuery(scope, divArg, depArg, rangeStart, rangeEnd, desArg, groupArg);
 
   if (status === 'active') {
     q = { $and: [q, { is_active: true }] };

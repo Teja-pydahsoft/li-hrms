@@ -148,10 +148,72 @@ function getTodayISTDateString(now = new Date()) {
     return extractISTComponents(now).dateStr;
 }
 
+/**
+ * YYYY-MM plus delta calendar months.
+ * @param {string} ym - YYYY-MM
+ * @param {number} delta
+ * @returns {string} YYYY-MM
+ */
+function addCalendarMonthsToYm(ym, delta) {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Which payroll month key (YYYY-MM as used by PayrollRecord.month) contains today (IST),
+ * using getPayrollDateRange + payroll_cycle_start_day / payroll_cycle_end_day from settings.
+ * @returns {Promise<string>} YYYY-MM
+ */
+async function getPayrollMonthKeyContainingToday() {
+    const dateStr = getTodayISTDateString();
+    const [ty, tm] = dateStr.split('-').map(Number);
+    let y = ty;
+    let m = tm;
+    for (let step = 0; step < 24; step++) {
+        const range = await getPayrollDateRange(y, m);
+        if (dateStr >= range.startDate && dateStr <= range.endDate) {
+            return `${y}-${String(m).padStart(2, '0')}`;
+        }
+        m -= 1;
+        if (m < 1) {
+            m = 12;
+            y -= 1;
+        }
+    }
+    y = ty;
+    m = tm;
+    for (let step = 0; step < 24; step++) {
+        const range = await getPayrollDateRange(y, m);
+        if (dateStr >= range.startDate && dateStr <= range.endDate) {
+            return `${y}-${String(m).padStart(2, '0')}`;
+        }
+        m += 1;
+        if (m > 12) {
+            m = 1;
+            y += 1;
+        }
+    }
+    return `${ty}-${String(tm).padStart(2, '0')}`;
+}
+
+/**
+ * Default month for paysheet UI: previous payroll period relative to the one containing today.
+ * @returns {Promise<{ month: string, containingMonth: string }>}
+ */
+async function getDefaultPaysheetMonthKey() {
+    const containing = await getPayrollMonthKeyContainingToday();
+    const month = addCalendarMonthsToYm(containing, -1);
+    return { month, containingMonth: containing };
+}
+
 module.exports = {
     createISTDate,
     extractISTComponents,
     getTodayISTDateString,
     getPayrollDateRange,
-    getAllDatesInRange
+    getAllDatesInRange,
+    addCalendarMonthsToYm,
+    getPayrollMonthKeyContainingToday,
+    getDefaultPaysheetMonthKey,
 };

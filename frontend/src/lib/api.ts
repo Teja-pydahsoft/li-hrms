@@ -3516,6 +3516,8 @@ export const api = {
     month: string;
     departmentId?: string;
     divisionId?: string;
+    designationId?: string;
+    employee_group_id?: string;
     status?: string;
     search?: string;
     employeeIds?: string[];
@@ -3524,6 +3526,8 @@ export const api = {
     queryParams.append('month', params.month);
     if (params.departmentId) queryParams.append('departmentId', params.departmentId);
     if (params.divisionId) queryParams.append('divisionId', params.divisionId);
+    if (params.designationId) queryParams.append('designationId', params.designationId);
+    if (params.employee_group_id) queryParams.append('employee_group_id', params.employee_group_id);
     if (params.status) queryParams.append('status', params.status);
     if (params.search) queryParams.append('search', params.search);
     if (params.employeeIds?.length) queryParams.append('employeeIds', params.employeeIds.join(','));
@@ -3547,6 +3551,8 @@ export const api = {
     month: string;
     departmentId?: string;
     divisionId?: string;
+    designationId?: string;
+    employee_group_id?: string;
     status?: string;
     search?: string;
     employeeIds?: string[];
@@ -3557,6 +3563,8 @@ export const api = {
     if (params.month) queryParams.append('month', params.month);
     if (params.departmentId) queryParams.append('departmentId', params.departmentId);
     if (params.divisionId) queryParams.append('divisionId', params.divisionId);
+    if (params.designationId) queryParams.append('designationId', params.designationId);
+    if (params.employee_group_id) queryParams.append('employee_group_id', params.employee_group_id);
     if (params.status) queryParams.append('status', params.status);
     if (params.search) queryParams.append('search', params.search);
     if (params.employeeIds?.length) queryParams.append('employeeIds', params.employeeIds.join(','));
@@ -3565,6 +3573,14 @@ export const api = {
     const query = queryParams.toString();
     return apiRequest<{ headers: string[]; rows: Record<string, unknown>[] }>(
       `/payroll/paysheet${query ? `?${query}` : ''}`,
+      { method: 'GET' }
+    );
+  },
+
+  /** Pay-cycle aware default month (previous completed period vs today in IST). */
+  getPaysheetDefaultMonth: async () => {
+    return apiRequest<{ success: boolean; data?: { month: string; containingMonth: string } }>(
+      '/payroll/paysheet/default-month',
       { method: 'GET' }
     );
   },

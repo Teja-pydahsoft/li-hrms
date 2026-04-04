@@ -50,6 +50,9 @@ router.get('/export', applyScopeFilter, payrollController.exportPayrollExcel);
 // Paysheet bundle: Regular + 2nd salary + Comparison Excel (must be before /paysheet)
 router.get('/paysheet/export-bundle', applyScopeFilter, payrollController.exportPaysheetBundleExcel);
 
+// Default month for paysheet (pay-cycle aware; previous completed period)
+router.get('/paysheet/default-month', applyScopeFilter, payrollController.getPaysheetDefaultMonth);
+
 // Get paysheet data (headers + rows) for table – uses config output columns (with scope filtering)
 router.get('/paysheet', applyScopeFilter, payrollController.getPaysheetData);
 

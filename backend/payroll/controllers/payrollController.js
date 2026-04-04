@@ -1017,17 +1017,41 @@ function recordToPayslip(record) {
 }
 
 /**
+ * @desc    Default paysheet month (YYYY-MM): previous payroll period vs the cycle containing today (IST + payroll cycle settings).
+ * @route   GET /api/payroll/paysheet/default-month
+ * @access  Private
+ */
+exports.getPaysheetDefaultMonth = async (req, res) => {
+  try {
+    const { getDefaultPaysheetMonthKey } = require('../../shared/utils/dateUtils');
+    const { month, containingMonth } = await getDefaultPaysheetMonthKey();
+    return res.status(200).json({
+      success: true,
+      data: { month, containingMonth },
+    });
+  } catch (error) {
+    console.error('[getPaysheetDefaultMonth]', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to resolve default paysheet month',
+    });
+  }
+};
+
+/**
  * @desc    Get paysheet data (headers + rows) for table display – uses same output columns as Excel export.
  *          source=existing: return existing PayrollRecords for the month (no calculation). Filters applied on data.
  *          No source or source=calculate: run dynamic/legacy calculation for scope and return fresh data.
  * @route   GET /api/payroll/paysheet
- * @query   month (YYYY-MM), departmentId?, divisionId?, status?, search?, employeeIds?, source? (existing | calculate), secondSalary? (1|true)
+ * @query   month (YYYY-MM), departmentId?, divisionId?, designationId?, employee_group_id?, status?, search?, employeeIds?, source? (existing | calculate), secondSalary? (1|true)
  * @access  Private
  */
 exports.getPaysheetData = async (req, res) => {
   try {
-    const { month, departmentId, divisionId, status, search, employeeIds, source } = req.query;
+    const { month, departmentId, divisionId, status, search, employeeIds, source, designationId, employee_group_id } = req.query;
     const secondSalary = ['1', 'true', 'yes'].includes(String(req.query.secondSalary || '').toLowerCase());
+    const desFilt = designationId && designationId !== 'all' ? String(designationId) : undefined;
+    const groupFilt = employee_group_id && employee_group_id !== 'all' ? String(employee_group_id) : undefined;
 
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({
@@ -1059,6 +1083,8 @@ exports.getPaysheetData = async (req, res) => {
         const employeeQuery = buildPaysheetEmployeeFilter(scope, divF, depF, rangeStart, rangeEnd, {
           status: status || undefined,
           search: search || undefined,
+          designationId: desFilt,
+          employeeGroupId: groupFilt,
         });
         const emps = await Employee.find(employeeQuery).select('_id');
         targetEmployeeIds = emps.map((e) => e._id.toString());
@@ -1212,6 +1238,8 @@ exports.getPaysheetData = async (req, res) => {
       const empMatch = buildPaysheetEmployeeFilter(scope, divF, depF, payrollRangeStart, payrollRangeEnd, {
         status: status || undefined,
         search: search || undefined,
+        designationId: desFilt,
+        employeeGroupId: groupFilt,
       });
       const inScopeEmps = await Employee.find(empMatch).select('_id').lean();
       const inScopeIds = inScopeEmps.map((e) => e._id);
@@ -1339,6 +1367,8 @@ exports.getPaysheetData = async (req, res) => {
       const employeeQuery = buildPaysheetEmployeeFilter(scope, divF, depF, rangeStart, rangeEnd, {
         status: status || undefined,
         search: search || undefined,
+        designationId: desFilt,
+        employeeGroupId: groupFilt,
       });
       const emps = await Employee.find(employeeQuery).select('_id');
       targetEmployeeIds = emps.map((e) => e._id.toString());
@@ -1451,12 +1481,14 @@ exports.getPaysheetData = async (req, res) => {
 /**
  * @desc    Export workbook: Regular sheet, 2nd salary sheet, Comparison (config columns + Regular/2nd sub-rows + Δ Net).
  * @route   GET /api/payroll/paysheet/export-bundle
- * @query   month, departmentId?, divisionId?, status?, search?, employeeIds?
+ * @query   month, departmentId?, divisionId?, designationId?, employee_group_id?, status?, search?, employeeIds?
  * @access  Private
  */
 exports.exportPaysheetBundleExcel = async (req, res) => {
   try {
-    const { month, departmentId, divisionId, status, search, employeeIds } = req.query;
+    const { month, departmentId, divisionId, status, search, employeeIds, designationId, employee_group_id } = req.query;
+    const desFilt = designationId && designationId !== 'all' ? String(designationId) : undefined;
+    const groupFilt = employee_group_id && employee_group_id !== 'all' ? String(employee_group_id) : undefined;
 
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({
@@ -1487,6 +1519,8 @@ exports.exportPaysheetBundleExcel = async (req, res) => {
       const employeeQuery = buildPaysheetEmployeeFilter(scope, divF, depF, rangeStart, rangeEnd, {
         status: status || undefined,
         search: search || undefined,
+        designationId: desFilt,
+        employeeGroupId: groupFilt,
       });
       const emps = await Employee.find(employeeQuery).select('_id');
       targetEmployeeIds = emps.map((e) => e._id.toString());
